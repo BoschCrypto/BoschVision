@@ -1,0 +1,25 @@
+# Copy this file to config/settings.yaml and edit as needed.
+# config/settings.yaml is gitignored so credentials/local tweaks never get committed.
+
+# Where the local SQLite trade log / settings / signal log live.
+db_path: trading_bot.db
+
+# "paper" (default): fully simulated fills on real market data. No
+#   credentials needed, never touches a real account or places a real order.
+# "robinhood": LIVE trading with real money via robin_stocks. Requires
+#   ROBINHOOD_USERNAME, ROBINHOOD_PASSWORD and
+#   HF_BOT_I_UNDERSTAND_LIVE_TRADING=true as environment variables — the bot
+#   refuses to start otherwise.
+broker: paper
+
+starting_cash: 100000
+
+watchlist:
+  - symbol: NVDA
+    strategy_key: momentum_90d
+  - symbol: QQQ
+    strategy_key: momentum_90d
+  - symbol: VGT
+    strategy_key: rsi_mean_reversion
+  - symbol: NKE
+    strategy_key: sma_crossover

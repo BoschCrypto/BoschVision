@@ -1,0 +1,24 @@
+[project]
+name = "hf-trading-bot"
+version = "0.1.0"
+description = "Systematic trading bot: paper trading by default, pluggable strategies, backtesting, and an opt-in Robinhood live adapter."
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "yfinance>=0.2.40",
+]
+
+[project.optional-dependencies]
+live = ["robin_stocks>=3.1.0"]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+hf-bot = "hf_trading_bot.cli:cli"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hf_trading_bot*"]
