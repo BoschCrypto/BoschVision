@@ -523,5 +523,131 @@ def sweep(cfg: AppConfig, symbols, strategies, start, end):
             )
 
 
+@cli.group()
+def portfolio():
+    """Track deposits and score the account against the index.
+
+    Every other number in this tool is about a strategy. These are about you:
+    given the money actually deposited, on the dates it was deposited, is this
+    account ahead of or behind simply buying the index with the same cash?
+    That comparison cannot be fooled by a good week or a favourable window.
+    """
+
+
+@portfolio.command("contribute")
+@click.option("--amount", type=float, required=True,
+              help="Deposit (positive) or withdrawal (negative), in dollars.")
+@click.option("--date", "on_date", default=None, help="YYYY-MM-DD (default: today).")
+@click.option("--note", default=None)
+@click.pass_obj
+def portfolio_contribute(cfg, amount, on_date, note):
+    """Log a deposit or withdrawal."""
+    from datetime import date as _date
+
+    from hf_trading_bot.portfolio import Contribution, ContributionLog, PortfolioError
+
+    storage = _load_storage(cfg)
+    log = ContributionLog(storage._conn)
+    try:
+        cid = log.add(Contribution(
+            contributed_on=on_date or _date.today().isoformat(),
+            amount=amount,
+            note=note,
+        ))
+    except PortfolioError as e:
+        storage.close()
+        raise click.ClickException(str(e)) from e
+    verb = "Deposit" if amount > 0 else "Withdrawal"
+    click.echo(f"Recorded contribution #{cid}: {verb} ${abs(amount):,.2f}")
+    storage.close()
+
+
+@portfolio.command("list")
+@click.pass_obj
+def portfolio_list(cfg):
+    """Show every recorded contribution."""
+    from hf_trading_bot.portfolio import ContributionLog
+
+    storage = _load_storage(cfg)
+    log = ContributionLog(storage._conn)
+    rows = log.rows()
+    if not rows:
+        click.echo("No contributions recorded yet.")
+        storage.close()
+        return
+    click.echo(f"{'DATE':<12} {'AMOUNT':>12}  NOTE")
+    for r in rows:
+        click.echo(f"{r['contributed_on']:<12} {r['amount']:>12,.2f}  {r['note'] or ''}")
+    click.echo(f"{'':<12} {sum(r['amount'] for r in rows):>12,.2f}  TOTAL")
+    storage.close()
+
+
+@portfolio.command("compare")
+@click.option("--benchmark", default="SPY", help="Benchmark symbol (default SPY).")
+@click.option("--value", type=float, default=None,
+              help="Account value. Omit to read it live from the broker.")
+@click.pass_obj
+def portfolio_compare(cfg, benchmark, value):
+    """Compare this account against the same cash flows put into the index."""
+    from hf_trading_bot.portfolio import ContributionLog, PortfolioError, counterfactual
+
+    storage = _load_storage(cfg)
+    log = ContributionLog(storage._conn)
+    contributions = log.all()
+    if not contributions:
+        storage.close()
+        raise click.ClickException(
+            "No contributions recorded. Log them with `hf-bot portfolio contribute` "
+            "— without deposit dates there is nothing to compare against."
+        )
+
+    if value is None:
+        try:
+            broker = _build_broker(cfg)
+            value = float(broker.get_account().equity)
+        except Exception as e:
+            storage.close()
+            raise click.ClickException(
+                f"Could not read account value from the broker ({e}). "
+                f"Pass --value to supply it manually."
+            ) from e
+
+    provider = _build_provider(cfg)
+    try:
+        bars = provider.daily_bars_range(benchmark, start=log.first_date())
+    except Exception as e:
+        storage.close()
+        raise click.ClickException(
+            f"Could not fetch {benchmark} price history ({type(e).__name__}: {e}). "
+            f"Check network access and data-source credentials, then retry."
+        ) from e
+
+    try:
+        c = counterfactual(contributions, bars, actual_value=value, benchmark=benchmark)
+    except PortfolioError as e:
+        storage.close()
+        raise click.ClickException(str(e)) from e
+    storage.close()
+
+    click.echo(f"\n  As of {c.as_of}   (contributions since {contributions[0].contributed_on})\n")
+    click.echo(f"  {'Contributed':<22} ${c.total_contributed:>12,.2f}")
+    click.echo(f"  {'This account':<22} ${c.actual_value:>12,.2f}   {c.actual_return_pct:>+7.1f}%")
+    click.echo(f"  {'Same cash in ' + c.benchmark:<22} ${c.benchmark_value:>12,.2f}   "
+               f"{c.benchmark_return_pct:>+7.1f}%")
+    click.echo("  " + "-" * 48)
+    click.echo(f"  {'Difference':<22} ${c.gap:>+12,.2f}   {c.excess_pct:>+7.1f} pts\n")
+
+    if c.gap < 0:
+        click.echo(
+            f"  Behind {c.benchmark} by ${abs(c.gap):,.2f}. That is the real cost of\n"
+            f"  active management here — a fee paid in performance, not in dollars.\n"
+        )
+    else:
+        click.echo(
+            f"  Ahead of {c.benchmark} by ${c.gap:,.2f}. Worth checking whether this\n"
+            f"  came from skill or from one lucky position — the journal will say.\n"
+        )
+
+
 if __name__ == "__main__":
     cli()
