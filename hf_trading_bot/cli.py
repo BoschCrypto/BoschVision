@@ -214,7 +214,7 @@ def backtest(
     first, last = bars[0].t[:10], bars[-1].t[:10]
     years = (_dt.date.fromisoformat(last) - _dt.date.fromisoformat(first)).days / 365.25
     trades = replay(bars, strategy_key, {})
-    s = stats(trades, years, total_bars=len(bars))
+    s = stats(trades, years, total_bars=len(bars), final_price=bars[-1].c)
 
     click.echo(f"\n{symbol} / {strategy_key}   {first} → {last}  ({years:.1f}y, {len(bars)} bars)")
     click.echo(f"Data source: {source_of(provider)}")
@@ -456,7 +456,7 @@ def sweep(cfg: AppConfig, symbols, strategies, start, end):
         bh_by_symbol[sym] = bh.total_return_pct
 
         for key in strats:
-            s = stats(replay(bars, key, {}), years, total_bars=len(bars))
+            s = stats(replay(bars, key, {}), years, total_bars=len(bars), final_price=bars[-1].c)
             if s.total_trades == 0:
                 continue
             results[key].append(
@@ -480,6 +480,9 @@ def sweep(cfg: AppConfig, symbols, strategies, start, end):
     click.echo(f"{'strategy':<22} {'beat B&H':>10} {'hit rate':>10} {'median excess':>15} {'trades':>8}")
     click.echo("-" * 78)
 
+    run_id = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    storage = _load_storage(cfg)
+
     verdicts = []
     for key in strats:
         rows = results[key]
@@ -495,6 +498,15 @@ def sweep(cfg: AppConfig, symbols, strategies, start, end):
             f"{key:<22} {f'{wins}/{len(rows)}':>10} {hit:>9.0f}% {median:>14.1f}pts {total_trades:>8}"
         )
         verdicts.append((key, hit, median, total_trades))
+        storage.record_sweep_result(
+            run_id=run_id, strategy_key=key, symbols_tested=len(rows), wins=wins,
+            hit_rate_pct=hit, median_excess_pts=median, total_trades=total_trades,
+            window_start=start, window_end=end,
+        )
+
+    storage.close()
+    if verdicts:
+        click.echo(f"\nSaved as sweep run {run_id} (`hf-bot sweep-history` to review).")
 
     click.echo("\n" + "-" * 78)
     click.echo("HOW TO READ THIS")
@@ -521,6 +533,37 @@ def sweep(cfg: AppConfig, symbols, strategies, start, end):
                 f"  median excess {best[2]:+.1f} pts. On this evidence, these strategies do not\n"
                 f"  beat simply buying and holding — and that is the honest, useful result."
             )
+
+
+@cli.command("sweep-history")
+@click.option("--strategy", "strategy_key", default=None,
+              help="Show only this strategy's recorded runs.")
+@click.option("--limit", default=20, help="Max rows to show.")
+@click.pass_obj
+def sweep_history(cfg, strategy_key, limit):
+    """Every sweep verdict ever recorded, so a rejected strategy stays rejected.
+
+    Without this, an uncomfortable result quietly softens into "roughly
+    break-even" after a few months, and the same question gets re-litigated
+    (and re-paid for) instead of staying answered.
+    """
+    storage = _load_storage(cfg)
+    rows = storage.all_sweep_results(limit=limit)
+    storage.close()
+    if strategy_key:
+        rows = [r for r in rows if r["strategy_key"] == strategy_key]
+    if not rows:
+        click.echo("No sweep runs recorded yet. Run `hf-bot sweep` first.")
+        return
+
+    click.echo(f"{'run_at':<21} {'strategy':<20} {'hit rate':>9} {'median excess':>14} {'trades':>7}  window")
+    click.echo("-" * 96)
+    for r in rows:
+        window = f"{r['window_start']} → {r['window_end'] or 'today'}"
+        click.echo(
+            f"{r['run_at'][:19]:<21} {r['strategy_key']:<20} {r['hit_rate_pct']:>8.0f}% "
+            f"{r['median_excess_pts']:>13.1f}p {r['total_trades']:>7}  {window}"
+        )
 
 
 @cli.group()

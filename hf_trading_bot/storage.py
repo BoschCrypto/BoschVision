@@ -78,6 +78,23 @@ CREATE TABLE IF NOT EXISTS signal_log (
     would_have_traded INTEGER NOT NULL,
     logged_at TEXT NOT NULL
 );
+
+-- One row per strategy per sweep run. Kept so a tested-and-rejected strategy
+-- stays rejected: without a record, an uncomfortable result quietly decays
+-- into "it was roughly break-even" and gets paid for twice.
+CREATE TABLE IF NOT EXISTS sweep_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,               -- groups all strategies from one sweep
+    strategy_key TEXT NOT NULL,
+    symbols_tested INTEGER NOT NULL,
+    wins INTEGER NOT NULL,              -- symbols where the strategy beat buy&hold
+    hit_rate_pct REAL NOT NULL,
+    median_excess_pts REAL NOT NULL,
+    total_trades INTEGER NOT NULL,
+    window_start TEXT NOT NULL,
+    window_end TEXT,
+    run_at TEXT NOT NULL
+);
 """
 
 DEFAULT_WATCHLIST = [
@@ -207,6 +224,46 @@ class Storage:
             (symbol, strategy_key, signal, detail, int(would_have_traded), datetime.now(timezone.utc).isoformat()),
         )
         self._conn.commit()
+
+    def record_sweep_result(
+        self,
+        run_id: str,
+        strategy_key: str,
+        symbols_tested: int,
+        wins: int,
+        hit_rate_pct: float,
+        median_excess_pts: float,
+        total_trades: int,
+        window_start: str,
+        window_end: Optional[str] = None,
+    ) -> int:
+        cur = self._conn.execute(
+            """INSERT INTO sweep_results
+               (run_id, strategy_key, symbols_tested, wins, hit_rate_pct,
+                median_excess_pts, total_trades, window_start, window_end, run_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (run_id, strategy_key, symbols_tested, wins, hit_rate_pct,
+             median_excess_pts, total_trades, window_start, window_end,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def latest_sweep_result(self, strategy_key: str) -> Optional[dict[str, Any]]:
+        """Most recent recorded sweep for a strategy, or None if never tested."""
+        row = self._conn.execute(
+            "SELECT * FROM sweep_results WHERE strategy_key = ? "
+            "ORDER BY run_at DESC LIMIT 1",
+            (strategy_key,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def all_sweep_results(self, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM sweep_results ORDER BY run_at DESC, strategy_key ASC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def close(self) -> None:
         self._conn.close()

@@ -131,9 +131,13 @@ def _time_in_market(trades: list["ReplayTrade"], total_bars: int) -> Optional[fl
 
 
 def stats(
-    trades: list[ReplayTrade], years: float, total_bars: int = 0
+    trades: list[ReplayTrade], years: float, total_bars: int = 0,
+    final_price: Optional[float] = None,
 ) -> ReplayStats:
     closed = [t for t in trades if t.pnl_pct is not None]
+    # At most one position is open at a time (see `replay`), so at most one
+    # trade in the list has `open_at_end`, and it is always the last one.
+    open_trade = next((t for t in trades if t.open_at_end), None)
     rets = [t.pnl_pct / 100 for t in closed]
     wins = [t for t in closed if t.pnl_pct > 0]
     losses = [t for t in closed if t.pnl_pct <= 0]
@@ -148,6 +152,20 @@ def stats(
         equity *= 1 + r
         peak = max(peak, equity)
         max_dd = min(max_dd, equity / peak - 1)
+
+    # Mark a still-open position to the final close instead of dropping it.
+    # Silently excluding it understates total_return_pct relative to
+    # buy-and-hold, which by construction always captures the final price —
+    # this would otherwise penalize whichever strategy happens to still be
+    # holding at the window's end. It stays out of win_rate/avg_win/avg_loss
+    # below: those describe trades that have actually realized, and an open
+    # position hasn't.
+    equity_has_data = bool(closed)
+    if open_trade is not None and final_price is not None and open_trade.entry_price:
+        equity *= 1 + (final_price / open_trade.entry_price - 1)
+        peak = max(peak, equity)
+        max_dd = min(max_dd, equity / peak - 1)
+        equity_has_data = True
 
     trades_per_year = (len(closed) / years) if (closed and years > 0) else None
     mean = avg(rets)
@@ -165,12 +183,12 @@ def stats(
         win_rate=(len(wins) / len(closed) * 100) if closed else None,
         cagr=((equity ** (1 / years) - 1) * 100) if years > 0 and equity > 0 else None,
         sharpe=sharpe,
-        max_drawdown=(max_dd * 100) if closed else None,
+        max_drawdown=(max_dd * 100) if equity_has_data else None,
         trades_per_year=trades_per_year,
         avg_win_pct=avg([t.pnl_pct for t in wins]),
         avg_loss_pct=avg([t.pnl_pct for t in losses]),
         time_in_market_pct=_time_in_market(trades, total_bars),
-        total_return_pct=((equity - 1) * 100) if closed else None,
+        total_return_pct=((equity - 1) * 100) if equity_has_data else None,
     )
 
 
