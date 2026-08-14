@@ -10,7 +10,8 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from hf_trading_bot.data.bars import Bar, fetch_batch_daily_bars
+from hf_trading_bot.data.bars import Bar
+from hf_trading_bot.data.provider import DataProvider, get_provider
 from .base import Account, Broker, Order, Position
 
 _LIVE_TRADING_CONFIRM_ENV = "HF_BOT_I_UNDERSTAND_LIVE_TRADING"
@@ -26,7 +27,9 @@ class RobinhoodBroker(Broker):
         username: Optional[str] = None,
         password: Optional[str] = None,
         mfa_code: Optional[str] = None,
+        data_provider: Optional[DataProvider] = None,
     ):
+        self._data = data_provider or get_provider()
         if os.environ.get(_LIVE_TRADING_CONFIRM_ENV, "").lower() != "true":
             raise RuntimeError(
                 "Refusing to start a live Robinhood broker. Set "
@@ -142,7 +145,8 @@ class RobinhoodBroker(Broker):
         self._rh.cancel_stock_order(order_id)
 
     def get_daily_bars(self, symbols: list[str], lookback_days: int = 220) -> dict[str, list[Bar]]:
-        # Daily history via yfinance — Robinhood's own historicals endpoint is
-        # intraday-oriented and rate-limited; this keeps the same data source
-        # as PaperBroker so backtests and live signals stay comparable.
-        return fetch_batch_daily_bars(symbols, lookback_days)
+        # Daily history comes from the configured data provider, not
+        # Robinhood's own historicals endpoint (intraday-oriented and
+        # rate-limited). Keeping one data source across all brokers is what
+        # makes backtests and live signals directly comparable.
+        return self._data.daily_bars(symbols, lookback_days)

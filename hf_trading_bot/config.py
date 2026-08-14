@@ -33,7 +33,12 @@ RISK_KEYS = (
 @dataclass
 class AppConfig:
     db_path: str = "trading_bot.db"
-    broker: str = "paper"  # "paper" (default, safe) | "robinhood" (LIVE, opt-in)
+    # "paper"     — fully simulated fills, no credentials, no account touched
+    # "alpaca"    — Alpaca PAPER account by default (real API, simulated money)
+    # "robinhood" — LIVE real money, opt-in; dormant, see README
+    broker: str = "paper"
+    # "alpaca" (Alpaca primary + yfinance fallback), "alpaca_only", "yfinance"
+    data_provider: str = "alpaca"
     starting_cash: float = 100_000.0
     watchlist: list[dict] = field(default_factory=list)
     risk: dict = field(default_factory=dict)
@@ -58,6 +63,7 @@ class AppConfig:
         return cls(
             db_path=data.get("db_path", defaults.db_path),
             broker=data.get("broker", defaults.broker),
+            data_provider=data.get("data_provider", defaults.data_provider),
             starting_cash=data.get("starting_cash", defaults.starting_cash),
             watchlist=data.get("watchlist", []),
             risk=risk,

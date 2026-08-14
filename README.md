@@ -94,56 +94,74 @@ signal at exactly the same point, no lookahead.
 
 ## Broker adapters (`hf_trading_bot/broker/`)
 
-- `PaperBroker` (default) — simulated fills on real market data via
-  `yfinance`. No credentials, no network calls to any brokerage, cannot
-  place a real order by construction.
-- `RobinhoodBroker` — live trading via the unofficial `robin_stocks` client.
-  Refuses to initialize unless `HF_BOT_I_UNDERSTAND_LIVE_TRADING=true` is
-  set, plus `ROBINHOOD_USERNAME` / `ROBINHOOD_PASSWORD`. Install with
-  `pip install -e ".[live]"`.
+- `PaperBroker` (default) — fully simulated fills, in-process. No
+  credentials, no brokerage contact, cannot place a real order by
+  construction.
+- `AlpacaBroker` — **the recommended path.** Alpaca's official REST API,
+  pointed at your *paper* account by default (real API, simulated money).
+  Refuses to construct against any non-paper endpoint unless
+  `HF_BOT_I_UNDERSTAND_LIVE_TRADING=true`.
+- `RobinhoodBroker` — **dormant.** Live real money via the unofficial
+  `robin_stocks` client. Kept for reference but not the supported route:
+  it's a ToS-grey reverse-engineered client with fragile MFA/session
+  handling. Alpaca does the same job through a documented API.
 
-Both implement the same `Broker` interface (`hf_trading_bot/broker/base.py`),
-so the strategy engine and risk logic never change when you switch brokers.
+All three implement the same `Broker` interface
+(`hf_trading_bot/broker/base.py`), so the strategy engine and risk logic
+never change when you switch brokers.
 
-## Live Robinhood trading
+## Market data (`hf_trading_bot/data/`)
 
-**Everything below risks real money. Validate on backtests and paper mode
-first.** The kill switch defaults to ON (paused) — the bot will not place a
-live order until you explicitly turn it off.
+Bars come from a pluggable provider, selected with `data_provider` in
+`settings.yaml`:
 
-### One-time setup
+| value | behaviour |
+|---|---|
+| `alpaca` (default) | Alpaca's official API, automatic yfinance fallback |
+| `alpaca_only` | Alpaca only — fails loudly rather than falling back |
+| `yfinance` | Yahoo scraping only (unofficial, breaks without notice) |
 
-1. `pip install -e ".[live]"` to add `robin_stocks`.
-2. Create a `.env` file in the repo root (already gitignored — never commit it):
-   ```
-   ROBINHOOD_USERNAME=you@example.com
-   ROBINHOOD_PASSWORD=your-password
-   HF_BOT_I_UNDERSTAND_LIVE_TRADING=true
-   ```
-3. Set `broker: robinhood` in `config/settings.yaml` (copy it from
-   `settings.example.yaml`, which includes a worked small-account risk block).
-4. Run the one-time interactive login, which prompts for your MFA code:
+The fallback is deliberately **loud** (it logs a warning naming both sources)
+and **all-or-nothing per call** — splicing Alpaca bars for one symbol with
+Yahoo bars for another inside a single run would give a subtly inconsistent
+view of the market.
+
+**Free-tier caveat:** Alpaca's free plan serves the **IEX** feed, not the
+full SIP consolidated tape. IEX is a subset of total volume, so daily bars
+can differ slightly from TradingView or other charting sources. That's fine
+for daily-bar swing strategies, but it explains any small discrepancies you
+notice. Set `ALPACA_DATA_FEED=sip` if you have a paid data subscription.
+
+## Alpaca setup
+
+1. `cp .env.example .env` and fill in your keys from the Alpaca dashboard
+   (Manage Accounts → your paper account → API Keys). The **Secret Key is
+   shown only once** at generation — if you lose it, hit Regenerate.
+   `.env` is gitignored. Never paste the secret into a chat or screenshot.
+2. `cp config/settings.example.yaml config/settings.yaml` and set
+   `broker: alpaca`.
+3. Verify the connection:
    ```bash
-   hf-bot robinhood-login
+   hf-bot alpaca-check
    ```
-   This saves a session to `~/.tokens/robinhood.pickle` so later unattended
-   runs don't need MFA. **Treat that file as a credential** — anyone who has
-   it can trade your account. It stays on the machine that created it; never
-   commit, sync, or copy it anywhere.
-5. Dry-run against the real account (reads balances/positions, places nothing):
+   Prints your account number, PAPER/LIVE mode, equity, whether the market is
+   currently open, and any open positions. Unlike Robinhood there's no MFA
+   step and no session file — Alpaca uses stateless API keys.
+4. Dry run (reads balances/positions, places nothing):
    ```bash
    hf-bot run
    ```
-6. When you're satisfied: `hf-bot kill-switch --off`, then
-   `hf-bot loop --live --interval 3600`.
+5. Place simulated orders: `hf-bot kill-switch --off`, then
+   `hf-bot run --live` or `hf-bot loop --live --interval 3600`.
 
-### Where to run it
+### Where to run the loop
 
-Run the loop on a machine you control that stays on — a home server, a VPS,
-or a laptop that doesn't sleep. Don't run it in an ephemeral cloud container:
-when the container is reclaimed the loop dies silently and the saved session
-is wiped, and Robinhood's device checks tend to force re-verification when
-logins come from a new/rotating IP, which an unattended process can't answer.
+On a machine you control that stays on — a home server, a VPS, or a laptop
+that doesn't sleep. Don't run it in an ephemeral cloud container: when the
+container is reclaimed the loop dies silently, and any stop-loss protection
+dies with it (see *Fractional shares* below).
+
+## Small-account constraints
 
 ### Pattern Day Trader (PDT) guard
 
@@ -163,13 +181,31 @@ not an intraday day-trading system, on any account under $25k.
 ### Fractional shares
 
 Orders are sized by dollar risk, not whole shares, so a small account can
-take meaningful positions in high-priced symbols. Fractional orders on
-Robinhood are **market-only** — there's no broker-side stop order for them.
-Stops are therefore enforced in software: the stop price is recorded at
-entry and checked at the start of every cycle against the session low. This
-means **a stop only triggers when the bot runs** — a gap down while the
-process is stopped is not protected. Keep the loop running during market
-hours, and size positions on the assumption that stops are best-effort.
+take meaningful positions in high-priced symbols. Fractional orders are
+**market-only** on both Alpaca and Robinhood — there's no broker-side stop
+order for them. Stops are therefore enforced in software: the stop price is
+recorded at entry and checked at the start of every cycle against the
+session low. This means **a stop only triggers when the bot runs** — a gap
+down while the process is stopped is not protected. Keep the loop running
+during market hours, and size positions on the assumption that stops are
+best-effort.
+
+## Robinhood (dormant)
+
+`RobinhoodBroker` still works and is covered by the same guards, but it is
+**not the supported path**. It drives `robin_stocks`, an unofficial
+reverse-engineered client: automating it is against Robinhood's terms, the
+login needs an interactive MFA step whose session expires unpredictably, and
+device/IP checks can force re-verification that an unattended process cannot
+answer. Alpaca provides the same capability through a documented API with
+stateless keys and a real paper environment.
+
+If you do use it: `pip install -e ".[live]"`, set `ROBINHOOD_USERNAME` /
+`ROBINHOOD_PASSWORD` / `HF_BOT_I_UNDERSTAND_LIVE_TRADING=true` in `.env`,
+`broker: robinhood` in settings, then run `hf-bot robinhood-login` once
+interactively. That saves a session to `~/.tokens/robinhood.pickle` —
+**treat that file as a credential**; anyone holding it can trade your
+account.
 
 ## Backtesting
 
@@ -179,9 +215,10 @@ hf-bot backtest QQQ --strategy rsi_mean_reversion --start 2021-01-01 --end 2026-
 
 Reports total trades, win rate, CAGR, Sharpe, and max drawdown from a
 long-only, one-position-at-a-time, $10k-notional-per-trade replay
-(`hf_trading_bot/backtest.py`). Always validate a strategy this way — and
-then in paper mode over real time — before ever pointing it at
-`RobinhoodBroker`.
+(`hf_trading_bot/backtest.py`). The output names which data source served
+the bars, so a silent fallback can't be mistaken for an Alpaca-backed
+result. Always validate a strategy this way — and then in paper mode over
+real time — before pointing it at any account holding real money.
 
 ## Tests
 

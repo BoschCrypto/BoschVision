@@ -6,18 +6,24 @@ from __future__ import annotations
 import itertools
 from typing import Optional
 
-from hf_trading_bot.data.bars import Bar, fetch_batch_daily_bars
+from hf_trading_bot.data.bars import Bar
+from hf_trading_bot.data.provider import DataProvider, get_provider
 from .base import Account, Broker, Order, Position
 
 _order_ids = itertools.count(1)
 
 
 class PaperBroker(Broker):
-    def __init__(self, starting_cash: float = 100_000.0):
+    def __init__(
+        self,
+        starting_cash: float = 100_000.0,
+        data_provider: Optional[DataProvider] = None,
+    ):
         self.cash = starting_cash
         self.last_equity = starting_cash
         self._positions: dict[str, Position] = {}
         self._last_prices: dict[str, float] = {}
+        self._data = data_provider or get_provider()
 
     def _mark_to_market(self) -> None:
         for symbol, pos in self._positions.items():
@@ -84,7 +90,7 @@ class PaperBroker(Broker):
         return None
 
     def get_daily_bars(self, symbols: list[str], lookback_days: int = 220) -> dict[str, list[Bar]]:
-        bars = fetch_batch_daily_bars(symbols, lookback_days)
+        bars = self._data.daily_bars(symbols, lookback_days)
         for symbol, series in bars.items():
             if series:
                 self._last_prices[symbol] = series[-1].c

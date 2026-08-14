@@ -4,14 +4,24 @@
 # Where the local SQLite trade log / settings / signal log live.
 db_path: trading_bot.db
 
-# "paper" (default): fully simulated fills on real market data. No
-#   credentials needed, never touches a real account or places a real order.
-# "robinhood": LIVE trading with real money via robin_stocks. Requires
-#   ROBINHOOD_USERNAME, ROBINHOOD_PASSWORD and
-#   HF_BOT_I_UNDERSTAND_LIVE_TRADING=true as environment variables — the bot
-#   refuses to start otherwise.
+# "paper" (default): fully simulated fills, in-process. No credentials, never
+#   touches any real account.
+# "alpaca": Alpaca PAPER account — the real Alpaca API with simulated money.
+#   Needs ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY in .env. Defaults to the
+#   paper endpoint and refuses any other host unless
+#   HF_BOT_I_UNDERSTAND_LIVE_TRADING=true. This is the recommended path.
+# "robinhood": DORMANT. LIVE real money via an unofficial client. See the
+#   README before touching it — Alpaca is the supported route.
 broker: paper
 
+# Where daily bars come from.
+#   alpaca      — Alpaca primary, automatic yfinance fallback (default)
+#   alpaca_only — Alpaca with no fallback; fail loudly if it's unavailable
+#   yfinance    — Yahoo scraping only (original behaviour, unofficial)
+data_provider: alpaca
+
+# Only used by broker: paper (the simulated one). Live/paper Alpaca accounts
+# report their own real equity.
 starting_cash: 100000
 
 watchlist:
@@ -35,11 +45,11 @@ watchlist:
 #   max_open_positions: 5
 
 # ---------------------------------------------------------------------------
-# Example: small LIVE account (~$200) on Robinhood
+# Example: small account sizing (~$200), e.g. an Alpaca paper account funded
+# to match what you'd actually risk
 # ---------------------------------------------------------------------------
-# Set `broker: robinhood` above, and read the "Live Robinhood trading"
-# section of README.md first — it covers the one-time `hf-bot
-# robinhood-login` step, session-file security, and the PDT day-trade rule.
+# Set `broker: alpaca` above and run `hf-bot alpaca-check` first to confirm
+# credentials. The PDT day-trade guard applies to accounts under $25k.
 #
 # These values are deliberately more aggressive than the engine defaults (1%
 # risk/trade), because at a $200 balance a 1% risk budget sizes positions
