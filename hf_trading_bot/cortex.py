@@ -55,6 +55,49 @@ def review_prompt(symbol: str) -> str:
         f"persist` at the end, so the dashboard reflects the real run."
     )
 
+
+# A hard cap so a pasted wall of text can't become a giant subprocess arg.
+MAX_MESSAGE_LEN = 2000
+
+
+def parse_console_message(text: str) -> str:
+    """Sanitize a free-form console message to APEX. The message is passed to
+    the executor as a single subprocess argument (never interpolated into a
+    shell), so arbitrary text is safe; we only trim and cap length."""
+    if not text or not text.strip():
+        raise CommandError("empty command")
+    msg = text.strip()
+    if len(msg) > MAX_MESSAGE_LEN:
+        raise CommandError(f"command too long (max {MAX_MESSAGE_LEN} characters)")
+    return msg
+
+
+def extract_symbol(text: str) -> Optional[str]:
+    """Best-effort ticker for display/linking — never used to build the prompt."""
+    try:
+        return parse_review_command(text)
+    except CommandError:
+        return None
+
+
+def apex_prompt(message: str) -> str:
+    """Frame a principal's console message as an instruction to APEX (the cio
+    agent), who orchestrates the committee and reports back in one voice."""
+    return (
+        "You are APEX, the Chief Investment Officer and orchestrator of the "
+        "committee. Your principal issued this command through the dashboard "
+        "console:\n\n"
+        f"\"{message}\"\n\n"
+        "Act on it now. Delegate to the specialist agents as the task requires, "
+        "and emit `hf-bot committee log-event` events as you work (start, each "
+        "handoff and finding, verdicts, and a final memo) so the dashboard's "
+        "cortex reflects the real run. Persist any durable decision or lesson "
+        "with `hf-bot memory persist`. Then reply, in your own voice as APEX, "
+        "with a concise report to your principal: what you did, what the "
+        "committee concluded, and your recommendation. You are the single voice "
+        "back to the principal — speak for the committee."
+    )
+
 # A run whose last event is older than this, with no memo, is treated as
 # stale rather than "live" — the dashboard won't claim an agent is working
 # when nothing has happened for half an hour.
@@ -455,7 +498,8 @@ def build_snapshot(storage: Storage) -> CortexSnapshot:
         memory=_memory(storage, journal, all_decisions, scorecard),
         commands=[
             {"id": c["id"], "symbol": c["symbol"], "status": c["status"],
-             "detail": c["detail"], "created_at": c["created_at"]}
+             "detail": c["detail"], "created_at": c["created_at"],
+             "message": c.get("message"), "reply": c.get("reply")}
             for c in storage.recent_commands(limit=8)
         ],
         knowledge=_knowledge(storage),

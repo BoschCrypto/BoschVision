@@ -137,11 +137,18 @@ CREATE TABLE IF NOT EXISTS memory_episodes (
 -- claude-CLI runner) executes it, which emits the committee_events that light
 -- up the cortex. This table is the honest bridge between intent and execution:
 -- nothing here claims a review ran until an executor actually ran it.
+-- The command console: what the principal says to APEX, and what APEX says
+-- back. Each row is one turn. The Python server cannot run the committee
+-- itself (no LLM) — a Claude session (the opt-in claude-CLI runner, or a
+-- session picking up the queue) executes APEX, which emits committee_events
+-- that light the cortex and returns a reply captured here.
 CREATE TABLE IF NOT EXISTS command_queue (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL,                 -- 'review' (only shape for now)
-    symbol TEXT,
-    prompt TEXT NOT NULL,               -- the resolved instruction for the executor
+    kind TEXT NOT NULL,                 -- 'console' (free-form to APEX) | 'review'
+    symbol TEXT,                        -- best-effort ticker, if the message named one
+    message TEXT,                       -- the principal's words to APEX (raw)
+    prompt TEXT NOT NULL,               -- the APEX-framed instruction for the executor
+    reply TEXT,                         -- APEX's response, once it has run
     status TEXT NOT NULL,               -- pending | running | done | failed | unavailable
     detail TEXT,                        -- error text or a one-line result
     run_id TEXT,                        -- committee run this produced, once executing
@@ -178,7 +185,19 @@ class Storage:
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._ensure_settings_row()
+        self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a table's first release. CREATE TABLE
+        IF NOT EXISTS won't alter an existing table, so add-column migrations
+        live here (idempotent)."""
+        cols = {r["name"] for r in
+                self._conn.execute("PRAGMA table_info(command_queue)").fetchall()}
+        for name in ("message", "reply"):
+            if name not in cols:
+                self._conn.execute(f"ALTER TABLE command_queue ADD COLUMN {name} TEXT")
         self._conn.commit()
 
     def _ensure_settings_row(self) -> None:
@@ -459,12 +478,13 @@ class Storage:
 
     # --- command queue -----------------------------------------------------
 
-    def enqueue_command(self, kind: str, prompt: str, symbol: Optional[str] = None) -> int:
+    def enqueue_command(self, kind: str, prompt: str, symbol: Optional[str] = None,
+                        message: Optional[str] = None) -> int:
         now = datetime.now(timezone.utc).isoformat()
         cur = self._conn.execute(
-            "INSERT INTO command_queue (kind, symbol, prompt, status, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?)",
-            (kind, symbol, prompt, "pending", now, now),
+            "INSERT INTO command_queue (kind, symbol, message, prompt, status, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (kind, symbol, message, prompt, "pending", now, now),
         )
         self._conn.commit()
         return cur.lastrowid
@@ -472,11 +492,14 @@ class Storage:
     def update_command(
         self, command_id: int, status: str,
         detail: Optional[str] = None, run_id: Optional[str] = None,
+        reply: Optional[str] = None,
     ) -> None:
         self._conn.execute(
             "UPDATE command_queue SET status = ?, detail = COALESCE(?, detail), "
-            "run_id = COALESCE(?, run_id), updated_at = ? WHERE id = ?",
-            (status, detail, run_id, datetime.now(timezone.utc).isoformat(), command_id),
+            "run_id = COALESCE(?, run_id), reply = COALESCE(?, reply), updated_at = ? "
+            "WHERE id = ?",
+            (status, detail, run_id, reply,
+             datetime.now(timezone.utc).isoformat(), command_id),
         )
         self._conn.commit()
 

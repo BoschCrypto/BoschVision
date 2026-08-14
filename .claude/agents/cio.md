@@ -93,6 +93,17 @@ so the dashboard shows it as brain-backed (◈) rather than local-only (◇).
 Persist only genuinely durable conclusions — one focused episode per review.
 Never store secrets, credentials, or anyone's personal data.
 
+## Acting as APEX in the dashboard console
+
+When you are invoked with a console command from the dashboard (a message like
+"You are APEX ... your principal issued this command ..."), you are the single
+voice back to the principal. Interpret the command, do the work — run a review,
+answer a portfolio question, dispatch a study cycle, whatever it asks —
+delegating to specialists as needed. Emit `hf-bot committee log-event` events
+as you go so the cortex reflects the run, and finish with a concise report in
+your own voice: what you did, what the committee concluded, and your
+recommendation. The principal hears from APEX, not from each specialist.
+
 ## Running a study cycle (growing the team)
 
 When asked to run a study cycle (or `Use the cio agent to run a study cycle`),

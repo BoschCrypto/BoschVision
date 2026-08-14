@@ -432,11 +432,59 @@ def test_snapshot_includes_recent_commands(storage):
     assert "ASTS" in syms and "NVDA" in syms
 
 
-def test_render_shows_command_deck(storage):
-    storage.enqueue_command("review", review_prompt("ASTS"), symbol="ASTS")
+def test_render_shows_apex_console(storage):
+    storage.enqueue_command("console", "prompt", symbol="ASTS",
+                            message="review ASTS and size it")
     html = render_html(build_snapshot(storage), mode="static")
-    assert "Command deck" in html
-    assert "COMMAND" in html  # the command bar prompt
+    assert "APEX console" in html
+    assert "APEX" in html                       # the command-bar prompt
+    assert "review ASTS and size it" in html    # the principal's message shows
+
+
+def test_console_message_and_reply_round_trip(storage):
+    from hf_trading_bot.cortex import apex_prompt
+
+    cid = storage.enqueue_command("console", apex_prompt("check NVDA"),
+                                  symbol="NVDA", message="check NVDA")
+    storage.update_command(cid, status="done", reply="APEX: NVDA reviewed. HOLD.")
+    snap = build_snapshot(storage)
+    c = snap.commands[0]
+    assert c["message"] == "check NVDA"
+    assert c["reply"] == "APEX: NVDA reviewed. HOLD."
+    assert c["status"] == "done"
+
+
+def test_parse_console_message_accepts_free_form():
+    from hf_trading_bot.cortex import parse_console_message
+    assert parse_console_message("how are we tracking vs SPY?") == "how are we tracking vs SPY?"
+    assert parse_console_message("  review ASTS  ") == "review ASTS"
+
+
+def test_parse_console_message_rejects_empty_and_overlong():
+    from hf_trading_bot.cortex import MAX_MESSAGE_LEN, CommandError, parse_console_message
+    with pytest.raises(CommandError):
+        parse_console_message("   ")
+    with pytest.raises(CommandError):
+        parse_console_message("x" * (MAX_MESSAGE_LEN + 1))
+
+
+def test_apex_prompt_frames_message_and_asks_for_events():
+    from hf_trading_bot.cortex import apex_prompt
+    p = apex_prompt("review ASTS")
+    assert "APEX" in p and "review ASTS" in p
+    assert "log-event" in p            # asks APEX to emit committee activity
+    assert "single voice" in p         # APEX reports back as one voice
+
+
+def test_render_shows_apex_reply_and_working_state(storage):
+    done = storage.enqueue_command("console", "p", message="review ASTS")
+    storage.update_command(done, status="done", reply="APEX: BUY, 4%.")
+    storage.enqueue_command("console", "p", message="vs SPY?")  # pending
+    working = storage.enqueue_command("console", "p", message="scan tech")
+    storage.update_command(working, status="running")
+    html = render_html(build_snapshot(storage), mode="static")
+    assert "APEX: BUY, 4%." in html
+    assert "working the committee" in html
 
 
 # --- dashboard access token -------------------------------------------------

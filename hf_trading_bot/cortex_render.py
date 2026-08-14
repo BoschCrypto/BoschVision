@@ -39,18 +39,19 @@ def render_html(snap: CortexSnapshot, *, mode: Mode = "static") -> str:
     if mode == "live":
         cmdbar = (
             '<form id="cmdbar" autocomplete="off">'
-            '<span class="prompt">&#9670; COMMAND</span>'
+            '<span class="prompt">&#9670; APEX</span>'
             '<input id="cmdinput" type="text" '
-            'placeholder="review a ticker — e.g.  ASTS   (Enter to dispatch)" />'
-            '<button type="submit" id="cmdsend">DISPATCH</button>'
+            'placeholder="command your committee — e.g.  review ASTS   ·   '
+            'how are we tracking vs SPY?   (Enter to send)" />'
+            '<button type="submit" id="cmdsend">SEND</button>'
             '<span id="cmdmsg"></span></form>'
         )
     else:
         cmdbar = (
             '<div id="cmdbar" class="static">'
-            '<span class="prompt">&#9670; COMMAND</span>'
+            '<span class="prompt">&#9670; APEX</span>'
             '<input id="cmdinput" type="text" disabled '
-            'placeholder="static snapshot — run `hf-bot dashboard` to dispatch reviews" />'
+            'placeholder="static snapshot — run `hf-bot dashboard` to speak to APEX" />'
             '<button type="button" id="cmdsend" disabled>OFFLINE</button></div>'
         )
     return f"""<!doctype html>
@@ -200,6 +201,17 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
 .cst.done { color: var(--gold); border: 1px solid rgba(255,207,112,0.4); }
 .cst.pending { color: var(--dim); border: 1px solid var(--border); }
 .cst.failed, .cst.unavailable { color: var(--danger); border: 1px solid rgba(255,107,107,0.4); }
+/* APEX console — the conversation */
+.turn { margin: 8px 0; border-top: 1px solid var(--border); padding-top: 8px; }
+.turn:first-of-type { border-top: none; padding-top: 0; }
+.turn .who { display: inline-block; min-width: 42px; font-size: 8px; letter-spacing: 2px;
+  color: var(--dim); vertical-align: top; }
+.turn .you { font-size: 11px; color: var(--text); margin-bottom: 5px; }
+.turn .you .cst { margin-left: 6px; }
+.turn .apex { font-size: 11px; color: var(--cyan); line-height: 1.5;
+  white-space: pre-wrap; border-left: 2px solid var(--cyan-dim); padding-left: 8px; }
+.turn .apex.working { color: var(--cyan); }
+.turn .apex.muted2 { color: var(--dim); border-left-color: var(--border); }
 .rrow { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 0; }
 .rrow .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .rrow .rcn { flex: 1 1 auto; letter-spacing: 1px; }
@@ -585,21 +597,39 @@ _APP_JS = r"""
     return h + '</div>';
   }
 
-  function commandDeckPanel(d) {
-    var cmds = d.commands || [];
-    var h = '<div class="readout"><h4>Command deck</h4>';
+  function esc(s) {
+    return (s == null ? "" : String(s)).replace(/[&<>]/g, function (ch) {
+      return ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : "&gt;";
+    });
+  }
+
+  function apexConsolePanel(d) {
+    var cmds = (d.commands || []).slice();   // newest-first from the server
+    var h = '<div class="readout"><h4>APEX console</h4>';
     if (!cmds.length) {
-      h += '<div class="muted">Issue a review from the command bar below the cortex. ' +
-           'It queues here and a Claude session executes it.</div>';
+      h += '<div class="muted">Speak to APEX from the bar below the cortex. He ' +
+           'runs the committee and reports back here.</div>';
       return h + '</div>';
     }
+    cmds.reverse();   // show oldest-first so the latest exchange sits at the bottom
     for (var i = 0; i < cmds.length; i++) {
       var c = cmds[i];
-      h += '<div class="cmd"><span class="csym">review ' + (c.symbol || '—') + '</span>' +
+      var msg = c.message || (c.symbol ? "review " + c.symbol : "(command)");
+      h += '<div class="turn">';
+      h += '<div class="you"><span class="who">YOU</span>' + esc(msg) +
            '<span class="cst ' + c.status + '">' + c.status.toUpperCase() + '</span></div>';
-      if (c.detail && (c.status === 'failed' || c.status === 'unavailable')) {
-        h += '<div class="muted" style="font-size:10px">' + c.detail + '</div>';
+      if (c.reply) {
+        h += '<div class="apex"><span class="who">APEX</span>' + esc(c.reply) + '</div>';
+      } else if (c.status === 'running') {
+        h += '<div class="apex working"><span class="who">APEX</span>' +
+             '<span class="dotpulse">●</span> working the committee…</div>';
+      } else if (c.status === 'pending') {
+        h += '<div class="apex muted2"><span class="who">APEX</span>' +
+             'queued — awaiting an executor.</div>';
+      } else if (c.detail) {
+        h += '<div class="apex muted2"><span class="who">APEX</span>' + esc(c.detail) + '</div>';
       }
+      h += '</div>';
     }
     return h + '</div>';
   }
@@ -635,7 +665,7 @@ _APP_JS = r"""
   }
 
   function readouts(d) {
-    var h = commandDeckPanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
+    var h = apexConsolePanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
     // portfolio vs SPY
     h += '<div class="readout"><h4>Portfolio vs SPY</h4>';
     if (d.portfolio) {

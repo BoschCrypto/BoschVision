@@ -1181,7 +1181,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     import traceback
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    from hf_trading_bot.cortex import CommandError, parse_review_command, review_prompt
+    from hf_trading_bot.cortex import (
+        CommandError,
+        apex_prompt,
+        extract_symbol,
+        parse_console_message,
+    )
 
     # Seeding/migration is done; the startup connection can't be shared across
     # request threads (SQLite forbids it), so close it and give each request
@@ -1199,24 +1204,29 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         token = secrets.token_urlsafe(18)
     require_auth = bool(token)
 
-    # A public tunnel that can spawn Claude is a token-burn risk in the open;
-    # refuse the combination so nobody with the link can run up your bill.
-    if tunnel and enable_agent_runner:
+    # The runner spawns Claude and spends tokens. Whenever the dashboard is
+    # reachable beyond this machine (a tunnel, or a non-localhost bind), the
+    # runner MUST be gated by a token — otherwise anyone who can reach it could
+    # run up your bill. (--tunnel forces a token on already; this also catches
+    # `--host 0.0.0.0 --enable-agent-runner` with no auth.)
+    exposed = tunnel or host not in ("127.0.0.1", "localhost")
+    if enable_agent_runner and exposed and not require_auth:
         storage.close()
         raise click.ClickException(
-            "--tunnel with --enable-agent-runner is refused: anyone with the link "
-            "could spawn Claude and spend your tokens. Drop --enable-agent-runner — "
-            "commands will queue for you to run deliberately."
+            "The agent-runner is exposed without a token, so anyone who can reach "
+            "this dashboard could spend your tokens. Add --auth (or --token), and "
+            "only you — holding the link and key — can then command a spend."
         )
 
-    def _run_review(command_id: int, symbol: str, prompt: str):
-        """Spawn a real committee review via the local `claude` CLI. Runs in a
-        background thread; the review emits its own committee events, so the
-        cortex reflects it live. Only ever called with a validated ticker."""
+    def _run_console(command_id: int, prompt: str, label: str):
+        """Spawn APEX via the local `claude` CLI to act on a console command.
+        Runs in a background thread; APEX emits its own committee events (so the
+        cortex reflects the run) and returns a reply, captured here. The prompt
+        is passed as a single argument — never through a shell."""
         s = Storage(db_path)
         try:
             s.update_command(command_id, status="running",
-                             detail=f"claude runner started for {symbol}")
+                             detail=f"APEX working on: {label}")
         finally:
             s.close()
         try:
@@ -1225,11 +1235,15 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                 cwd=".", capture_output=True, text=True, timeout=1800,
             )
             ok = proc.returncode == 0
-            detail = (proc.stdout or proc.stderr or "").strip().replace("\n", " ")[-300:]
+            reply = (proc.stdout or "").strip()
+            detail = (reply or proc.stderr or "").strip().replace("\n", " ")[-300:]
             s = Storage(db_path)
             try:
-                s.update_command(command_id, status="done" if ok else "failed",
-                                 detail=detail or ("completed" if ok else "claude exited non-zero"))
+                s.update_command(
+                    command_id, status="done" if ok else "failed",
+                    detail=detail or ("completed" if ok else "claude exited non-zero"),
+                    reply=reply or (None if ok else "APEX run failed — see detail."),
+                )
             finally:
                 s.close()
         except Exception as e:  # noqa: BLE001
@@ -1320,37 +1334,40 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                 length = int(self.headers.get("Content-Length", 0))
                 raw = self.rfile.read(length) if length else b"{}"
                 text = (json.loads(raw or b"{}").get("text") or "").strip()
-                # Validate to a bare ticker BEFORE anything touches an executor.
+                # Free-form message to APEX. It's passed to the executor as a
+                # single subprocess argument (never a shell), so arbitrary text
+                # is safe; we only trim/cap it.
                 try:
-                    symbol = parse_review_command(text)
+                    message = parse_console_message(text)
                 except CommandError as e:
                     self._send(400, json.dumps({"error": str(e)}).encode(), "application/json")
                     return
-                prompt = review_prompt(symbol)
+                symbol = extract_symbol(message)   # best-effort, for display only
+                prompt = apex_prompt(message)
                 s = Storage(db_path)
                 try:
-                    cid = s.enqueue_command("review", prompt, symbol=symbol)
+                    cid = s.enqueue_command("console", prompt, symbol=symbol, message=message)
                 finally:
                     s.close()
 
+                label = message if len(message) <= 60 else message[:57] + "…"
                 if claude_bin:
-                    threading.Thread(target=_run_review, args=(cid, symbol, prompt),
+                    threading.Thread(target=_run_console, args=(cid, prompt, label),
                                      daemon=True).start()
-                    msg = (f"Dispatching a live committee review of {symbol} via Claude — "
-                           f"watch the cortex.")
+                    ack = "APEX is on it — watch the cortex; the reply lands in the console."
                     status = "running"
                 elif enable_agent_runner:
-                    msg = (f"Queued {symbol}, but the `claude` CLI wasn't found on PATH. "
-                           f"Install/authenticate Claude Code, or run the queued command "
-                           f"from a Claude session (`hf-bot committee queue --run`).")
+                    ack = ("Queued, but the `claude` CLI wasn't found on PATH. Install/"
+                           "authenticate Claude Code so APEX can run, or execute it from a "
+                           "Claude session (`hf-bot committee queue --run`).")
                     status = "pending"
                 else:
-                    msg = (f"Queued a review of {symbol}. Run it from a Claude session: "
-                           f"`hf-bot committee queue --run`. (Start the dashboard with "
-                           f"--enable-agent-runner to dispatch automatically.)")
+                    ack = ("Queued for APEX. Run it from a Claude session "
+                           "(`hf-bot committee queue --run`), or start the dashboard with "
+                           "--enable-agent-runner so APEX runs the moment you command.")
                     status = "pending"
                 self._send(200, json.dumps(
-                    {"id": cid, "symbol": symbol, "status": status, "message": msg}
+                    {"id": cid, "symbol": symbol, "status": status, "message": ack}
                 ).encode(), "application/json")
             except Exception:
                 tb = traceback.format_exc()

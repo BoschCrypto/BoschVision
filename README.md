@@ -426,24 +426,31 @@ decision journal and committee log accumulate with every review, and
 over time. It is a growing record, not a model that silently gets smarter —
 the panel says so.
 
-### Commanding the committee from the dashboard
+### The APEX console — speak to your committee
 
-The Stark-style HUD has a **command bar**: type a ticker (e.g. `ASTS`) and hit
-DISPATCH to request a full committee review. The honest architecture matters
-here — the Python server has no LLM, so it cannot run the agents itself:
+The Stark HUD's command bar is a **console to APEX** (the CIO / orchestrator).
+Type a free-form command — `review ASTS and size it`, `how are we tracking vs
+SPY?`, `have the team study macro` — and APEX acts on it, delegating to the
+specialists, and **reports back in one voice** in the console feed. You hear
+from APEX, not from eleven agents.
 
-- The command is **queued** (`command_queue`), never faked.
-- A real **Claude session executes it**, emitting the committee events + memory
-  that light up the cortex live.
-- Two modes: by default the command **queues** for a Claude session to pick up
-  (`hf-bot committee queue --run`); with `hf-bot dashboard --enable-agent-runner`
-  the server itself spawns `claude -p` to run the review. The runner is **off by
-  default** — a web page spawning Claude with your tools is a deliberate choice,
-  not a default.
+The honest architecture: the Python server has no LLM, so it cannot run the
+committee itself. Your message is stored, then a Claude session executes APEX,
+which emits the committee events that light the cortex and returns a reply
+captured in the console.
 
-Only a validated ticker ever reaches an executor, so no free-form text can be
-smuggled into a spawned process. The "Command deck" panel tracks each request's
-status (pending → running → done).
+- **Off by default (queue):** the command queues for a Claude session to run
+  (`hf-bot committee queue --run`). Zero tokens until you run it.
+- **`--enable-agent-runner`:** the server spawns `claude -p` so **APEX runs the
+  moment you command** — *issuing the command is your authorization to spend*.
+  Needs the `claude` CLI installed and logged in.
+
+**Your command is the authorization.** Nothing spends tokens on its own; each
+message you send is explicit consent for that one run. The message is passed to
+the executor as a single argument (never a shell), so free-form text is safe.
+On a tunnel the runner is allowed only *with* a token — so only you, holding the
+link and key, can authorize a spend. Double-click **`run-command-center.bat`**
+for the full experience (token + public link + runner).
 
 ### The team learns: a growing, role-specific library
 
