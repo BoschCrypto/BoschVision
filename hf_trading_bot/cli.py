@@ -68,12 +68,15 @@ def cli(ctx: click.Context, config_path: Optional[str]):
 
 @cli.command()
 @click.option("--dry-run/--live", default=True, help="Dry run (no orders/db writes) or actually execute.")
+@click.option("--i-know-this-failed-backtest", "allow_failed_backtest", is_flag=True,
+              help="Override the guard that blocks live trading on a strategy with a "
+                   "recorded sub-50% sweep hit rate.")
 @click.pass_obj
-def run(cfg: AppConfig, dry_run: bool):
+def run(cfg: AppConfig, dry_run: bool, allow_failed_backtest: bool):
     """Run one strategy evaluation cycle against the configured broker."""
     storage = _load_storage(cfg)
     broker = _build_broker(cfg)
-    result = run_strategy_cycle(broker, storage, dry_run=dry_run)
+    result = run_strategy_cycle(broker, storage, dry_run=dry_run, allow_failed_backtest=allow_failed_backtest)
     for line in result.log:
         click.echo(line)
     if not result.ok:
@@ -89,8 +92,11 @@ def run(cfg: AppConfig, dry_run: bool):
 @cli.command()
 @click.option("--interval", default=3600, help="Seconds between cycles (default: hourly).")
 @click.option("--dry-run/--live", default=True)
+@click.option("--i-know-this-failed-backtest", "allow_failed_backtest", is_flag=True,
+              help="Override the guard that blocks live trading on a strategy with a "
+                   "recorded sub-50% sweep hit rate.")
 @click.pass_obj
-def loop(cfg: AppConfig, interval: int, dry_run: bool):
+def loop(cfg: AppConfig, interval: int, dry_run: bool, allow_failed_backtest: bool):
     """Run strategy cycles repeatedly on a fixed interval until interrupted.
 
     This is a systematic-trading loop (seconds-to-hours cadence), not true
@@ -102,7 +108,9 @@ def loop(cfg: AppConfig, interval: int, dry_run: bool):
     click.echo(f"Looping every {interval}s ({'DRY RUN' if dry_run else 'LIVE'}). Ctrl+C to stop.")
     try:
         while True:
-            result = run_strategy_cycle(broker, storage, dry_run=dry_run)
+            result = run_strategy_cycle(
+                broker, storage, dry_run=dry_run, allow_failed_backtest=allow_failed_backtest
+            )
             status = "ok" if result.ok else f"error: {result.message}"
             click.echo(
                 f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {status} — "

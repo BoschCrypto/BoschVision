@@ -173,3 +173,68 @@ def test_kill_switch_on_blocks_entries_but_cycle_succeeds(storage):
     assert result.ok
     assert result.entries_blocked
     assert broker.orders == []
+
+
+def test_live_run_refuses_a_strategy_with_a_failed_sweep(storage):
+    storage.record_sweep_result(
+        run_id="run1", strategy_key="momentum_90d", symbols_tested=24, wins=5,
+        hit_rate_pct=21.0, median_excess_pts=-71.2, total_trades=680,
+        window_start="2021-01-01",
+    )
+    broker = FakeBroker(entry_signal_bars(), equity=200.0, cash=200.0)
+
+    result = run_strategy_cycle(broker, storage, dry_run=False)
+
+    assert not result.ok
+    assert "Refusing to trade live" in result.message
+    assert "momentum_90d" in result.message
+    assert broker.orders == []
+
+
+def test_live_run_allows_override_of_a_failed_sweep(storage):
+    storage.record_sweep_result(
+        run_id="run1", strategy_key="momentum_90d", symbols_tested=24, wins=5,
+        hit_rate_pct=21.0, median_excess_pts=-71.2, total_trades=680,
+        window_start="2021-01-01",
+    )
+    broker = FakeBroker(entry_signal_bars(), equity=200.0, cash=200.0)
+
+    result = run_strategy_cycle(broker, storage, dry_run=False, allow_failed_backtest=True)
+
+    assert result.ok
+
+
+def test_dry_run_is_not_blocked_by_a_failed_sweep(storage):
+    storage.record_sweep_result(
+        run_id="run1", strategy_key="momentum_90d", symbols_tested=24, wins=5,
+        hit_rate_pct=21.0, median_excess_pts=-71.2, total_trades=680,
+        window_start="2021-01-01",
+    )
+    broker = FakeBroker(entry_signal_bars(), equity=200.0, cash=200.0)
+
+    result = run_strategy_cycle(broker, storage, dry_run=True)
+
+    assert result.ok
+
+
+def test_live_run_is_not_blocked_by_an_untested_strategy(storage):
+    # No sweep result recorded at all — the guard is about known-failing
+    # strategies, not ones that simply haven't been tested yet.
+    broker = FakeBroker(entry_signal_bars(), equity=200.0, cash=200.0)
+
+    result = run_strategy_cycle(broker, storage, dry_run=False)
+
+    assert result.ok
+
+
+def test_live_run_is_not_blocked_by_a_passing_sweep(storage):
+    storage.record_sweep_result(
+        run_id="run1", strategy_key="momentum_90d", symbols_tested=24, wins=15,
+        hit_rate_pct=62.5, median_excess_pts=5.0, total_trades=680,
+        window_start="2021-01-01",
+    )
+    broker = FakeBroker(entry_signal_bars(), equity=200.0, cash=200.0)
+
+    result = run_strategy_cycle(broker, storage, dry_run=False)
+
+    assert result.ok

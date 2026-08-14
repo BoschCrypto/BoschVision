@@ -34,7 +34,26 @@ class CycleResult:
     log: list[str] = field(default_factory=list)
 
 
-def run_strategy_cycle(broker: Broker, storage: Storage, dry_run: bool = False) -> CycleResult:
+def _failed_backtest_strategies(storage: Storage, strategy_keys: set[str]) -> list[dict]:
+    """Assigned strategies with a recorded sub-50% sweep hit rate.
+
+    A hit rate below 50% is worse than a coin flip against buy-and-hold —
+    see FINDINGS.md. Strategies never swept are not flagged here; this
+    guards against deploying a strategy that has already been tested and
+    rejected, not against deploying an unvalidated one.
+    """
+    failing = []
+    for key in sorted(strategy_keys):
+        result = storage.latest_sweep_result(key)
+        if result is not None and result["hit_rate_pct"] < 50:
+            failing.append(result)
+    return failing
+
+
+def run_strategy_cycle(
+    broker: Broker, storage: Storage, dry_run: bool = False,
+    allow_failed_backtest: bool = False,
+) -> CycleResult:
     log: list[str] = []
     if dry_run:
         log.append("DRY RUN — no orders placed, no database writes.")
@@ -48,6 +67,23 @@ def run_strategy_cycle(broker: Broker, storage: Storage, dry_run: bool = False) 
     if not assignments:
         return CycleResult(ok=False, message="No symbols enabled for live execution.")
     symbols = [a["symbol"] for a in assignments]
+
+    if not dry_run and not allow_failed_backtest:
+        failing = _failed_backtest_strategies(storage, {a["strategy_key"] for a in assignments})
+        if failing:
+            names = ", ".join(
+                f"{f['strategy_key']} ({f['hit_rate_pct']:.0f}% hit rate, "
+                f"{f['median_excess_pts']:+.1f}pt median excess)" for f in failing
+            )
+            return CycleResult(
+                ok=False,
+                message=(
+                    f"Refusing to trade live: {names} already tested below a coin flip "
+                    f"against buy-and-hold in a recorded sweep (see FINDINGS.md / "
+                    f"`hf-bot sweep-history`). Reassign the watchlist to a different "
+                    f"strategy, or pass --i-know-this-failed-backtest to override."
+                ),
+            )
 
     kill_switch = bool(settings["kill_switch_active"])
     exits_allowed_when_paused = bool(settings["exits_allowed_when_paused"])
