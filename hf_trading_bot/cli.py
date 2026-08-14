@@ -1129,6 +1129,11 @@ def study_cycle(cfg, rounds):
               help="Let the dashboard SPAWN a real committee review (via the local "
                    "`claude` CLI) when you issue a command. Off by default: this runs "
                    "Claude with your tools and spends tokens, so it must be opted into.")
+@click.option("--runner-permission-mode", default="bypassPermissions",
+              help="Permission mode for the spawned `claude -p`. Default bypassPermissions "
+                   "so APEX can run committee tools without interactive prompts (there's no "
+                   "TTY to answer them). Set to 'default' to keep prompts, or another mode "
+                   "your Claude version supports.")
 @click.option("--open", "open_browser", is_flag=True,
               help="Open the dashboard in your default browser once the server is up.")
 @click.option("--token", default=None,
@@ -1143,7 +1148,8 @@ def study_cycle(cfg, rounds):
 @click.pass_obj
 def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               publish_path: Optional[str], enable_agent_runner: bool,
-              open_browser: bool, token: Optional[str], auth: bool, tunnel: bool):
+              runner_permission_mode: str, open_browser: bool,
+              token: Optional[str], auth: bool, tunnel: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
 
     Each agent's firing-rate number is real logged data (journal, sweeps,
@@ -1230,9 +1236,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         finally:
             s.close()
         try:
+            cmd = [claude_bin, "-p"]
+            if runner_permission_mode and runner_permission_mode != "default":
+                cmd += ["--permission-mode", runner_permission_mode]
+            cmd.append(prompt)
             proc = subprocess.run(
-                [claude_bin, "-p", prompt],
-                cwd=".", capture_output=True, text=True, timeout=1800,
+                cmd, cwd=".", capture_output=True, text=True, timeout=1800,
             )
             ok = proc.returncode == 0
             reply = (proc.stdout or "").strip()
@@ -1378,8 +1387,9 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
 
     server = ThreadingHTTPServer((host, port), Handler)
     runner_note = (
-        "  agent-runner ON — commands will spawn `claude`"
-        + ("" if claude_bin else " (but `claude` was NOT found on PATH; commands will queue)")
+        "  agent-runner ON — commands spawn `claude` "
+        f"(permission-mode: {runner_permission_mode})"
+        + ("" if claude_bin else "  [!] `claude` NOT found on PATH — commands will queue")
         if enable_agent_runner else
         "  agent-runner off — commands queue for a Claude session to run"
     )

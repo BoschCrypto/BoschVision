@@ -452,6 +452,12 @@ On a tunnel the runner is allowed only *with* a token — so only you, holding t
 link and key, can authorize a spend. Double-click **`run-command-center.bat`**
 for the full experience (token + public link + runner).
 
+The spawned `claude -p` runs with `--permission-mode bypassPermissions` so APEX
+can use committee tools without interactive prompts (a background process has no
+TTY to answer them). If APEX stalls or your Claude version rejects that mode,
+override it: `--runner-permission-mode default` (you'll then answer prompts in
+the dashboard's terminal) or another mode your version supports.
+
 ### The team learns: a growing, role-specific library
 
 Each agent builds a curated body of expertise it **recalls at task time**, so
