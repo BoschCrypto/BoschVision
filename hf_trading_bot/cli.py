@@ -7,7 +7,7 @@ from typing import Optional
 import click
 from dotenv import load_dotenv
 
-from hf_trading_bot.backtest import replay, stats
+from hf_trading_bot.backtest import buy_and_hold, replay, significance_note, stats
 from hf_trading_bot.config import AppConfig
 from hf_trading_bot.data.provider import get_provider, source_of
 from hf_trading_bot.engine import run_strategy_cycle
@@ -196,9 +196,17 @@ def status(cfg: AppConfig):
 @click.option("--strategy", "strategy_key", type=click.Choice(STRATEGY_KEYS), default="momentum_90d")
 @click.option("--start", default="2021-01-01")
 @click.option("--end", default=None)
+@click.option("--benchmark", default="SPY", help="Benchmark symbol (default SPY). Use '' to skip.")
 @click.pass_obj
-def backtest(cfg: AppConfig, symbol: str, strategy_key: str, start: str, end: Optional[str]):
-    """Backtest one symbol/strategy over a historical date range."""
+def backtest(
+    cfg: AppConfig, symbol: str, strategy_key: str, start: str, end: Optional[str], benchmark: str
+):
+    """Backtest one symbol/strategy, always against buy-and-hold benchmarks.
+
+    A strategy's return in isolation says nothing. The only number that
+    matters is how it compares to (a) simply holding the same stock, and
+    (b) holding the index. Both are always reported.
+    """
     provider = _build_provider(cfg)
     bars = provider.daily_bars_range(symbol, start, end)
     if len(bars) < 60:
@@ -206,18 +214,313 @@ def backtest(cfg: AppConfig, symbol: str, strategy_key: str, start: str, end: Op
     first, last = bars[0].t[:10], bars[-1].t[:10]
     years = (_dt.date.fromisoformat(last) - _dt.date.fromisoformat(first)).days / 365.25
     trades = replay(bars, strategy_key, {})
-    s = stats(trades, years)
-    click.echo(f"{symbol} / {strategy_key}  ({first} → {last}, {years:.1f}y, {len(bars)} bars)")
-    click.echo(f"  Data source: {source_of(provider)}")
-    if s.win_rate is None:
-        click.echo("  Trades: 0")
-    else:
-        click.echo(f"  Trades: {s.total_trades}  Win rate: {s.win_rate:.1f}%")
+    s = stats(trades, years, total_bars=len(bars))
+
+    click.echo(f"\n{symbol} / {strategy_key}   {first} → {last}  ({years:.1f}y, {len(bars)} bars)")
+    click.echo(f"Data source: {source_of(provider)}")
+    click.echo("-" * 68)
+
+    if s.total_trades == 0:
+        click.echo("  No trades generated — nothing to evaluate.")
+        return
+
+    # ---- strategy ----
+    click.echo(f"{'STRATEGY':<26} {'return':>10} {'CAGR':>9} {'maxDD':>9} {'Sharpe':>8}")
+    sharpe_txt = f"{s.sharpe:>8.2f}" if s.sharpe is not None else f"{'n/a':>8}"
+    click.echo(
+        f"{strategy_key:<26} {s.total_return_pct:>9.1f}% {s.cagr:>8.1f}% "
+        f"{s.max_drawdown:>8.1f}% {sharpe_txt}"
+    )
+
+    # ---- benchmarks ----
+    bh = buy_and_hold(bars, symbol, years)
+    benches = []
+    if bh:
+        benches.append(bh)
         click.echo(
-            f"  CAGR: {s.cagr:.2f}%  Sharpe: {s.sharpe:.2f}  Max DD: {s.max_drawdown:.2f}%"
-            if s.sharpe is not None
-            else f"  CAGR: {s.cagr:.2f}%  Max DD: {s.max_drawdown:.2f}%"
+            f"{'buy & hold ' + symbol:<26} {bh.total_return_pct:>9.1f}% {bh.cagr:>8.1f}% "
+            f"{bh.max_drawdown:>8.1f}% {'—':>8}"
         )
+    if benchmark and benchmark.upper() != symbol.upper():
+        try:
+            bbars = provider.daily_bars_range(benchmark, start, end)
+            bstat = buy_and_hold(bbars, benchmark.upper(), years)
+            if bstat:
+                benches.append(bstat)
+                click.echo(
+                    f"{'buy & hold ' + benchmark.upper():<26} {bstat.total_return_pct:>9.1f}% "
+                    f"{bstat.cagr:>8.1f}% {bstat.max_drawdown:>8.1f}% {'—':>8}"
+                )
+        except Exception as e:  # noqa: BLE001 — benchmark is informational
+            click.echo(f"  (benchmark {benchmark} unavailable: {e})")
+
+    # ---- the verdict ----
+    click.echo("-" * 68)
+    for b in benches:
+        excess = s.total_return_pct - b.total_return_pct
+        verdict = "BEAT" if excess > 0 else "LOST TO"
+        click.echo(f"  vs buy & hold {b.symbol:<6} {verdict:>8}  by {excess:>+8.1f} pts")
+
+    if s.time_in_market_pct is not None:
+        click.echo(f"  Time in market: {s.time_in_market_pct:.0f}%  (rest in cash)")
+    click.echo(f"  Trades: {s.total_trades}   Win rate: {s.win_rate:.1f}%")
+    still_open = sum(1 for t in trades if t.open_at_end)
+    if still_open:
+        click.echo(
+            f"  NOTE: {still_open} position(s) still open at window end — their "
+            f"unrealised P&L is EXCLUDED from the numbers above."
+        )
+    click.echo(f"\n  {significance_note(s.total_trades)}")
+    if benches and all(s.total_return_pct < b.total_return_pct for b in benches):
+        click.echo(
+            "\n  This strategy underperformed simply buying and holding. "
+            "On this evidence it destroyed value."
+        )
+
+
+@cli.group()
+def journal():
+    """Decision journal — the written record of why each position was taken.
+
+    Contemporaneous notes are the only defence against hindsight bias.
+    Winners feel inevitable in retrospect and losers feel unlucky; only what
+    you wrote down beforehand tells you which it actually was.
+    """
+
+
+@journal.command("add")
+@click.option("--symbol", required=True)
+@click.option("--decision", required=True, type=click.Choice(["BUY", "SELL", "HOLD", "PASS"], case_sensitive=False))
+@click.option("--conviction", default="medium", type=click.Choice(["low", "medium", "high"]))
+@click.option("--thesis", required=True, help="Why is this worth owning? 3 sentences.")
+@click.option("--falsification", default="", help="What would prove this WRONG? Required for BUY/SELL.")
+@click.option("--red-team", default=None, help="The strongest objection, verbatim.")
+@click.option("--benchmark-thesis", default=None, help="Why this beats just buying the index.")
+@click.option("--entry", type=float, default=None)
+@click.option("--stop", type=float, default=None)
+@click.option("--target", type=float, default=None)
+@click.option("--size-pct", type=float, default=None)
+@click.pass_obj
+def journal_add(cfg, symbol, decision, conviction, thesis, falsification, red_team,
+                benchmark_thesis, entry, stop, target, size_pct):
+    """Record a decision. Refuses BUY/SELL without falsification criteria."""
+    from hf_trading_bot.journal import Decision, Journal, JournalError
+
+    storage = _load_storage(cfg)
+    j = Journal(storage._conn)
+    try:
+        did = j.record(Decision(
+            symbol=symbol, decision=decision, conviction=conviction, thesis=thesis,
+            falsification=falsification, red_team_objection=red_team,
+            benchmark_thesis=benchmark_thesis, entry_price=entry, stop_price=stop,
+            target_price=target, position_pct=size_pct,
+        ))
+    except JournalError as e:
+        storage.close()
+        raise click.ClickException(str(e)) from e
+    click.echo(f"Recorded decision #{did}: {decision.upper()} {symbol.upper()}")
+    storage.close()
+
+
+@journal.command("list")
+@click.option("--all", "show_all", is_flag=True, help="Include closed/reviewed decisions.")
+@click.pass_obj
+def journal_list(cfg, show_all):
+    """Show open theses (or everything with --all)."""
+    from hf_trading_bot.journal import Journal
+
+    storage = _load_storage(cfg)
+    j = Journal(storage._conn)
+    rows = j.all_decisions() if show_all else j.open_decisions()
+    if not rows:
+        click.echo("No decisions recorded yet." if show_all else "No open theses.")
+        storage.close()
+        return
+    for r in rows:
+        status = r["outcome"] or "OPEN"
+        click.echo(f"\n#{r['id']} {r['decision']} {r['symbol']}  [{r['conviction']}]  {status}")
+        click.echo(f"   decided: {r['decided_at'][:10]}")
+        click.echo(f"   thesis:  {r['thesis'][:120]}")
+        if r["falsification"]:
+            click.echo(f"   wrong if: {r['falsification'][:120]}")
+    storage.close()
+
+
+@journal.command("review")
+@click.argument("decision_id", type=int)
+@click.option("--outcome", required=True, type=click.Choice(["right", "wrong", "unresolved"]))
+@click.option("--exit-price", type=float, default=None)
+@click.option("--pnl-pct", type=float, default=None)
+@click.option("--followed-rules/--broke-rules", default=None,
+              help="Did you exit when your own falsification criteria triggered?")
+@click.option("--lessons", default=None)
+@click.pass_obj
+def journal_review(cfg, decision_id, outcome, exit_price, pnl_pct, followed_rules, lessons):
+    """Close out a decision and record what actually happened."""
+    from hf_trading_bot.journal import Journal, JournalError
+
+    storage = _load_storage(cfg)
+    j = Journal(storage._conn)
+    try:
+        j.review(decision_id, outcome, exit_price, pnl_pct, followed_rules, lessons)
+    except JournalError as e:
+        storage.close()
+        raise click.ClickException(str(e)) from e
+    click.echo(f"Decision #{decision_id} reviewed: {outcome}")
+    storage.close()
+
+
+@journal.command("scorecard")
+@click.pass_obj
+def journal_scorecard(cfg):
+    """Your calibration over time — the honest self-assessment."""
+    from hf_trading_bot.journal import Journal
+
+    storage = _load_storage(cfg)
+    j = Journal(storage._conn)
+    s = j.scorecard()
+    if not s.get("reviewed"):
+        click.echo("No reviewed decisions yet. Come back after closing some positions.")
+        storage.close()
+        return
+    click.echo(f"\nReviewed decisions: {s['reviewed']}")
+    click.echo(f"Accuracy:           {s['accuracy_pct']:.0f}%")
+    if s["discipline_pct"] is not None:
+        click.echo(f"Followed own rules: {s['discipline_pct']:.0f}%   <- matters more than accuracy")
+    if s["avg_pnl_pct"] is not None:
+        click.echo(f"Average P&L:        {s['avg_pnl_pct']:+.1f}%")
+    click.echo("\nAccuracy by stated conviction (are you calibrated?):")
+    for conv, b in sorted(s["by_conviction"].items()):
+        pct = b["right"] / b["n"] * 100 if b["n"] else 0
+        click.echo(f"  {conv:<7} {b['right']}/{b['n']}  ({pct:.0f}%)")
+    click.echo(
+        "\nIf 'high' conviction is not markedly more accurate than 'low', your\n"
+        "confidence carries no information — size all positions equally until\n"
+        "that changes."
+    )
+    storage.close()
+
+
+DEFAULT_UNIVERSE = [
+    # Deliberately mixed: mega-cap tech, broad index, cyclicals, defensives,
+    # and names that did BADLY over recent years. A universe of only winners
+    # is survivorship bias and will make any long-biased strategy look good.
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA",
+    "SPY", "QQQ", "IWM",
+    "JPM", "XOM", "JNJ", "PG", "KO", "WMT",
+    "NKE", "DIS", "INTC", "PYPL", "PFE", "BA", "T", "VZ",
+]
+
+
+@cli.command()
+@click.option("--symbols", default=None, help="Comma-separated. Defaults to a mixed 24-name universe.")
+@click.option("--strategies", default=None, help="Comma-separated. Defaults to all.")
+@click.option("--start", default="2021-01-01")
+@click.option("--end", default=None)
+@click.pass_obj
+def sweep(cfg: AppConfig, symbols, strategies, start, end):
+    """Run every strategy across a universe and report whether ANY of them
+    actually beat buy-and-hold.
+
+    This is the honest test. A single backtest on one symbol that happened to
+    go up tells you nothing — run enough symbols and one will look brilliant
+    by chance alone. What matters is the hit rate across a mixed universe
+    that includes losers.
+    """
+    provider = _build_provider(cfg)
+    syms = [s.strip().upper() for s in symbols.split(",")] if symbols else DEFAULT_UNIVERSE
+    strats = [s.strip() for s in strategies.split(",")] if strategies else STRATEGY_KEYS
+
+    click.echo(f"\nSweeping {len(strats)} strategies × {len(syms)} symbols ({start} → {end or 'today'})")
+    click.echo("Fetching data...\n")
+
+    results: dict[str, list[dict]] = {k: [] for k in strats}
+    bh_by_symbol: dict[str, float] = {}
+    failed: list[str] = []
+
+    for sym in syms:
+        try:
+            bars = provider.daily_bars_range(sym, start, end)
+        except Exception as e:  # noqa: BLE001
+            failed.append(f"{sym} ({e})")
+            continue
+        if len(bars) < 60:
+            failed.append(f"{sym} (only {len(bars)} bars)")
+            continue
+
+        first, last = bars[0].t[:10], bars[-1].t[:10]
+        years = (_dt.date.fromisoformat(last) - _dt.date.fromisoformat(first)).days / 365.25
+        bh = buy_and_hold(bars, sym, years)
+        if not bh:
+            continue
+        bh_by_symbol[sym] = bh.total_return_pct
+
+        for key in strats:
+            s = stats(replay(bars, key, {}), years, total_bars=len(bars))
+            if s.total_trades == 0:
+                continue
+            results[key].append(
+                {
+                    "symbol": sym,
+                    "ret": s.total_return_pct,
+                    "excess": s.total_return_pct - bh.total_return_pct,
+                    "trades": s.total_trades,
+                    "dd": s.max_drawdown,
+                }
+            )
+        click.echo(f"  {sym:<6} done  (buy&hold {bh.total_return_pct:+.0f}%)")
+
+    if failed:
+        click.echo(f"\nSkipped: {', '.join(failed)}")
+
+    # ---- aggregate verdict, the part that matters -------------------------
+    click.echo("\n" + "=" * 78)
+    click.echo("AGGREGATE — did the strategy beat simply holding the same stock?")
+    click.echo("=" * 78)
+    click.echo(f"{'strategy':<22} {'beat B&H':>10} {'hit rate':>10} {'median excess':>15} {'trades':>8}")
+    click.echo("-" * 78)
+
+    verdicts = []
+    for key in strats:
+        rows = results[key]
+        if not rows:
+            click.echo(f"{key:<22} {'no trades':>10}")
+            continue
+        wins = sum(1 for r in rows if r["excess"] > 0)
+        excesses = sorted(r["excess"] for r in rows)
+        median = excesses[len(excesses) // 2]
+        total_trades = sum(r["trades"] for r in rows)
+        hit = wins / len(rows) * 100
+        click.echo(
+            f"{key:<22} {f'{wins}/{len(rows)}':>10} {hit:>9.0f}% {median:>14.1f}pts {total_trades:>8}"
+        )
+        verdicts.append((key, hit, median, total_trades))
+
+    click.echo("\n" + "-" * 78)
+    click.echo("HOW TO READ THIS")
+    click.echo("-" * 78)
+    click.echo(
+        "  A coin flip is a ~50% hit rate. A strategy needs to beat buy-and-hold on\n"
+        "  clearly MORE than half the universe, with positive median excess return,\n"
+        "  before there is any reason to believe it adds value. Anything at or below\n"
+        "  50% is evidence the strategy is noise — or actively harmful after costs\n"
+        "  and short-term capital gains tax."
+    )
+    if verdicts:
+        best = max(verdicts, key=lambda v: v[1])
+        click.echo("")
+        if best[1] > 60 and best[2] > 0:
+            click.echo(
+                f"  Best: {best[0]} beat buy-and-hold {best[1]:.0f}% of the time "
+                f"(median {best[2]:+.1f} pts).\n"
+                f"  Worth further out-of-sample testing — NOT yet worth real money."
+            )
+        else:
+            click.echo(
+                f"  No strategy cleared the bar. Best was {best[0]} at {best[1]:.0f}% hit rate,\n"
+                f"  median excess {best[2]:+.1f} pts. On this evidence, these strategies do not\n"
+                f"  beat simply buying and holding — and that is the honest, useful result."
+            )
 
 
 if __name__ == "__main__":

@@ -1,5 +1,14 @@
 # hf-trading-bot
 
+> **New here? Read [`MORNING.md`](MORNING.md) first, then [`ROADMAP.md`](ROADMAP.md).**
+> The roadmap opens with the arithmetic on what returns can and cannot do —
+> it determines whether the rest of this is worth running.
+>
+> Two things were added on top of the execution engine described below:
+> an **investment committee** of ten research agents
+> ([`.claude/agents/`](.claude/agents/README.md)) and **honest measurement**
+> (`hf-bot sweep`, benchmark-aware `hf-bot backtest`, `hf-bot journal`).
+
 A systematic trading bot: a pluggable strategy engine, portfolio risk
 management (drawdown circuit breaker, daily/weekly loss guards, ATR-based
 position sizing), a backtester, and a broker abstraction — safe simulated
