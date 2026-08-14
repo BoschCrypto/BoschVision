@@ -1137,10 +1137,13 @@ def study_cycle(cfg, rounds):
 @click.option("--auth", is_flag=True,
               help="Require a token; auto-generate and print a strong one if --token "
                    "isn't given. Use this for tunnels.")
+@click.option("--tunnel", is_flag=True,
+              help="Also open a public HTTPS tunnel (cloudflared) so you can reach the "
+                   "dashboard from any device. Forces --auth — never exposed without a token.")
 @click.pass_obj
 def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               publish_path: Optional[str], enable_agent_runner: bool,
-              open_browser: bool, token: Optional[str], auth: bool):
+              open_browser: bool, token: Optional[str], auth: bool, tunnel: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
 
     Each agent's firing-rate number is real logged data (journal, sweeps,
@@ -1190,10 +1193,21 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     claude_bin = shutil.which("claude") if enable_agent_runner else None
 
     # Access token: required before exposing the dashboard past this machine.
-    if auth and not token:
+    # A tunnel ALWAYS forces auth — never expose the committee without a lock.
+    if (auth or tunnel) and not token:
         import secrets
         token = secrets.token_urlsafe(18)
     require_auth = bool(token)
+
+    # A public tunnel that can spawn Claude is a token-burn risk in the open;
+    # refuse the combination so nobody with the link can run up your bill.
+    if tunnel and enable_agent_runner:
+        storage.close()
+        raise click.ClickException(
+            "--tunnel with --enable-agent-runner is refused: anyone with the link "
+            "could spawn Claude and spend your tokens. Drop --enable-agent-runner — "
+            "commands will queue for you to run deliberately."
+        )
 
     def _run_review(command_id: int, symbol: str, prompt: str):
         """Spawn a real committee review via the local `claude` CLI. Runs in a
@@ -1374,12 +1388,16 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         import threading
         import webbrowser
         threading.Timer(0.8, lambda: webbrowser.open(local_url)).start()
+
+    tunnel_proc = _start_tunnel(port, token) if tunnel else None
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         click.echo("\nStopped.")
     finally:
         server.server_close()
+        if tunnel_proc is not None:
+            tunnel_proc.terminate()
 
 
 def _lan_ip() -> Optional[str]:
@@ -1396,6 +1414,49 @@ def _lan_ip() -> Optional[str]:
             s.close()
     except Exception:
         return None
+
+
+def _start_tunnel(port: int, token: Optional[str]):
+    """Spawn a cloudflared quick tunnel to localhost:port and print the public
+    URL (with ?key=token) once it appears. Returns the Popen, or None if
+    cloudflared isn't installed. Anonymous/ephemeral — no Cloudflare account
+    needed. Costs no Claude tokens; it's just a network tunnel."""
+    import re
+    import shutil
+    import subprocess
+    import threading
+
+    if shutil.which("cloudflared") is None:
+        click.echo(
+            "  tunnel: `cloudflared` not found. Install it and retry --tunnel:\n"
+            "    Windows: winget install cloudflare.cloudflared\n"
+            "    macOS:   brew install cloudflared\n"
+            "  (or run `ngrok http {p}` yourself). Serving locally for now.".format(p=port),
+            err=True,
+        )
+        return None
+
+    proc = subprocess.Popen(
+        ["cloudflared", "tunnel", "--url", f"http://localhost:{port}"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    key = f"/?key={token}" if token else ""
+
+    def watch():
+        seen = False
+        url_re = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+        for line in iter(proc.stdout.readline, ""):
+            if not seen:
+                m = url_re.search(line)
+                if m:
+                    seen = True
+                    click.echo("\n" + "=" * 64)
+                    click.echo(f"  PUBLIC LINK (open on any device): {m.group(0)}{key}")
+                    click.echo("  Anyone with this link + token can reach your dashboard.")
+                    click.echo("=" * 64 + "\n")
+
+    threading.Thread(target=watch, daemon=True).start()
+    return proc
 
 
 def _token_match(expected: str, *, header: str = "", cookie: str = "",

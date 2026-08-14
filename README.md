@@ -342,26 +342,33 @@ starts the server, and opens your browser.
 ### Reaching it from anywhere (secure tunnel)
 
 The dashboard can dispatch committee reviews, so **never expose it without a
-token**. Turn on auth, then point a tunnel at it:
+token**. One command does auth + tunnel together (or double-click
+`run-dashboard-remote.bat`):
 
 ```bash
-# 1. Start with an access token (auto-generated and printed):
-hf-bot dashboard --auth
-#    → prints:  access token: <TOKEN>   and a  http://127.0.0.1:8420/?key=<TOKEN>  link
-
-# 2. In a second terminal, open a public HTTPS tunnel to the same port:
-cloudflared tunnel --url http://localhost:8420      # or: ngrok http 8420
-#    → gives a public URL like https://something.trycloudflare.com
-
-# 3. Open  https://something.trycloudflare.com/?key=<TOKEN>  on any device.
+hf-bot dashboard --auth --tunnel --open
 ```
 
-The `?key=<TOKEN>` sets a cookie, so you only paste it once per device. Every
-request — the page, the live poll, and command dispatch — is rejected without
-it (`401`), with constant-time token comparison. Keep `--enable-agent-runner`
-**off** on a tunnel unless you fully trust it: the token gates access, but the
-runner spawns Claude with your tools. The tunnel and your PC must stay running;
-for always-on access, host it on a small server instead.
+This forces a token on, starts a `cloudflared` quick tunnel (anonymous, no
+Cloudflare account), and prints a ready-to-open public link:
+
+```
+PUBLIC LINK (open on any device): https://something.trycloudflare.com/?key=<TOKEN>
+```
+
+Open that on your phone or any browser. The `?key=<TOKEN>` sets a cookie, so
+you only paste it once per device. Every request — the page, the live poll, and
+command dispatch — is rejected without it (`401`), with constant-time token
+comparison.
+
+**Token safety:** the dashboard itself spends **no Claude tokens** — it serves
+the HUD and *queues* commands; a review only spends tokens when you run it in a
+Claude session. `--tunnel` refuses to run together with `--enable-agent-runner`
+for exactly this reason: nobody with the link should be able to spawn Claude on
+your account. (Prefer to wire the tunnel yourself? `cloudflared tunnel --url
+http://localhost:8420` or `ngrok http 8420` against `hf-bot dashboard --auth`.)
+The tunnel and your PC must stay running; for always-on access, host it on a
+small server instead.
 
 Each agent carries a personal codename and a metric drawn straight from the
 database — no fabricated numbers, matching the standard in
