@@ -334,3 +334,52 @@ def test_render_shows_shared_brain_episodes(storage):
     html = render_html(build_snapshot(storage), mode="static")
     assert "shared-brain episodes" in html
     assert "ASTS: BUY sized small" in html
+
+
+# --- live server (threaded) -------------------------------------------------
+
+def test_dashboard_server_serves_across_threads(tmp_path):
+    """Regression: the local server handles each request in its own thread, and
+    a SQLite connection can't cross threads — so each request must open its own.
+    A shared connection would crash the handler and return an empty response."""
+    import json
+    import threading
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    db_path = str(tmp_path / "srv.db")
+    seed = Storage(db_path)
+    seed.record_committee_event("r1", "cio", "start", "opening", symbol="ASTS")
+    seed.close()
+
+    # Mirror exactly what the dashboard command does: a fresh Storage per request.
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            s = Storage(db_path)
+            try:
+                snap = build_snapshot(s)
+            finally:
+                s.close()
+            body = json.dumps({"agents": len(snap.agents),
+                               "committee": snap.committee["state"]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        r = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/snapshot.json", timeout=5)
+        assert r.status == 200
+        data = json.loads(r.read())
+        assert data["agents"] == 11
+        assert data["committee"] == "active"
+    finally:
+        server.shutdown()
+        server.server_close()

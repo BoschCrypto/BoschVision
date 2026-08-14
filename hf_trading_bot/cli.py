@@ -953,8 +953,15 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int, publish_path: 
         storage.close()
         return
 
+    import traceback
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+    # Seeding/migration is done; the startup connection can't be shared across
+    # request threads (SQLite forbids it), so close it and give each request
+    # its own short-lived connection created in — and used only by — its own
+    # thread. build_snapshot is read-only, so concurrent reads are safe.
+    db_path = cfg.db_path
+    storage.close()
     refresh_ms = max(2000, refresh * 1000)
 
     class Handler(BaseHTTPRequestHandler):
@@ -966,18 +973,30 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int, publish_path: 
             self.wfile.write(body)
 
         def do_GET(self):
-            snap = build_snapshot(storage)
-            if self.path.startswith("/api/snapshot.json"):
-                body = json.dumps(dataclasses.asdict(snap)).encode()
-                self._send(200, body, "application/json")
-                return
-            html = render_html(snap, mode="live")
-            html = html.replace(
-                "window.__CORTEX__ =",
-                f"window.__CORTEX_REFRESH_MS__ = {refresh_ms};\nwindow.__CORTEX__ =",
-                1,
-            )
-            self._send(200, html.encode(), "text/html; charset=utf-8")
+            try:
+                req_storage = Storage(db_path)
+                try:
+                    snap = build_snapshot(req_storage)
+                finally:
+                    req_storage.close()
+                if self.path.startswith("/api/snapshot.json"):
+                    body = json.dumps(dataclasses.asdict(snap)).encode()
+                    self._send(200, body, "application/json")
+                    return
+                html = render_html(snap, mode="live").replace(
+                    "window.__CORTEX__ =",
+                    f"window.__CORTEX_REFRESH_MS__ = {refresh_ms};\nwindow.__CORTEX__ =",
+                    1,
+                )
+                self._send(200, html.encode(), "text/html; charset=utf-8")
+            except Exception:  # never return an empty response — show the error
+                tb = traceback.format_exc()
+                body = ("<pre style='color:#f87171;background:#05070a;padding:20px'>"
+                        "Cortex dashboard error:\n\n" + tb + "</pre>").encode()
+                try:
+                    self._send(500, body, "text/html; charset=utf-8")
+                except Exception:
+                    pass
 
         def log_message(self, *args):
             pass  # silence default stderr access logging
@@ -990,7 +1009,6 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int, publish_path: 
         click.echo("\nStopped.")
     finally:
         server.server_close()
-        storage.close()
 
 
 if __name__ == "__main__":
