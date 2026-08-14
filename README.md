@@ -105,6 +105,72 @@ signal at exactly the same point, no lookahead.
 Both implement the same `Broker` interface (`hf_trading_bot/broker/base.py`),
 so the strategy engine and risk logic never change when you switch brokers.
 
+## Live Robinhood trading
+
+**Everything below risks real money. Validate on backtests and paper mode
+first.** The kill switch defaults to ON (paused) — the bot will not place a
+live order until you explicitly turn it off.
+
+### One-time setup
+
+1. `pip install -e ".[live]"` to add `robin_stocks`.
+2. Create a `.env` file in the repo root (already gitignored — never commit it):
+   ```
+   ROBINHOOD_USERNAME=you@example.com
+   ROBINHOOD_PASSWORD=your-password
+   HF_BOT_I_UNDERSTAND_LIVE_TRADING=true
+   ```
+3. Set `broker: robinhood` in `config/settings.yaml` (copy it from
+   `settings.example.yaml`, which includes a worked small-account risk block).
+4. Run the one-time interactive login, which prompts for your MFA code:
+   ```bash
+   hf-bot robinhood-login
+   ```
+   This saves a session to `~/.tokens/robinhood.pickle` so later unattended
+   runs don't need MFA. **Treat that file as a credential** — anyone who has
+   it can trade your account. It stays on the machine that created it; never
+   commit, sync, or copy it anywhere.
+5. Dry-run against the real account (reads balances/positions, places nothing):
+   ```bash
+   hf-bot run
+   ```
+6. When you're satisfied: `hf-bot kill-switch --off`, then
+   `hf-bot loop --live --interval 3600`.
+
+### Where to run it
+
+Run the loop on a machine you control that stays on — a home server, a VPS,
+or a laptop that doesn't sleep. Don't run it in an ephemeral cloud container:
+when the container is reclaimed the loop dies silently and the saved session
+is wiped, and Robinhood's device checks tend to force re-verification when
+logins come from a new/rotating IP, which an unattended process can't answer.
+
+### Pattern Day Trader (PDT) guard
+
+US brokers restrict accounts under $25k to **3 day trades per rolling 5
+business days** — a 4th gets the account flagged and restricted for 90 days.
+The engine tracks this automatically (`storage.day_trades_in_window`) and
+will **block a signal-based exit** that would close a position opened the
+same day once the budget is spent, holding the position instead.
+
+**Protective stop-loss exits always execute regardless of the budget.** If
+price breaches a position's stop, the bot sells — a real loss is worse than
+a PDT flag. This trade-off is logged explicitly whenever it happens.
+
+Because of PDT, this bot is a swing-trading system (holds measured in days),
+not an intraday day-trading system, on any account under $25k.
+
+### Fractional shares
+
+Orders are sized by dollar risk, not whole shares, so a small account can
+take meaningful positions in high-priced symbols. Fractional orders on
+Robinhood are **market-only** — there's no broker-side stop order for them.
+Stops are therefore enforced in software: the stop price is recorded at
+entry and checked at the start of every cycle against the session low. This
+means **a stop only triggers when the bot runs** — a gap down while the
+process is stopped is not protected. Keep the loop running during market
+hours, and size positions on the assumption that stops are best-effort.
+
 ## Backtesting
 
 ```bash
@@ -135,5 +201,10 @@ backtest replay/stats engine.
 - No resting bracket/trailing-stop orders at the broker — stops are
   recorded at entry and enforced by the bot's own per-cycle check, not by
   broker-side OCO orders (Robinhood's API doesn't expose full bracket
-  orders the way Alpaca's does).
+  orders the way Alpaca's does, and fractional orders are market-only).
+  See the stop-loss caveat under "Fractional shares" above.
+- No intraday/day-trading engine — daily bars only, which is also what the
+  PDT rule effectively forces on accounts under $25k.
+- No holiday calendar in the PDT window (weekend-skipping only), so the
+  5-business-day window can be slightly conservative around market holidays.
 - No guarantee of profitability, ever.

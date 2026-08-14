@@ -5,6 +5,7 @@ import time
 from typing import Optional
 
 import click
+from dotenv import load_dotenv
 
 from hf_trading_bot.backtest import replay, stats
 from hf_trading_bot.config import AppConfig
@@ -12,6 +13,8 @@ from hf_trading_bot.data.bars import fetch_daily_bars_range
 from hf_trading_bot.engine import run_strategy_cycle
 from hf_trading_bot.storage import Storage
 from hf_trading_bot.strategies.registry import STRATEGY_KEYS
+
+load_dotenv()
 
 
 def _build_broker(cfg: AppConfig):
@@ -28,6 +31,8 @@ def _build_broker(cfg: AppConfig):
 
 def _load_storage(cfg: AppConfig) -> Storage:
     storage = Storage(cfg.db_path)
+    if cfg.risk:
+        storage.update_settings(**cfg.risk)
     if cfg.watchlist:
         for i, w in enumerate(cfg.watchlist):
             storage.upsert_watchlist_symbol(w["symbol"], w["strategy_key"], params=w.get("params"), rank=i)
@@ -96,6 +101,25 @@ def loop(cfg: AppConfig, interval: int, dry_run: bool):
         click.echo("Stopped.")
     finally:
         storage.close()
+
+
+@cli.command("robinhood-login")
+def robinhood_login():
+    """One-time interactive login: establishes a persisted Robinhood session.
+
+    Run this once, by hand, on the machine that will actually run `hf-bot
+    loop --live` against broker: robinhood — it will prompt for your MFA
+    code interactively. Requires ROBINHOOD_USERNAME, ROBINHOOD_PASSWORD, and
+    HF_BOT_I_UNDERSTAND_LIVE_TRADING=true (via .env or the environment).
+    Subsequent runs reuse the saved session (~/.tokens/robinhood.pickle) and
+    should not need MFA again unless that file is lost or Robinhood forces
+    re-verification.
+    """
+    from hf_trading_bot.broker.robinhood import RobinhoodBroker
+
+    RobinhoodBroker()
+    click.echo("Robinhood session established and saved to ~/.tokens/robinhood.pickle.")
+    click.echo("Keep that file as secret as your password — anyone with it can trade on your account.")
 
 
 @cli.command("kill-switch")

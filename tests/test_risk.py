@@ -114,6 +114,39 @@ def test_evaluate_weekly_guards_resets_on_new_week():
     assert state.weekly_loss_breached is False
 
 
+def test_last_n_business_days_skips_weekend():
+    import datetime as dt
+
+    # Wednesday 2026-08-12 -> back through Thu 8/6 (skips Sat 8/8, Sun 8/9)
+    days = risk.last_n_business_days(5, dt.date(2026, 8, 12))
+    assert days == [
+        dt.date(2026, 8, 6),
+        dt.date(2026, 8, 7),
+        dt.date(2026, 8, 10),
+        dt.date(2026, 8, 11),
+        dt.date(2026, 8, 12),
+    ]
+
+
+def test_last_n_business_days_from_monday_reaches_prior_week():
+    import datetime as dt
+
+    days = risk.last_n_business_days(5, dt.date(2026, 8, 10))  # Monday
+    assert days[-1] == dt.date(2026, 8, 10)
+    assert days[0] == dt.date(2026, 8, 4)  # prior Tuesday
+    assert all(d.weekday() < 5 for d in days)
+
+
+def test_last_n_business_days_from_weekend_excludes_itself():
+    import datetime as dt
+
+    # Saturday ref date is not a business day, so it isn't in the window.
+    days = risk.last_n_business_days(5, dt.date(2026, 8, 8))
+    assert dt.date(2026, 8, 8) not in days
+    assert days[-1] == dt.date(2026, 8, 7)  # Friday
+    assert len(days) == 5
+
+
 def test_evaluate_weekly_guards_consecutive_losses():
     state = risk.evaluate_weekly_guards(
         equity=100, week_start_equity=100, week_start_on="2026-08-10",

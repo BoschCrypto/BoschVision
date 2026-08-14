@@ -23,3 +23,36 @@ watchlist:
     strategy_key: rsi_mean_reversion
   - symbol: NKE
     strategy_key: sma_crossover
+
+# Risk settings. Applied to the database on every run, so this file is the
+# source of truth for them. Omit the block entirely to keep existing values.
+# `kill_switch_active` is intentionally NOT settable here — it's runtime
+# state; use `hf-bot kill-switch --on/--off`.
+#
+# risk:
+#   risk_per_trade_pct: 1
+#   max_position_pct: 20
+#   max_open_positions: 5
+
+# ---------------------------------------------------------------------------
+# Example: small LIVE account (~$200) on Robinhood
+# ---------------------------------------------------------------------------
+# Set `broker: robinhood` above, and read the "Live Robinhood trading"
+# section of README.md first — it covers the one-time `hf-bot
+# robinhood-login` step, session-file security, and the PDT day-trade rule.
+#
+# These values are deliberately more aggressive than the engine defaults (1%
+# risk/trade), because at a $200 balance a 1% risk budget sizes positions
+# down to near-nothing. That is a real trade-off, not a free lunch: at 7%
+# risk per trade, a handful of consecutive losers is a serious dent in the
+# account. Do not use these numbers with money you can't afford to lose.
+#
+# risk:
+#   risk_per_trade_pct: 7           # ~$14 risk budget per trade on $200
+#   max_position_pct: 45            # ~$90/symbol cap — the real governor here
+#   max_portfolio_exposure_pct: 90
+#   max_open_positions: 2           # avoid fragmenting $200 into dust
+#   atr_stop_multiple: 2.0
+#   stop_loss_pct: 8
+#   take_profit_r: 3
+#   max_day_trades: 3               # PDT limit for accounts under $25k

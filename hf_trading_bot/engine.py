@@ -143,9 +143,12 @@ def run_strategy_cycle(broker: Broker, storage: Storage, dry_run: bool = False) 
     # symbol's strategy hasn't fired an exit signal, because price already
     # breached the risk-sized stop recorded at entry. ------------------------
     stop_by_symbol: dict[str, float] = {}
+    opened_at_by_symbol: dict[str, str] = {}
     for t in storage.recent_open_entries():
         if t["symbol"] not in stop_by_symbol and t["stop_price"] is not None:
             stop_by_symbol[t["symbol"]] = t["stop_price"]
+        if t["symbol"] not in opened_at_by_symbol and t["opened_at"]:
+            opened_at_by_symbol[t["symbol"]] = t["opened_at"]
 
     stopped_out: set[str] = set()
     if not exits_blocked and not dry_run:
@@ -194,6 +197,18 @@ def run_strategy_cycle(broker: Broker, storage: Storage, dry_run: bool = False) 
         push_signal(e["symbol"], e["strategy_key"], e["result"].signal, e["result"].detail, False)
         log.append(f"{e['symbol']}: {e['result'].signal} — no action ({e['result'].detail})")
 
+    # ---- PDT guard: count day trades used in the rolling 5-business-day ----
+    # window. Robinhood (and every US broker) restricts accounts under $25k
+    # to 3 day trades per rolling 5 business days — breaching it gets the
+    # account flagged/restricted. Only SIGNAL exits are gated by this budget;
+    # protective stop-loss exits (Pass 0, above) always execute regardless —
+    # capital protection outranks a compliance flag.
+    window = risk.last_n_business_days(5)
+    max_day_trades = int(settings["max_day_trades"])
+    day_trades_used = storage.day_trades_in_window(window[0].isoformat(), window[-1].isoformat())
+    today_str = datetime.now(timezone.utc).date().isoformat()
+    log.append(f"PDT: {day_trades_used}/{max_day_trades} day trades used in the last 5 business days.")
+
     # ---- Pass 2a: signal exits — run even while paused ---------------------
     for e in [x for x in evaluated if x["action"] == "sell"]:
         position = e["position"]
@@ -201,6 +216,18 @@ def run_strategy_cycle(broker: Broker, storage: Storage, dry_run: bool = False) 
         if exits_blocked:
             push_signal(e["symbol"], e["strategy_key"], "exit", f"{detail} | would SELL — exits disabled", True)
             log.append(f"{e['symbol']}: would SELL — blocked, exits disabled")
+            continue
+        opened_today = opened_at_by_symbol.get(e["symbol"], "")[:10] == today_str
+        if opened_today and day_trades_used >= max_day_trades and not dry_run:
+            push_signal(
+                e["symbol"], e["strategy_key"], "exit",
+                f"{detail} | SELL blocked — PDT day-trade budget ({max_day_trades}/5 business days) exhausted, holding",
+                True,
+            )
+            log.append(
+                f"{e['symbol']}: SELL blocked — PDT day-trade budget exhausted this window; holding position "
+                "(protective stops still execute regardless of this budget)."
+            )
             continue
         if dry_run:
             push_signal(e["symbol"], e["strategy_key"], "exit", f"{detail} | DRY RUN would SELL", True)
@@ -216,6 +243,8 @@ def run_strategy_cycle(broker: Broker, storage: Storage, dry_run: bool = False) 
         orders_placed += 1
         exposure -= abs(position.market_value)
         open_positions -= 1
+        if opened_today:
+            day_trades_used += 1
         push_signal(e["symbol"], e["strategy_key"], "exit", f"{detail} | SELL order {order.id}", True)
         log.append(f"{e['symbol']}: SELL order submitted ({order.id})")
 
@@ -258,18 +287,21 @@ def run_strategy_cycle(broker: Broker, storage: Storage, dry_run: bool = False) 
         for alloc in allocations:
             e = next(b for b in buys if b["symbol"] == alloc.symbol)
             plan = plans[alloc.symbol]
-            qty = int(alloc.qty)
-            if qty < 1:
-                push_signal(e["symbol"], e["strategy_key"], "entry", f"{e['result'].detail} | BUY skipped (sized below 1 share)", True)
-                log.append(f"{e['symbol']}: BUY skipped — risk-sized quantity below 1 share")
+            # Fractional shares: size by dollar notional, not whole shares —
+            # Robinhood (and PaperBroker) both accept fractional quantities,
+            # so the only real floor is the broker's minimum order notional.
+            qty = alloc.qty
+            if alloc.notional < 1.0:
+                push_signal(e["symbol"], e["strategy_key"], "entry", f"{e['result'].detail} | BUY skipped (sized below $1 minimum)", True)
+                log.append(f"{e['symbol']}: BUY skipped — risk-sized notional (${alloc.notional:.2f}) below $1 minimum")
                 continue
             if dry_run:
                 push_signal(
                     e["symbol"], e["strategy_key"], "entry",
-                    f"{e['result'].detail} | DRY RUN would BUY {qty} @ {e['result'].price} stop {plan.stop} target {plan.target}",
+                    f"{e['result'].detail} | DRY RUN would BUY {qty:.4f} @ {e['result'].price} stop {plan.stop} target {plan.target}",
                     True,
                 )
-                log.append(f"{e['symbol']}: DRY RUN would BUY {qty} sh stop {plan.stop} target {plan.target}")
+                log.append(f"{e['symbol']}: DRY RUN would BUY {qty:.4f} sh stop {plan.stop} target {plan.target}")
                 continue
             order = broker.place_order(e["symbol"], qty, "buy", stop_price=plan.stop)
             storage.record_trade(
@@ -281,10 +313,10 @@ def run_strategy_cycle(broker: Broker, storage: Storage, dry_run: bool = False) 
             orders_placed += 1
             push_signal(
                 e["symbol"], e["strategy_key"], "entry",
-                f"{e['result'].detail} | BUY {qty} stop {plan.stop} target {plan.target} order {order.id}", True,
+                f"{e['result'].detail} | BUY {qty:.4f} stop {plan.stop} target {plan.target} order {order.id}", True,
             )
             log.append(
-                f"{e['symbol']}: BUY {qty} sh submitted — stop {plan.stop} ({plan.source}), "
+                f"{e['symbol']}: BUY {qty:.4f} sh submitted — stop {plan.stop} ({plan.source}), "
                 f"target {plan.target}, risk ${alloc.risk_usd} ({order.id})"
             )
 

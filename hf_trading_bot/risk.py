@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 
@@ -173,6 +173,22 @@ def allocate_risk_sized_buys(
             Allocation(symbol=c.symbol, notional=notional, qty=qty, risk_usd=round(qty * risk_per_share, 2))
         )
     return allocations, skipped
+
+
+def last_n_business_days(n: int, ref_date: Optional[date] = None) -> list[date]:
+    """The last `n` business days (Mon-Fri), ending on and including
+    `ref_date` (today in UTC if not given). Returned oldest-first, so
+    `result[0]` / `result[-1]` are the window's start/end dates. Used for the
+    PDT rolling 5-business-day day-trade count — no holiday calendar, just
+    weekend-skipping, which is an acceptable v1 simplification."""
+    ref_date = ref_date or datetime.now(timezone.utc).date()
+    days: list[date] = []
+    d = ref_date
+    while len(days) < n:
+        if d.weekday() < 5:
+            days.append(d)
+        d -= timedelta(days=1)
+    return sorted(days)
 
 
 def week_start(d: Optional[datetime] = None) -> str:

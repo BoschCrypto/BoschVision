@@ -16,6 +16,10 @@ from .base import Account, Broker, Order, Position
 _LIVE_TRADING_CONFIRM_ENV = "HF_BOT_I_UNDERSTAND_LIVE_TRADING"
 
 
+def _is_fractional(qty: float) -> bool:
+    return abs(qty - round(qty)) > 1e-9
+
+
 class RobinhoodBroker(Broker):
     def __init__(
         self,
@@ -40,7 +44,10 @@ class RobinhoodBroker(Broker):
         password = password or os.environ.get("ROBINHOOD_PASSWORD")
         if not username or not password:
             raise RuntimeError("Set ROBINHOOD_USERNAME and ROBINHOOD_PASSWORD (and mfa_code if enabled).")
-        rh.login(username=username, password=password, mfa_code=mfa_code)
+        # store_session persists a refresh-token pickle (~/.tokens/robinhood.pickle
+        # by default) so unattended runs after the first interactive login don't
+        # need to answer an MFA prompt each time.
+        rh.login(username=username, password=password, mfa_code=mfa_code, store_session=True)
 
     def get_account(self) -> Account:
         profile = self._rh.load_portfolio_profile()
@@ -99,15 +106,24 @@ class RobinhoodBroker(Broker):
         stop_price: Optional[float] = None,
         limit_price: Optional[float] = None,
     ) -> Order:
+        # Fractional quantities are market-only on Robinhood — there's no
+        # broker-side stop/limit order type for them. That's fine: the engine
+        # already treats `stop_price` on a BUY as metadata to monitor itself
+        # (see engine.py's Pass 0 stop-loss check), not an instruction to place
+        # a resting stop-entry order, so a plain market buy is always correct
+        # here regardless of whether a stop was planned for the position.
+        fractional = _is_fractional(qty)
         if side == "buy":
-            if stop_price is not None:
-                res = self._rh.order_buy_stop_loss(symbol, qty, stop_price)
+            if fractional:
+                res = self._rh.order_buy_fractional_by_quantity(symbol, qty)
             elif order_type == "limit" and limit_price is not None:
                 res = self._rh.order_buy_limit(symbol, qty, limit_price)
             else:
                 res = self._rh.order_buy_market(symbol, qty)
         elif side == "sell":
-            if stop_price is not None:
+            if fractional:
+                res = self._rh.order_sell_fractional_by_quantity(symbol, qty)
+            elif stop_price is not None:
                 res = self._rh.order_sell_stop_loss(symbol, qty, stop_price)
             elif order_type == "limit" and limit_price is not None:
                 res = self._rh.order_sell_limit(symbol, qty, limit_price)

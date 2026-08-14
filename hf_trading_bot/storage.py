@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS settings (
     consecutive_losses INTEGER NOT NULL DEFAULT 0,
     weekly_loss_tripped_week TEXT,
     consecutive_loss_tripped_week TEXT,
+    max_day_trades INTEGER NOT NULL DEFAULT 3,
     updated_at TEXT
 );
 
@@ -173,6 +174,22 @@ class Storage:
             "SELECT * FROM trades WHERE side = 'buy' ORDER BY traded_at DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def day_trades_in_window(self, start_date: str, end_date: str) -> int:
+        """Count day trades — a symbol bought and sold on the same date —
+        with traded_at date in [start_date, end_date] inclusive (YYYY-MM-DD).
+        Used to enforce the Pattern Day Trader (PDT) limit of 3 day trades
+        per rolling 5 business days on accounts under $25k."""
+        rows = self._conn.execute(
+            """SELECT symbol, date(traded_at) AS d,
+                      SUM(side = 'buy') AS buys, SUM(side = 'sell') AS sells
+               FROM trades
+               WHERE date(traded_at) BETWEEN ? AND ?
+               GROUP BY symbol, d
+               HAVING buys > 0 AND sells > 0""",
+            (start_date, end_date),
+        ).fetchall()
+        return len(rows)
 
     def record_equity_snapshot(self, equity: float, cash: float) -> None:
         self._conn.execute(
