@@ -3,16 +3,50 @@
 > **New here? Read [`MORNING.md`](MORNING.md) first, then [`ROADMAP.md`](ROADMAP.md).**
 > The roadmap opens with the arithmetic on what returns can and cannot do —
 > it determines whether the rest of this is worth running.
->
-> Two things were added on top of the execution engine described below:
-> an **investment committee** of ten research agents
-> ([`.claude/agents/`](.claude/agents/README.md)) and **honest measurement**
-> (`hf-bot sweep`, benchmark-aware `hf-bot backtest`, `hf-bot journal`).
 
-A systematic trading bot: a pluggable strategy engine, portfolio risk
-management (drawdown circuit breaker, daily/weekly loss guards, ATR-based
-position sizing), a backtester, and a broker abstraction — safe simulated
-paper trading by default, with an explicitly opt-in Robinhood live adapter.
+## The result that shapes everything below
+
+`hf-bot sweep` tested five systematic strategies across 24 symbols,
+2021–2026. **All five lost to simply buying and holding the same stock** —
+hit rates of 21–38% (a coin flip is 50%), median excess returns of −35 to
+−71 points. The result was audited for look-ahead bias, cash drag, survivor
+bias, transaction costs, and a real bug (open positions dropped from the
+return calc) — none of it explains the gap. Full writeup: [`FINDINGS.md`](FINDINGS.md).
+
+**This changes what this repo is for.** The systematic strategies below are
+now the *measured baseline* — kept because future rules have to beat them,
+not because they're expected to be traded live. `hf-bot run --live` refuses
+to deploy any strategy with a recorded sub-50% hit rate unless you pass
+`--i-know-this-failed-backtest` explicitly.
+
+The recommended workflow is the **investment committee** — ten research
+agents modelled on an institutional process
+([`.claude/agents/`](.claude/agents/README.md)) — feeding the **decision
+journal** (`hf-bot journal`), scored against the **index counterfactual**
+(`hf-bot portfolio`): given the money actually deposited, on the dates it
+was deposited, is the account ahead of or behind just buying SPY?
+
+```
+Use the cio agent to run a full review on <TICKER>
+hf-bot journal add --symbol ... --decision BUY --falsification "..."
+hf-bot portfolio contribute --amount 500
+hf-bot portfolio compare          # the number that actually matters
+hf-bot journal scorecard          # were past decisions actually right?
+```
+
+That loop is unfakeable in a way a backtest on hand-picked strategies isn't:
+it can't be gamed by a favorable window, because it's scored against what
+the same money would have done in the index, updated every time cash moves.
+
+## Execution engine (baseline / experimental)
+
+A pluggable strategy engine, portfolio risk management (drawdown circuit
+breaker, daily/weekly loss guards, ATR-based position sizing), a
+backtester, and a broker abstraction — safe simulated paper trading by
+default, with explicitly opt-in Alpaca/Robinhood live adapters. This is the
+infrastructure the sweep above ran on, and it stays useful for testing any
+*new* hypothesis — just don't mistake "the code runs" for "the strategy
+works." Five specific rules already didn't, on this evidence.
 
 Architecturally this ports the strategy engine, risk math, and backtest
 replay logic from the [Apex Trading Hub](https://apex-trading-bosch.lovable.app)
@@ -62,6 +96,14 @@ hf-bot loop --interval 3600 --live
 hf-bot status
 hf-bot kill-switch --off   # enable trading
 hf-bot kill-switch --on    # pause (default)
+
+# Log a deposit, then check the account against the same cash in SPY.
+hf-bot portfolio contribute --amount 500
+hf-bot portfolio compare
+
+# Test a set of strategies across a universe of symbols, all at once.
+hf-bot sweep
+hf-bot sweep-history
 ```
 
 Copy `config/settings.example.yaml` to `config/settings.yaml` to customize
@@ -163,6 +205,20 @@ notice. Set `ALPACA_DATA_FEED=sip` if you have a paid data subscription.
 5. Place simulated orders: `hf-bot kill-switch --off`, then
    `hf-bot run --live` or `hf-bot loop --live --interval 3600`.
 
+### Guardrails
+
+`--live` does not mean "unvalidated code can now trade." Before any order
+goes out, `run --live` / `loop --live` check the watchlist's assigned
+strategy against `hf-bot sweep-history`: if the most recent recorded sweep
+for that strategy scored below a 50% hit rate against buy-and-hold, the
+cycle refuses to run and explains why, citing the recorded numbers. All
+five strategies shipped in this repo currently fail that check — see
+[`FINDINGS.md`](FINDINGS.md). Reassign the watchlist to a strategy that
+actually passed a sweep, or pass `--i-know-this-failed-backtest` to
+override on purpose. A strategy that's never been swept isn't blocked —
+this guards against redeploying a known-rejected result, not against
+testing something new.
+
 ### Where to run the loop
 
 On a machine you control that stays on — a home server, a VPS, or a laptop
@@ -220,14 +276,48 @@ account.
 
 ```bash
 hf-bot backtest QQQ --strategy rsi_mean_reversion --start 2021-01-01 --end 2026-01-01
+
+# Test every strategy against a whole universe at once, and see if ANY of
+# them beat buy-and-hold more often than a coin flip would.
+hf-bot sweep --symbols AAPL,MSFT,NVDA,... --strategies momentum_90d,rsi_mean_reversion
+
+# Review every past sweep verdict — a strategy that's already failed
+# should stay failed, not get quietly re-tested until it looks good.
+hf-bot sweep-history
 ```
 
 Reports total trades, win rate, CAGR, Sharpe, and max drawdown from a
 long-only, one-position-at-a-time, $10k-notional-per-trade replay
-(`hf_trading_bot/backtest.py`). The output names which data source served
-the bars, so a silent fallback can't be mistaken for an Alpaca-backed
-result. Always validate a strategy this way — and then in paper mode over
-real time — before pointing it at any account holding real money.
+(`hf_trading_bot/backtest.py`), including a mark-to-market of any position
+still open at the window's end (see [`FINDINGS.md`](FINDINGS.md) — dropping
+that used to bias results against trend-following strategies). The output
+names which data source served the bars, so a silent fallback can't be
+mistaken for an Alpaca-backed result. `hf-bot sweep` additionally records
+its verdict per strategy to the database, and `hf-bot run --live` /
+`loop --live` refuse to trade a strategy whose most recent recorded sweep
+scored below a 50% hit rate — see *Guardrails* below.
+
+Always validate a strategy this way — and then in paper mode over real
+time — before pointing it at any account holding real money.
+
+## Portfolio tracking (`hf-bot portfolio`)
+
+The only scorecard that can't be gamed by cherry-picking a strategy or a
+window: given the money actually deposited, on the dates it was deposited,
+is the account ahead of or behind simply buying the index with the same
+cash?
+
+```bash
+hf-bot portfolio contribute --amount 500 --date 2026-01-05
+hf-bot portfolio list
+hf-bot portfolio compare --benchmark SPY
+```
+
+`compare` reads live positions from the configured broker (or takes
+`--value` directly), buys fractional benchmark shares at each contribution
+date's close, and reports the gap in dollars. This is what
+`hf-bot journal scorecard` should ultimately be judged against, not
+against "did the pick go up."
 
 ## Tests
 
@@ -236,8 +326,10 @@ pytest
 ```
 
 Covers the risk math (circuit breaker, position sizing, weekly guards),
-each strategy's entry/exit logic on synthetic price series, and the
-backtest replay/stats engine.
+each strategy's entry/exit logic on synthetic price series, the backtest
+replay/stats engine (including the open-position mark-to-market fix and
+the live-trading guard), the sweep-result persistence, and the portfolio
+contribution/counterfactual math. All offline — no network calls.
 
 ## What's intentionally not here
 
