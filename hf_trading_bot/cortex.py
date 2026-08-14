@@ -1,0 +1,297 @@
+"""Live Agent Cortex: maps the investment committee onto real, logged data.
+
+Every agent's "firing rate" is either a genuine number computed from the
+journal/sweep/watchlist tables, a disclosed proxy, or an honest "no data"
+state — never a fabricated figure. See `.claude/agents/README.md` and
+FINDINGS.md for the same standard applied elsewhere in this repo.
+
+This module is the single source of truth for both delivery modes
+(`hf-bot dashboard` and `hf-bot dashboard --publish`) — see cortex_render.py.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Literal, Optional
+
+from .journal import Journal
+from .portfolio import ContributionLog, counterfactual
+from .storage import Storage
+
+Status = Literal["live", "proxy", "no_data"]
+
+# Fixed per-agent accent colors, keyed by agent (not codename) so a future
+# codename change doesn't break color continuity.
+AGENT_COLORS: dict[str, str] = {
+    "cio": "#7dd3fc",
+    "portfolio-manager": "#a78bfa",
+    "risk-manager": "#f87171",
+    "behavioral-coach": "#fb923c",
+    "equity-analyst": "#4ade80",
+    "quant-analyst": "#38bdf8",
+    "macro-strategist": "#6b7280",
+    "special-situations": "#fbbf24",
+    "setup-scanner": "#22d3ee",
+    "valuation-analyst": "#c084fc",
+    "red-team": "#f472b6",
+}
+
+CODENAMES: dict[str, str] = {
+    "cio": "APEX",
+    "portfolio-manager": "LATTICE",
+    "risk-manager": "BASTION",
+    "behavioral-coach": "ECHO",
+    "equity-analyst": "LEDGER",
+    "quant-analyst": "CIPHER",
+    "macro-strategist": "HORIZON",
+    "special-situations": "EMBER",
+    "setup-scanner": "RADAR",
+    "valuation-analyst": "COMPASS",
+    "red-team": "TALON",
+}
+
+ROLES: dict[str, str] = {
+    "cio": "orchestrator",
+    "portfolio-manager": "portfolio gate",
+    "risk-manager": "risk gate",
+    "behavioral-coach": "discipline gate",
+    "equity-analyst": "fundamentals",
+    "quant-analyst": "statistics",
+    "macro-strategist": "regime",
+    "special-situations": "catalysts",
+    "setup-scanner": "screening",
+    "valuation-analyst": "valuation",
+    "red-team": "adversary",
+}
+
+# Rendering layout: ring assignment for the 11-node radial layout.
+RING: dict[str, str] = {
+    "cio": "center",
+    "portfolio-manager": "inner", "risk-manager": "inner", "behavioral-coach": "inner",
+    "equity-analyst": "middle", "quant-analyst": "middle", "macro-strategist": "middle",
+    "special-situations": "middle", "setup-scanner": "middle",
+    "valuation-analyst": "outer", "red-team": "outer",
+}
+
+
+@dataclass
+class AgentReading:
+    key: str
+    codename: str
+    role: str
+    ring: str
+    color: str
+    metric_label: str
+    metric_value: Optional[float]
+    metric_display: str
+    status: Status
+    source: str
+    note: Optional[str] = None
+
+
+@dataclass
+class CortexSnapshot:
+    generated_at: str
+    agents: dict[str, AgentReading] = field(default_factory=dict)
+    portfolio: Optional[dict[str, Any]] = None
+    open_theses: list[dict[str, Any]] = field(default_factory=list)
+    latest_sweep: Optional[dict[str, Any]] = None
+    watchlist: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _reading(
+    key: str, metric_label: str, metric_value: Optional[float], metric_display: str,
+    status: Status, source: str, note: Optional[str] = None,
+) -> AgentReading:
+    return AgentReading(
+        key=key, codename=CODENAMES[key], role=ROLES[key], ring=RING[key],
+        color=AGENT_COLORS[key], metric_label=metric_label, metric_value=metric_value,
+        metric_display=metric_display, status=status, source=source, note=note,
+    )
+
+
+def _apex(all_decisions: list[dict]) -> AgentReading:
+    n = len(all_decisions)
+    if n == 0:
+        return _reading("cio", "committee throughput", None, "—", "no_data",
+                         "journal.all_decisions()", "No decisions logged yet.")
+    return _reading("cio", "committee throughput", float(n), str(n), "live",
+                     "journal.all_decisions()")
+
+
+def _lattice(portfolio: Optional[dict]) -> AgentReading:
+    if portfolio is None:
+        return _reading("portfolio-manager", "SPY excess return", None, "—", "no_data",
+                         "portfolio.counterfactual()",
+                         "No contributions logged, no equity snapshot, or no "
+                         "network for SPY bars.")
+    v = portfolio["excess_pct"]
+    return _reading("portfolio-manager", "SPY excess return", v, f"{v:+.1f}%", "live",
+                     "portfolio.counterfactual()")
+
+
+def _bastion(buy_sell: list[dict]) -> AgentReading:
+    if not buy_sell:
+        return _reading("risk-manager", "decisions risk-sized", None, "—", "no_data",
+                         "journal decisions: stop_price & position_pct set",
+                         "No BUY/SELL decisions logged yet.")
+    sized = sum(1 for d in buy_sell if d["stop_price"] is not None and d["position_pct"] is not None)
+    pct = sized / len(buy_sell) * 100
+    return _reading("risk-manager", "decisions risk-sized", pct, f"{pct:.0f}%", "live",
+                     "journal decisions: stop_price & position_pct set")
+
+
+def _echo(scorecard: dict) -> AgentReading:
+    if not scorecard.get("reviewed") or scorecard.get("discipline_pct") is None:
+        return _reading("behavioral-coach", "rules followed", None, "—", "no_data",
+                         "journal.scorecard()['discipline_pct']",
+                         "No reviewed decisions with a followed/broke-rules verdict yet.")
+    v = scorecard["discipline_pct"]
+    return _reading("behavioral-coach", "rules followed", v, f"{v:.0f}%", "live",
+                     "journal.scorecard()['discipline_pct']")
+
+
+def _ledger(all_decisions: list[dict]) -> AgentReading:
+    buys = [d for d in all_decisions if d["decision"] == "BUY"]
+    if not buys:
+        return _reading("equity-analyst", "BUY theses logged", None, "—", "no_data",
+                         "journal.all_decisions()", "No BUY decisions logged yet.")
+    n = len(buys)
+    return _reading("equity-analyst", "BUY theses logged", float(n), str(n), "live",
+                     "journal.all_decisions()")
+
+
+def _cipher(latest_sweep: Optional[dict]) -> AgentReading:
+    if latest_sweep is None:
+        return _reading("quant-analyst", "latest sweep hit rate", None, "—", "no_data",
+                         "storage.all_sweep_results()", "No sweep run yet — `hf-bot sweep`.")
+    v = latest_sweep["hit_rate_pct"]
+    return _reading("quant-analyst", "latest sweep hit rate", v, f"{v:.0f}%", "live",
+                     "storage.all_sweep_results()")
+
+
+def _horizon() -> AgentReading:
+    return _reading("macro-strategist", "regime read", None, "NO SIGNAL", "no_data",
+                     "none",
+                     "No macro/regime table exists in this schema. A live read "
+                     "would require an explicit network call this dashboard "
+                     "doesn't make silently — see data/provider.py's "
+                     "loud-not-silent fallback convention.")
+
+
+def _ember(buy_sell: list[dict]) -> AgentReading:
+    high = [d for d in buy_sell if d["conviction"] == "high"]
+    if not high:
+        return _reading("special-situations", "high-conviction calls (proxy)", None, "—",
+                         "proxy", "journal decisions: conviction == 'high'",
+                         "Proxy — not filtered to catalyst-driven situations; "
+                         "the schema has no situation-type tag.")
+    n = len(high)
+    return _reading("special-situations", "high-conviction calls (proxy)", float(n), str(n),
+                     "proxy", "journal decisions: conviction == 'high'",
+                     "Proxy — not filtered to catalyst-driven situations; "
+                     "the schema has no situation-type tag.")
+
+
+def _radar(watchlist: list[dict]) -> AgentReading:
+    live = [w for w in watchlist if w["live_enabled"]]
+    if not live:
+        return _reading("setup-scanner", "symbols in scope", None, "—", "no_data",
+                         "storage.get_watchlist()", "No live-enabled watchlist symbols.")
+    n = len(live)
+    return _reading("setup-scanner", "symbols in scope", float(n), str(n), "live",
+                     "storage.get_watchlist()")
+
+
+def _compass(all_decisions: list[dict]) -> AgentReading:
+    priced = [
+        d for d in all_decisions
+        if d["entry_price"] not in (None, 0) and d["target_price"] is not None
+    ]
+    if not priced:
+        return _reading("valuation-analyst", "avg embedded upside", None, "—", "no_data",
+                         "journal decisions: entry_price & target_price set",
+                         "No decisions with both entry and target price set yet.")
+    upsides = [(d["target_price"] / d["entry_price"] - 1) * 100 for d in priced]
+    v = sum(upsides) / len(upsides)
+    return _reading("valuation-analyst", "avg embedded upside", v, f"{v:+.1f}%", "live",
+                     "journal decisions: entry_price & target_price set")
+
+
+def _talon(buy_sell: list[dict]) -> AgentReading:
+    if not buy_sell:
+        return _reading("red-team", "theses challenged", None, "—", "no_data",
+                         "journal decisions: red_team_objection set",
+                         "No BUY/SELL decisions logged yet.")
+    challenged = sum(1 for d in buy_sell if d["red_team_objection"])
+    pct = challenged / len(buy_sell) * 100
+    return _reading("red-team", "theses challenged", pct, f"{pct:.0f}%", "live",
+                     "journal decisions: red_team_objection set")
+
+
+def _portfolio_panel(storage: Storage, clog: ContributionLog) -> Optional[dict[str, Any]]:
+    contributions = clog.all()
+    if not contributions:
+        return None
+    row = storage._conn.execute(
+        "SELECT equity FROM equity_snapshots ORDER BY snapshot_at DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return None
+    from .data.provider import get_provider
+
+    try:
+        provider = get_provider()
+        bars = provider.daily_bars_range("SPY", start=clog.first_date())
+        c = counterfactual(contributions, bars, actual_value=row["equity"])
+    except Exception:
+        # Network unreachable, no SPY bars, or bad contribution dates. The CLI
+        # prints a loud one-line reason before rendering; the panel degrades to
+        # an honest empty state rather than crashing the whole dashboard.
+        return None
+    return {
+        "gap": c.gap,
+        "excess_pct": c.excess_pct,
+        "as_of": c.as_of,
+        "actual_return_pct": c.actual_return_pct,
+        "benchmark_return_pct": c.benchmark_return_pct,
+        "total_contributed": c.total_contributed,
+        "actual_value": c.actual_value,
+        "benchmark_value": c.benchmark_value,
+    }
+
+
+def build_snapshot(storage: Storage) -> CortexSnapshot:
+    journal = Journal(storage._conn)
+    clog = ContributionLog(storage._conn)
+
+    all_decisions = journal.all_decisions(limit=10_000)
+    buy_sell = [d for d in all_decisions if d["decision"] in ("BUY", "SELL")]
+    scorecard = journal.scorecard()
+    sweep_rows = storage.all_sweep_results(limit=1)
+    latest_sweep = sweep_rows[0] if sweep_rows else None
+    watchlist = storage.get_watchlist()
+    portfolio = _portfolio_panel(storage, clog)
+
+    agents = {
+        "cio": _apex(all_decisions),
+        "portfolio-manager": _lattice(portfolio),
+        "risk-manager": _bastion(buy_sell),
+        "behavioral-coach": _echo(scorecard),
+        "equity-analyst": _ledger(all_decisions),
+        "quant-analyst": _cipher(latest_sweep),
+        "macro-strategist": _horizon(),
+        "special-situations": _ember(buy_sell),
+        "setup-scanner": _radar(watchlist),
+        "valuation-analyst": _compass(all_decisions),
+        "red-team": _talon(buy_sell),
+    }
+
+    return CortexSnapshot(
+        generated_at=datetime.now(timezone.utc).isoformat(),
+        agents=agents,
+        portfolio=portfolio,
+        open_theses=journal.open_decisions(),
+        latest_sweep=latest_sweep,
+        watchlist=watchlist,
+    )

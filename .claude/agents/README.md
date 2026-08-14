@@ -27,6 +27,21 @@ organised, wired to the research skills installed on this account.
                   DECISION MEMO
 ```
 
+## Codenames
+
+Each agent has a personal codename used by the Live Agent Cortex dashboard
+(`hf-bot dashboard`). The agent `name:` fields are unchanged — the codenames
+are a display layer, mapped in `hf_trading_bot/cortex.py`:
+
+| codename | agent | codename | agent |
+|---|---|---|---|
+| **APEX** | cio | **CIPHER** | quant-analyst |
+| **LATTICE** | portfolio-manager | **HORIZON** | macro-strategist |
+| **BASTION** | risk-manager | **EMBER** | special-situations |
+| **ECHO** | behavioral-coach | **RADAR** | setup-scanner |
+| **LEDGER** | equity-analyst | **COMPASS** | valuation-analyst |
+| | | **TALON** | red-team |
+
 ## How to run it
 
 Full committee review on a name:

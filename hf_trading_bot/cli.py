@@ -700,5 +700,85 @@ def portfolio_compare(cfg, benchmark, value):
         )
 
 
+@cli.command()
+@click.option("--host", default="127.0.0.1", help="Bind address for the local server.")
+@click.option("--port", default=8420, type=int, help="Port for the local server.")
+@click.option("--refresh", default=15, type=int, help="Seconds between client polls.")
+@click.option("--publish", "publish_path", default=None, type=click.Path(),
+              help="Write a self-contained static HTML snapshot to this path instead "
+                   "of serving live.")
+@click.pass_obj
+def dashboard(cfg: AppConfig, host: str, port: int, refresh: int, publish_path: Optional[str]):
+    """Live Agent Cortex — a HUD visualization of the 11-agent committee.
+
+    Each agent's firing-rate number is real logged data (journal, sweeps,
+    watchlist), a disclosed proxy, or an honest 'no signal' — never a
+    fabricated figure. It is a visualization of committee activity, not a
+    trained model and not a price prediction.
+    """
+    import dataclasses
+    import json
+
+    from hf_trading_bot.cortex import build_snapshot
+    from hf_trading_bot.cortex_render import render_html
+
+    storage = _load_storage(cfg)
+
+    if publish_path:
+        snap = build_snapshot(storage)
+        if snap.portfolio is None:
+            click.echo(
+                "  note: portfolio panel is empty (no contributions, no equity "
+                "snapshot, or SPY bars unreachable) — LATTICE will show NO SIGNAL.",
+                err=True,
+            )
+        html = render_html(snap, mode="static")
+        with open(publish_path, "w") as f:
+            f.write(html)
+        click.echo(f"Wrote static cortex snapshot to {publish_path} "
+                   f"({len(html):,} bytes, generated {snap.generated_at}).")
+        storage.close()
+        return
+
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    refresh_ms = max(2000, refresh * 1000)
+
+    class Handler(BaseHTTPRequestHandler):
+        def _send(self, code: int, body: bytes, content_type: str):
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            snap = build_snapshot(storage)
+            if self.path.startswith("/api/snapshot.json"):
+                body = json.dumps(dataclasses.asdict(snap)).encode()
+                self._send(200, body, "application/json")
+                return
+            html = render_html(snap, mode="live")
+            html = html.replace(
+                "window.__CORTEX__ =",
+                f"window.__CORTEX_REFRESH_MS__ = {refresh_ms};\nwindow.__CORTEX__ =",
+                1,
+            )
+            self._send(200, html.encode(), "text/html; charset=utf-8")
+
+        def log_message(self, *args):
+            pass  # silence default stderr access logging
+
+    server = ThreadingHTTPServer((host, port), Handler)
+    click.echo(f"Live Agent Cortex — http://{host}:{port}  (refresh {refresh}s, Ctrl+C to stop)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        click.echo("\nStopped.")
+    finally:
+        server.server_close()
+        storage.close()
+
+
 if __name__ == "__main__":
     cli()

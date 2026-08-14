@@ -104,6 +104,9 @@ hf-bot portfolio compare
 # Test a set of strategies across a universe of symbols, all at once.
 hf-bot sweep
 hf-bot sweep-history
+
+# Visualize the committee as a live HUD (see "Live Agent Cortex" below).
+hf-bot dashboard
 ```
 
 Copy `config/settings.example.yaml` to `config/settings.yaml` to customize
@@ -318,6 +321,48 @@ hf-bot portfolio compare --benchmark SPY
 date's close, and reports the gap in dollars. This is what
 `hf-bot journal scorecard` should ultimately be judged against, not
 against "did the pick go up."
+
+## Live Agent Cortex (`hf-bot dashboard`)
+
+A dark HUD visualization of the 11-agent committee — each agent rendered as
+a glowing particle cloud whose firing-rate number comes from real logged
+data, with live readout panels (portfolio-vs-SPY gap, open theses, latest
+sweep verdict, watchlist).
+
+```bash
+hf-bot dashboard                       # serve live at http://127.0.0.1:8420
+hf-bot dashboard --port 9000 --refresh 30
+hf-bot dashboard --publish cortex.html # one self-contained static file
+```
+
+Each agent carries a personal codename and a metric drawn straight from the
+database — no fabricated numbers, matching the standard in
+[`FINDINGS.md`](FINDINGS.md):
+
+| codename | agent | firing rate = |
+|---|---|---|
+| **APEX** | cio | total decisions logged |
+| **LATTICE** | portfolio-manager | SPY excess return |
+| **BASTION** | risk-manager | % of BUY/SELL decisions risk-sized (stop + size set) |
+| **ECHO** | behavioral-coach | discipline rate (rules followed on reviewed decisions) |
+| **LEDGER** | equity-analyst | BUY theses logged |
+| **CIPHER** | quant-analyst | latest sweep hit rate |
+| **HORIZON** | macro-strategist | *no offline metric — shows NO SIGNAL* |
+| **EMBER** | special-situations | high-conviction calls *(disclosed proxy)* |
+| **RADAR** | setup-scanner | live-enabled watchlist size |
+| **COMPASS** | valuation-analyst | avg embedded upside (target vs entry) |
+| **TALON** | red-team | % of theses with a recorded objection |
+
+Every number carries a `LIVE`, `PROXY`, or `NO SIGNAL` tag — the two agents
+without a clean offline metric (HORIZON, EMBER) say so on the page rather
+than inventing a figure. The particle motion is split into bright **core**
+particles (scaled by the real metric) and dim **ambient** drift (decoration,
+labeled as such) so animation is never mistaken for data.
+
+Two delivery modes share one rendering engine (`hf_trading_bot/cortex.py`
+builds the data, `cortex_render.py` draws it): the local server reads your
+SQLite DB live and auto-refreshes; `--publish` bakes the data into a single
+static HTML file with zero external requests, safe to host anywhere.
 
 ## Tests
 
