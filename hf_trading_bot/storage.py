@@ -130,6 +130,24 @@ CREATE TABLE IF NOT EXISTS memory_episodes (
     mirrored_to_brain INTEGER NOT NULL DEFAULT 0,  -- 1 once persisted to Agently
     created_at TEXT NOT NULL
 );
+
+-- Commands issued from the dashboard's command deck. The Python server cannot
+-- run the committee agents itself (it has no LLM) — only a Claude session can.
+-- So a command is QUEUED here; a real Claude session (or the opt-in
+-- claude-CLI runner) executes it, which emits the committee_events that light
+-- up the cortex. This table is the honest bridge between intent and execution:
+-- nothing here claims a review ran until an executor actually ran it.
+CREATE TABLE IF NOT EXISTS command_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,                 -- 'review' (only shape for now)
+    symbol TEXT,
+    prompt TEXT NOT NULL,               -- the resolved instruction for the executor
+    status TEXT NOT NULL,               -- pending | running | done | failed | unavailable
+    detail TEXT,                        -- error text or a one-line result
+    run_id TEXT,                        -- committee run this produced, once executing
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 DEFAULT_WATCHLIST = [
@@ -424,6 +442,47 @@ class Storage:
     def memory_episode_count(self) -> int:
         row = self._conn.execute("SELECT COUNT(*) AS n FROM memory_episodes").fetchone()
         return row["n"]
+
+    # --- command queue -----------------------------------------------------
+
+    def enqueue_command(self, kind: str, prompt: str, symbol: Optional[str] = None) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        cur = self._conn.execute(
+            "INSERT INTO command_queue (kind, symbol, prompt, status, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (kind, symbol, prompt, "pending", now, now),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def update_command(
+        self, command_id: int, status: str,
+        detail: Optional[str] = None, run_id: Optional[str] = None,
+    ) -> None:
+        self._conn.execute(
+            "UPDATE command_queue SET status = ?, detail = COALESCE(?, detail), "
+            "run_id = COALESCE(?, run_id), updated_at = ? WHERE id = ?",
+            (status, detail, run_id, datetime.now(timezone.utc).isoformat(), command_id),
+        )
+        self._conn.commit()
+
+    def pending_commands(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM command_queue WHERE status = 'pending' ORDER BY id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def recent_commands(self, limit: int = 10) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM command_queue ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_command(self, command_id: int) -> Optional[dict[str, Any]]:
+        row = self._conn.execute(
+            "SELECT * FROM command_queue WHERE id = ?", (command_id,)
+        ).fetchone()
+        return dict(row) if row else None
 
     def close(self) -> None:
         self._conn.close()

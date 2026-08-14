@@ -10,6 +10,7 @@ This module is the single source of truth for both delivery modes
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
@@ -17,6 +18,42 @@ from typing import Any, Literal, Optional
 from .journal import Journal
 from .portfolio import ContributionLog, counterfactual
 from .storage import Storage
+
+_TICKER_RE = re.compile(r"^[A-Z][A-Z.\-]{0,5}$")
+
+
+class CommandError(ValueError):
+    """Raised when a dashboard command can't be parsed into a safe instruction."""
+
+
+def parse_review_command(text: str) -> str:
+    """Extract a ticker from free text like 'review ASTS' or 'ASTS'.
+
+    Deliberately strict: a validated ticker is the ONLY thing that ever reaches
+    an executor, so no free-form text can be smuggled into a spawned process.
+    """
+    if not text or not text.strip():
+        raise CommandError("empty command")
+    # take the longest token that looks like a ticker
+    candidates = [w.strip(".,!?").upper() for w in re.split(r"[\s,]+", text.strip())]
+    for w in candidates:
+        if _TICKER_RE.match(w) and w not in ("REVIEW", "RUN", "THE", "A", "ON", "OF"):
+            return w
+    raise CommandError(
+        f"could not find a ticker symbol in {text!r} — try 'review ASTS' or just 'ASTS'"
+    )
+
+
+def review_prompt(symbol: str) -> str:
+    """The fixed instruction an executor runs. Built from a validated ticker
+    only — never from raw user text."""
+    return (
+        f"Use the cio agent to run a full committee review on {symbol}. "
+        f"Follow your activity-event protocol exactly: emit `hf-bot committee "
+        f"log-event` events for the start, each delegation and finding, and the "
+        f"final memo, and persist the durable conclusion with `hf-bot memory "
+        f"persist` at the end, so the dashboard reflects the real run."
+    )
 
 # A run whose last event is older than this, with no memo, is treated as
 # stale rather than "live" — the dashboard won't claim an agent is working
@@ -116,6 +153,7 @@ class CortexSnapshot:
     watchlist: list[dict[str, Any]] = field(default_factory=list)
     committee: Optional[dict[str, Any]] = None   # latest run activity, or None if never run
     memory: dict[str, Any] = field(default_factory=dict)
+    commands: list[dict[str, Any]] = field(default_factory=list)   # command-deck history
 
 
 def _reading(
@@ -387,4 +425,9 @@ def build_snapshot(storage: Storage) -> CortexSnapshot:
         watchlist=watchlist,
         committee=_committee_activity(storage),
         memory=_memory(storage, journal, all_decisions, scorecard),
+        commands=[
+            {"id": c["id"], "symbol": c["symbol"], "status": c["status"],
+             "detail": c["detail"], "created_at": c["created_at"]}
+            for c in storage.recent_commands(limit=8)
+        ],
     )

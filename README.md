@@ -391,6 +391,25 @@ decision journal and committee log accumulate with every review, and
 over time. It is a growing record, not a model that silently gets smarter —
 the panel says so.
 
+### Commanding the committee from the dashboard
+
+The Stark-style HUD has a **command bar**: type a ticker (e.g. `ASTS`) and hit
+DISPATCH to request a full committee review. The honest architecture matters
+here — the Python server has no LLM, so it cannot run the agents itself:
+
+- The command is **queued** (`command_queue`), never faked.
+- A real **Claude session executes it**, emitting the committee events + memory
+  that light up the cortex live.
+- Two modes: by default the command **queues** for a Claude session to pick up
+  (`hf-bot committee queue --run`); with `hf-bot dashboard --enable-agent-runner`
+  the server itself spawns `claude -p` to run the review. The runner is **off by
+  default** — a web page spawning Claude with your tools is a deliberate choice,
+  not a default.
+
+Only a validated ticker ever reaches an executor, so no free-form text can be
+smuggled into a spawned process. The "Command deck" panel tracks each request's
+status (pending → running → done).
+
 ### Shared memory that persists across sessions
 
 Beyond the counts, the committee keeps a **durable, recallable memory** — the

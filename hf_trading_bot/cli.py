@@ -771,6 +771,82 @@ def committee_show(cfg, run_id):
         click.echo(f"      {e['summary']}")
 
 
+@committee.command("enqueue")
+@click.argument("text")
+@click.pass_obj
+def committee_enqueue(cfg, text):
+    """Queue a review command (as the dashboard's command deck does).
+
+    TEXT is free-form like 'review ASTS' or just 'ASTS'; only a validated
+    ticker is ever stored. Nothing runs — a Claude executor picks it up.
+    """
+    from hf_trading_bot.cortex import CommandError, parse_review_command, review_prompt
+
+    storage = _load_storage(cfg)
+    try:
+        symbol = parse_review_command(text)
+    except CommandError as e:
+        storage.close()
+        raise click.ClickException(str(e)) from e
+    cid = storage.enqueue_command("review", review_prompt(symbol), symbol=symbol)
+    click.echo(f"Queued command #{cid}: review {symbol} (status: pending).")
+    click.echo("An executor runs it with `hf-bot committee queue` — see that command's help.")
+    storage.close()
+
+
+@committee.command("queue")
+@click.option("--run", "run_next", is_flag=True,
+              help="Print the next pending command's prompt for an executor to run.")
+@click.pass_obj
+def committee_queue(cfg, run_next):
+    """Show queued review commands awaiting an executor.
+
+    THE EXECUTOR IS A CLAUDE SESSION. The Python CLI cannot run the committee
+    agents itself. To process the queue from Claude Code:
+
+      1. `hf-bot committee queue --run` prints the next command's instruction.
+      2. Run that instruction (it invokes the cio agent, which emits the
+         events that light up the dashboard).
+      3. `hf-bot committee resolve <id> --status done` when it finishes.
+    """
+    storage = _load_storage(cfg)
+    pending = storage.pending_commands()
+    if run_next:
+        if not pending:
+            click.echo("# no pending commands")
+        else:
+            c = pending[0]
+            click.echo(f"# command #{c['id']} — mark done with: hf-bot committee resolve {c['id']} --status done")
+            click.echo(c["prompt"])
+        storage.close()
+        return
+    if not pending:
+        click.echo("No pending commands.")
+    else:
+        click.echo(f"{len(pending)} pending:")
+        for c in pending:
+            click.echo(f"  #{c['id']:<4} {c['symbol'] or '—':<8} queued {c['created_at'][:19]}")
+    storage.close()
+
+
+@committee.command("resolve")
+@click.argument("command_id", type=int)
+@click.option("--status", required=True,
+              type=click.Choice(["running", "done", "failed", "unavailable"]))
+@click.option("--detail", default=None, help="One-line result or error.")
+@click.option("--run", "run_id", default=None, help="Committee run id this produced.")
+@click.pass_obj
+def committee_resolve(cfg, command_id, status, detail, run_id):
+    """Mark a queued command's status (the executor calls this)."""
+    storage = _load_storage(cfg)
+    if storage.get_command(command_id) is None:
+        storage.close()
+        raise click.ClickException(f"No command #{command_id}.")
+    storage.update_command(command_id, status=status, detail=detail, run_id=run_id)
+    click.echo(f"Command #{command_id} → {status}.")
+    storage.close()
+
+
 @committee.command("demo")
 @click.option("--symbol", default="ASTS", help="Ticker to stage a sample review for.")
 @click.option("--partial", is_flag=True,
@@ -920,8 +996,13 @@ def memory_recall(cfg, query, limit):
 @click.option("--publish", "publish_path", default=None, type=click.Path(),
               help="Write a self-contained static HTML snapshot to this path instead "
                    "of serving live.")
+@click.option("--enable-agent-runner", is_flag=True,
+              help="Let the dashboard SPAWN a real committee review (via the local "
+                   "`claude` CLI) when you issue a command. Off by default: this runs "
+                   "Claude with your tools and spends tokens, so it must be opted into.")
 @click.pass_obj
-def dashboard(cfg: AppConfig, host: str, port: int, refresh: int, publish_path: Optional[str]):
+def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
+              publish_path: Optional[str], enable_agent_runner: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
 
     Each agent's firing-rate number is real logged data (journal, sweeps,
@@ -953,8 +1034,13 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int, publish_path: 
         storage.close()
         return
 
+    import shutil
+    import subprocess
+    import threading
     import traceback
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from hf_trading_bot.cortex import CommandError, parse_review_command, review_prompt
 
     # Seeding/migration is done; the startup connection can't be shared across
     # request threads (SQLite forbids it), so close it and give each request
@@ -963,6 +1049,38 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int, publish_path: 
     db_path = cfg.db_path
     storage.close()
     refresh_ms = max(2000, refresh * 1000)
+    claude_bin = shutil.which("claude") if enable_agent_runner else None
+
+    def _run_review(command_id: int, symbol: str, prompt: str):
+        """Spawn a real committee review via the local `claude` CLI. Runs in a
+        background thread; the review emits its own committee events, so the
+        cortex reflects it live. Only ever called with a validated ticker."""
+        s = Storage(db_path)
+        try:
+            s.update_command(command_id, status="running",
+                             detail=f"claude runner started for {symbol}")
+        finally:
+            s.close()
+        try:
+            proc = subprocess.run(
+                [claude_bin, "-p", prompt],
+                cwd=".", capture_output=True, text=True, timeout=1800,
+            )
+            ok = proc.returncode == 0
+            detail = (proc.stdout or proc.stderr or "").strip().replace("\n", " ")[-300:]
+            s = Storage(db_path)
+            try:
+                s.update_command(command_id, status="done" if ok else "failed",
+                                 detail=detail or ("completed" if ok else "claude exited non-zero"))
+            finally:
+                s.close()
+        except Exception as e:  # noqa: BLE001
+            s = Storage(db_path)
+            try:
+                s.update_command(command_id, status="failed",
+                                 detail=f"{type(e).__name__}: {e}")
+            finally:
+                s.close()
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code: int, body: bytes, content_type: str):
@@ -980,8 +1098,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int, publish_path: 
                 finally:
                     req_storage.close()
                 if self.path.startswith("/api/snapshot.json"):
-                    body = json.dumps(dataclasses.asdict(snap)).encode()
-                    self._send(200, body, "application/json")
+                    payload = dataclasses.asdict(snap)
+                    payload["runner"] = {
+                        "enabled": bool(enable_agent_runner),
+                        "claude_available": bool(claude_bin),
+                    }
+                    self._send(200, json.dumps(payload).encode(), "application/json")
                     return
                 html = render_html(snap, mode="live").replace(
                     "window.__CORTEX__ =",
@@ -998,11 +1120,62 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int, publish_path: 
                 except Exception:
                     pass
 
+        def do_POST(self):
+            try:
+                if not self.path.startswith("/api/command"):
+                    self._send(404, b'{"error":"not found"}', "application/json")
+                    return
+                length = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(length) if length else b"{}"
+                text = (json.loads(raw or b"{}").get("text") or "").strip()
+                # Validate to a bare ticker BEFORE anything touches an executor.
+                try:
+                    symbol = parse_review_command(text)
+                except CommandError as e:
+                    self._send(400, json.dumps({"error": str(e)}).encode(), "application/json")
+                    return
+                prompt = review_prompt(symbol)
+                s = Storage(db_path)
+                try:
+                    cid = s.enqueue_command("review", prompt, symbol=symbol)
+                finally:
+                    s.close()
+
+                if claude_bin:
+                    threading.Thread(target=_run_review, args=(cid, symbol, prompt),
+                                     daemon=True).start()
+                    msg = (f"Dispatching a live committee review of {symbol} via Claude — "
+                           f"watch the cortex.")
+                    status = "running"
+                elif enable_agent_runner:
+                    msg = (f"Queued {symbol}, but the `claude` CLI wasn't found on PATH. "
+                           f"Install/authenticate Claude Code, or run the queued command "
+                           f"from a Claude session (`hf-bot committee queue --run`).")
+                    status = "pending"
+                else:
+                    msg = (f"Queued a review of {symbol}. Run it from a Claude session: "
+                           f"`hf-bot committee queue --run`. (Start the dashboard with "
+                           f"--enable-agent-runner to dispatch automatically.)")
+                    status = "pending"
+                self._send(200, json.dumps(
+                    {"id": cid, "symbol": symbol, "status": status, "message": msg}
+                ).encode(), "application/json")
+            except Exception:
+                tb = traceback.format_exc()
+                self._send(500, json.dumps({"error": tb}).encode(), "application/json")
+
         def log_message(self, *args):
             pass  # silence default stderr access logging
 
     server = ThreadingHTTPServer((host, port), Handler)
+    runner_note = (
+        "  agent-runner ON — commands will spawn `claude`"
+        + ("" if claude_bin else " (but `claude` was NOT found on PATH; commands will queue)")
+        if enable_agent_runner else
+        "  agent-runner off — commands queue for a Claude session to run"
+    )
     click.echo(f"Live Agent Cortex — http://{host}:{port}  (refresh {refresh}s, Ctrl+C to stop)")
+    click.echo(runner_note)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

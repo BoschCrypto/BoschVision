@@ -31,7 +31,28 @@ DISCLAIMER = (
 def render_html(snap: CortexSnapshot, *, mode: Mode = "static") -> str:
     data_json = json.dumps(dataclasses.asdict(snap))
     poll_js = _POLL_JS if mode == "live" else ""
+    cmd_js = _CMD_JS if mode == "live" else ""
     mode_badge = "LIVE" if mode == "live" else "SNAPSHOT"
+    # A static snapshot has no server, so it cannot dispatch commands. Render
+    # the bar disabled with an honest note rather than a dead input — and omit
+    # the fetch-based handler entirely, keeping the static file self-contained.
+    if mode == "live":
+        cmdbar = (
+            '<form id="cmdbar" autocomplete="off">'
+            '<span class="prompt">&#9670; COMMAND</span>'
+            '<input id="cmdinput" type="text" '
+            'placeholder="review a ticker — e.g.  ASTS   (Enter to dispatch)" />'
+            '<button type="submit" id="cmdsend">DISPATCH</button>'
+            '<span id="cmdmsg"></span></form>'
+        )
+    else:
+        cmdbar = (
+            '<div id="cmdbar" class="static">'
+            '<span class="prompt">&#9670; COMMAND</span>'
+            '<input id="cmdinput" type="text" disabled '
+            'placeholder="static snapshot — run `hf-bot dashboard` to dispatch reviews" />'
+            '<button type="button" id="cmdsend" disabled>OFFLINE</button></div>'
+        )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -42,8 +63,10 @@ def render_html(snap: CortexSnapshot, *, mode: Mode = "static") -> str:
 </head>
 <body>
 <div id="app">
+  <div class="frame tl"></div><div class="frame tr"></div>
+  <div class="frame bl"></div><div class="frame br"></div>
   <header>
-    <div class="brand">VANTRIX &middot; LIVE AGENT CORTEX</div>
+    <div class="brand"><span class="reactor"></span>VANTRIX &middot; LIVE AGENT CORTEX</div>
     <div id="committee-status"></div>
     <div class="mode-badge" data-mode="{mode}">{mode_badge}</div>
   </header>
@@ -51,6 +74,8 @@ def render_html(snap: CortexSnapshot, *, mode: Mode = "static") -> str:
     <section id="stage">
       <canvas id="cortex"></canvas>
       <div id="nodes"></div>
+      <div id="scan"></div>
+      {cmdbar}
     </section>
     <aside id="panel">
       <div class="panel-block" id="roster">
@@ -66,6 +91,7 @@ def render_html(snap: CortexSnapshot, *, mode: Mode = "static") -> str:
 <script>
 window.__CORTEX__ = {data_json};
 {_APP_JS}
+{cmd_js}
 {poll_js}
 </script>
 </body>
@@ -74,44 +100,106 @@ window.__CORTEX__ = {data_json};
 
 _CSS = """
 :root {
-  --bg: #05070a; --panel: #0b0f16; --border: #1b2432;
-  --text: #e5edf5; --dim: #6b7a8d; --live: #4ade80; --proxy: #fbbf24; --nodata: #64748b;
+  --bg: #03060b; --bg2: #060c14; --panel: rgba(9,15,24,0.72); --border: #163043;
+  --text: #dbe9f4; --dim: #6a8399; --live: #46e6c8; --proxy: #f5c451; --nodata: #5b7186;
+  --cyan: #5fe6ff; --cyan-dim: #2b7f96; --gold: #ffcf70; --danger: #ff6b6b;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+html, body { margin: 0; height: 100%; background:
+  radial-gradient(1200px 800px at 38% 42%, #0a1622 0%, var(--bg) 62%) fixed, var(--bg);
+  color: var(--text);
   font-family: "IBM Plex Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
-#app { display: flex; flex-direction: column; height: 100vh; }
+#app { display: flex; flex-direction: column; height: 100vh; position: relative; }
+/* corner frame brackets — HUD chrome */
+.frame { position: fixed; width: 26px; height: 26px; border: 2px solid var(--cyan);
+  opacity: 0.5; z-index: 50; pointer-events: none; }
+.frame.tl { top: 10px; left: 10px; border-right: 0; border-bottom: 0; }
+.frame.tr { top: 10px; right: 10px; border-left: 0; border-bottom: 0; }
+.frame.bl { bottom: 10px; left: 10px; border-right: 0; border-top: 0; }
+.frame.br { bottom: 10px; right: 10px; border-left: 0; border-top: 0; }
 header { display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 22px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
-.brand { letter-spacing: 4px; font-size: 13px; color: #9fb3c8; font-weight: 600; }
-.mode-badge { font-size: 10px; letter-spacing: 2px; padding: 3px 9px; border-radius: 3px;
+  padding: 14px 30px; border-bottom: 1px solid var(--border); flex: 0 0 auto;
+  background: linear-gradient(180deg, rgba(95,230,255,0.05), transparent); }
+.brand { letter-spacing: 5px; font-size: 13px; color: var(--gold); font-weight: 600;
+  display: flex; align-items: center; gap: 10px; text-shadow: 0 0 12px rgba(255,207,112,0.3); }
+.reactor { width: 13px; height: 13px; border-radius: 50%;
+  background: radial-gradient(circle, #eafcff 0%, var(--cyan) 45%, transparent 72%);
+  box-shadow: 0 0 12px var(--cyan), 0 0 24px rgba(95,230,255,0.5);
+  animation: rpulse 2.4s ease-in-out infinite; }
+@keyframes rpulse { 0%,100% { transform: scale(0.85); opacity: 0.8; } 50% { transform: scale(1.1); opacity: 1; } }
+.mode-badge { font-size: 10px; letter-spacing: 2px; padding: 3px 9px; border-radius: 2px;
   border: 1px solid var(--live); color: var(--live); }
 .mode-badge[data-mode="static"] { border-color: var(--dim); color: var(--dim); }
 #committee-status { flex: 1 1 auto; text-align: center; font-size: 11px;
-  letter-spacing: 2px; color: var(--dim); }
-#committee-status .on { color: var(--live); }
+  letter-spacing: 3px; color: var(--dim); }
+#committee-status .on { color: var(--cyan); text-shadow: 0 0 10px rgba(95,230,255,0.4); }
 #committee-status .dotpulse { animation: dp 1.1s ease-in-out infinite; }
-@keyframes dp { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
+@keyframes dp { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
 main { display: flex; flex: 1 1 auto; min-height: 0; }
 #stage { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; }
 #cortex { position: absolute; inset: 0; width: 100%; height: 100%; }
 #nodes { position: absolute; inset: 0; pointer-events: none; }
+/* slow scan sweep across the stage */
+#scan { position: absolute; inset: 0; pointer-events: none; z-index: 2;
+  background: linear-gradient(180deg, transparent 0%, rgba(95,230,255,0.055) 50%, transparent 100%);
+  height: 38%; animation: sweep 7.5s linear infinite; opacity: 0.9; }
+@keyframes sweep { 0% { transform: translateY(-120%); } 100% { transform: translateY(360%); } }
+/* command bar — the Stark console */
+#cmdbar { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%);
+  z-index: 6; display: flex; align-items: center; gap: 12px; width: min(680px, 82%);
+  padding: 9px 14px; border: 1px solid var(--cyan-dim); border-radius: 4px;
+  background: rgba(4,10,18,0.82); box-shadow: 0 0 24px rgba(95,230,255,0.10), inset 0 0 20px rgba(0,0,0,0.5);
+  backdrop-filter: blur(3px); }
+#cmdbar .prompt { color: var(--cyan); font-size: 11px; letter-spacing: 2px; flex: 0 0 auto; }
+#cmdinput { flex: 1 1 auto; background: transparent; border: none; outline: none;
+  color: var(--text); font-family: inherit; font-size: 13px; letter-spacing: 1px; }
+#cmdinput::placeholder { color: #47617a; }
+#cmdsend { flex: 0 0 auto; background: linear-gradient(180deg, rgba(95,230,255,0.16), rgba(95,230,255,0.06));
+  color: var(--cyan); border: 1px solid var(--cyan-dim); border-radius: 3px; cursor: pointer;
+  font-family: inherit; font-size: 10px; letter-spacing: 2px; padding: 6px 12px; }
+#cmdsend:hover { background: rgba(95,230,255,0.24); box-shadow: 0 0 14px rgba(95,230,255,0.3); }
+#cmdmsg { position: absolute; left: 0; bottom: 100%; margin-bottom: 8px; font-size: 11px;
+  color: var(--cyan); letter-spacing: 1px; white-space: nowrap; opacity: 0; transition: opacity 0.3s; }
+#cmdmsg.show { opacity: 1; }
+#cmdmsg.err { color: var(--danger); }
+#cmdbar.static { opacity: 0.6; }
+#cmdbar.static #cmdinput { cursor: not-allowed; }
+#cmdbar.static #cmdsend { color: var(--dim); border-color: var(--border);
+  background: transparent; cursor: not-allowed; }
 .node { position: absolute; transform: translate(-50%, -50%); text-align: center;
   pointer-events: none; white-space: nowrap; }
-.node .cn { font-size: 15px; font-weight: 600; letter-spacing: 2px; }
+.node .cn { font-size: 15px; font-weight: 600; letter-spacing: 2px;
+  text-shadow: 0 0 10px currentColor; }
 .node .role { font-size: 9px; letter-spacing: 2px; color: var(--dim);
   text-transform: uppercase; margin-top: 2px; }
 .node .box { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
-  padding: 2px 8px; border: 1px solid var(--border); border-radius: 3px;
-  background: rgba(5,7,10,0.7); font-size: 11px; }
+  padding: 2px 9px; border: 1px solid var(--cyan-dim); border-radius: 2px;
+  background: rgba(4,10,18,0.78); font-size: 11px;
+  box-shadow: 0 0 10px rgba(95,230,255,0.08); }
 .node .tag { font-size: 8px; letter-spacing: 1px; padding: 1px 4px; border-radius: 2px; }
-.tag.live { color: var(--live); border: 1px solid rgba(74,222,128,0.4); }
-.tag.proxy { color: var(--proxy); border: 1px solid rgba(251,191,36,0.4); }
-.tag.no_data { color: var(--nodata); border: 1px solid rgba(100,116,139,0.4); }
-#panel { flex: 0 0 340px; background: var(--panel); border-left: 1px solid var(--border);
-  padding: 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
-.panel-block { border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; }
-.panel-title { font-size: 11px; letter-spacing: 3px; color: #9fb3c8; margin-bottom: 10px; }
+.tag.live { color: var(--live); border: 1px solid rgba(70,230,200,0.45); }
+.tag.proxy { color: var(--proxy); border: 1px solid rgba(245,196,81,0.45); }
+.tag.no_data { color: var(--nodata); border: 1px solid rgba(91,113,134,0.4); }
+#panel { flex: 0 0 344px; background: var(--panel); border-left: 1px solid var(--border);
+  padding: 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px;
+  backdrop-filter: blur(2px); }
+.panel-block { border: 1px solid var(--border); border-radius: 4px; padding: 12px 14px;
+  position: relative; background: linear-gradient(180deg, rgba(95,230,255,0.03), transparent); }
+.panel-block::before, .panel-block::after { content: ""; position: absolute; width: 9px;
+  height: 9px; border: 1px solid var(--cyan); opacity: 0.55; }
+.panel-block::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+.panel-block::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+.panel-title { font-size: 11px; letter-spacing: 3px; color: var(--gold); margin-bottom: 10px; }
+/* command deck */
+.cmd { display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 4px 0;
+  border-top: 1px solid var(--border); }
+.cmd:first-of-type { border-top: none; }
+.cmd .csym { flex: 1 1 auto; letter-spacing: 1px; color: var(--text); }
+.cmd .cst { font-size: 8px; letter-spacing: 1px; padding: 1px 6px; border-radius: 2px; flex: 0 0 auto; }
+.cst.running { color: var(--cyan); border: 1px solid var(--cyan-dim); animation: dp 1.1s ease-in-out infinite; }
+.cst.done { color: var(--gold); border: 1px solid rgba(255,207,112,0.4); }
+.cst.pending { color: var(--dim); border: 1px solid var(--border); }
+.cst.failed, .cst.unavailable { color: var(--danger); border: 1px solid rgba(255,107,107,0.4); }
 .rrow { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 0; }
 .rrow .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .rrow .rcn { flex: 1 1 auto; letter-spacing: 1px; }
@@ -250,18 +338,48 @@ _APP_JS = r"""
     rebuild();
   }
 
+  function drawHud(t) {
+    // Arc-reactor backdrop: concentric guide rings + a slow rotating reticle,
+    // centered on APEX. Pure chrome — carries no data, just the Stark HUD feel.
+    var hub = byKey["cio"];
+    var cx = hub ? hub.x : W / 2, cy = hub ? hub.y : H / 2;
+    var R = Math.min(W, H);
+    ctx.save();
+    ctx.strokeStyle = "rgba(95,230,255,0.06)"; ctx.lineWidth = 1;
+    var rings = [0.20, 0.37, 0.50];
+    for (var i = 0; i < rings.length; i++) {
+      ctx.beginPath(); ctx.arc(cx, cy, rings[i] * R, 0, Math.PI * 2); ctx.stroke();
+    }
+    // rotating reticle: two arcs + tick marks
+    var rr = 0.50 * R, rot = t / 6000;
+    ctx.strokeStyle = "rgba(95,230,255,0.16)"; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.arc(cx, cy, rr, rot, rot + 1.1); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx, cy, rr, rot + Math.PI, rot + Math.PI + 1.1); ctx.stroke();
+    ctx.strokeStyle = "rgba(255,207,112,0.14)";
+    for (var k = 0; k < 12; k++) {
+      var a = rot * 0.5 + k * Math.PI / 6;
+      var r1 = 0.37 * R, r2 = 0.39 * R;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+      ctx.lineTo(cx + Math.cos(a) * r2, cy + Math.sin(a) * r2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   var byKey = {};
   function draw(t) {
     ctx.clearRect(0, 0, W, H);
     for (var i = 0; i < clusters.length; i++) byKey[clusters[i].key] = clusters[i];
+    drawHud(t);
     // connecting lines
     var es = edges();
     ctx.lineWidth = 1;
     for (var e = 0; e < es.length; e++) {
       var A = byKey[es[e][0]], B = byKey[es[e][1]];
       if (!A || !B) continue;
-      var pulse = 0.10 + 0.10 * (0.5 + 0.5 * Math.sin(t / 900 + e));
-      ctx.strokeStyle = "rgba(120,150,180," + pulse + ")";
+      var pulse = 0.10 + 0.12 * (0.5 + 0.5 * Math.sin(t / 900 + e));
+      ctx.strokeStyle = "rgba(95,230,255," + pulse + ")";
       ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke();
     }
     // particles
@@ -467,8 +585,27 @@ _APP_JS = r"""
     return h + '</div>';
   }
 
+  function commandDeckPanel(d) {
+    var cmds = d.commands || [];
+    var h = '<div class="readout"><h4>Command deck</h4>';
+    if (!cmds.length) {
+      h += '<div class="muted">Issue a review from the command bar below the cortex. ' +
+           'It queues here and a Claude session executes it.</div>';
+      return h + '</div>';
+    }
+    for (var i = 0; i < cmds.length; i++) {
+      var c = cmds[i];
+      h += '<div class="cmd"><span class="csym">review ' + (c.symbol || '—') + '</span>' +
+           '<span class="cst ' + c.status + '">' + c.status.toUpperCase() + '</span></div>';
+      if (c.detail && (c.status === 'failed' || c.status === 'unavailable')) {
+        h += '<div class="muted" style="font-size:10px">' + c.detail + '</div>';
+      }
+    }
+    return h + '</div>';
+  }
+
   function readouts(d) {
-    var h = committeePanel(d) + memoryPanel(d);
+    var h = commandDeckPanel(d) + committeePanel(d) + memoryPanel(d);
     // portfolio vs SPY
     h += '<div class="readout"><h4>Portfolio vs SPY</h4>';
     if (d.portfolio) {
@@ -522,14 +659,54 @@ _APP_JS = r"""
 """
 
 
+# Live-mode only: the command bar POSTs to /api/command. Omitted from static
+# snapshots so an exported file contains no fetch() and stays self-contained.
+_CMD_JS = r"""
+(function () {
+  var cmdbar = document.getElementById("cmdbar");
+  if (!cmdbar || cmdbar.tagName !== "FORM") return;
+  cmdbar.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var input = document.getElementById("cmdinput");
+    var msg = document.getElementById("cmdmsg");
+    var text = (input.value || "").trim();
+    if (!text) return;
+    msg.className = "show"; msg.textContent = "dispatching…";
+    fetch("/api/command", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({text: text})
+    }).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+      .then(function (res) {
+        if (!res.ok) { msg.className = "show err"; msg.textContent = res.j.error || "command rejected"; return; }
+        msg.className = "show"; msg.textContent = res.j.message || ("queued " + res.j.symbol);
+        input.value = "";
+        if (window.__CORTEX_REFRESH__) window.__CORTEX_REFRESH__();
+      })
+      .catch(function () {
+        msg.className = "show err";
+        msg.textContent = "no live server — run `hf-bot dashboard` to dispatch commands";
+      });
+    setTimeout(function () { msg.className = ""; }, 6000);
+  });
+})();
+"""
+
+
 _POLL_JS = r"""
 (function () {
   var REFRESH_MS = (window.__CORTEX_REFRESH_MS__ || 15000);
-  setInterval(function () {
-    fetch("/api/snapshot.json", { cache: "no-store" })
+  function poll() {
+    return fetch("/api/snapshot.json", { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (data) { window.__CORTEX__ = data; if (window.__CORTEX_APPLY__) window.__CORTEX_APPLY__(); })
       .catch(function () { /* keep last-known snapshot on a failed poll */ });
-  }, REFRESH_MS);
+  }
+  // let the command bar force an immediate refresh after dispatching, then
+  // poll a few extra times so a fast committee run shows up without waiting.
+  window.__CORTEX_REFRESH__ = function () {
+    poll();
+    var n = 0, quick = setInterval(function () { poll(); if (++n >= 4) clearInterval(quick); }, 2500);
+  };
+  setInterval(poll, REFRESH_MS);
 })();
 """

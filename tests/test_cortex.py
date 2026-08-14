@@ -3,7 +3,12 @@ import sqlite3
 
 import pytest
 
-from hf_trading_bot.cortex import build_snapshot
+from hf_trading_bot.cortex import (
+    CommandError,
+    build_snapshot,
+    parse_review_command,
+    review_prompt,
+)
 from hf_trading_bot.cortex_render import render_html
 from hf_trading_bot.journal import Decision, Journal
 from hf_trading_bot.portfolio import Contribution, ContributionLog
@@ -383,3 +388,52 @@ def test_dashboard_server_serves_across_threads(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- command deck / Option 2 ------------------------------------------------
+
+def test_parse_review_command_extracts_ticker():
+    assert parse_review_command("review ASTS") == "ASTS"
+    assert parse_review_command("ASTS") == "ASTS"
+    assert parse_review_command("run a review on NVDA") == "NVDA"
+    assert parse_review_command("brk.b") == "BRK.B"
+
+
+def test_parse_review_command_rejects_empty_and_wordy():
+    with pytest.raises(CommandError):
+        parse_review_command("")
+    with pytest.raises(CommandError):
+        parse_review_command("   ")
+
+
+def test_review_prompt_contains_validated_symbol_only():
+    p = review_prompt("ASTS")
+    assert "ASTS" in p
+    assert "cio agent" in p
+    # the prompt is built from the symbol, never raw user text
+    assert "log-event" in p
+
+
+def test_enqueue_and_pending_and_resolve(storage):
+    cid = storage.enqueue_command("review", review_prompt("ASTS"), symbol="ASTS")
+    pending = storage.pending_commands()
+    assert len(pending) == 1 and pending[0]["symbol"] == "ASTS"
+    storage.update_command(cid, status="running", detail="claude started")
+    assert storage.pending_commands() == []
+    got = storage.get_command(cid)
+    assert got["status"] == "running" and got["detail"] == "claude started"
+
+
+def test_snapshot_includes_recent_commands(storage):
+    storage.enqueue_command("review", review_prompt("ASTS"), symbol="ASTS")
+    storage.enqueue_command("review", review_prompt("NVDA"), symbol="NVDA")
+    snap = build_snapshot(storage)
+    syms = [c["symbol"] for c in snap.commands]
+    assert "ASTS" in syms and "NVDA" in syms
+
+
+def test_render_shows_command_deck(storage):
+    storage.enqueue_command("review", review_prompt("ASTS"), symbol="ASTS")
+    html = render_html(build_snapshot(storage), mode="static")
+    assert "Command deck" in html
+    assert "COMMAND" in html  # the command bar prompt
