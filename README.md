@@ -391,6 +391,34 @@ decision journal and committee log accumulate with every review, and
 over time. It is a growing record, not a model that silently gets smarter —
 the panel says so.
 
+### Shared memory that persists across sessions
+
+Beyond the counts, the committee keeps a **durable, recallable memory** — the
+distilled conclusion of each review, carried forward so the next one builds
+on it instead of starting cold.
+
+```bash
+hf-bot memory recall ASTS          # search shared memory before a review
+hf-bot memory persist --kind decision --symbol ASTS \
+  --title "ASTS: BUY sized small" --body "<self-contained, dated>"
+hf-bot memory list                 # everything the committee has learned
+```
+
+Two layers, by design:
+
+- **Local ledger (source of truth).** Episodes live in the repo's SQLite, so
+  the memory survives across sessions with *no external dependency*. The
+  dashboard reads this — shown as `◇`.
+- **Agently brain (cross-session amplifier).** The CIO agent also mirrors each
+  episode into the [Agently](https://agent.ly) knowledge graph, a memory
+  shared across sessions and other AI tools. Once mirrored, the dashboard
+  marks it `◈`. If that service is unreachable (e.g. out of credits), nothing
+  is lost — the local ledger already holds it, and the mirror happens later.
+
+The recall-first / persist-last protocol is wired into `.claude/agents/cio.md`,
+so a real `Use the cio agent to review X` run consults past conclusions on the
+way in and deposits a new one on the way out.
+
 ## Tests
 
 ```bash

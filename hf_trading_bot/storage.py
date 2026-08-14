@@ -111,6 +111,25 @@ CREATE TABLE IF NOT EXISTS committee_events (
     summary TEXT NOT NULL,              -- one line: what happened
     logged_at TEXT NOT NULL
 );
+
+-- The committee's durable, collectively-shared memory: distilled knowledge
+-- the team wants to carry forward and RECALL at the start of a future review,
+-- so it builds on past work instead of starting cold. This is the honest
+-- "grows and learns the more it does" — every concluded review appends an
+-- episode; the next review searches these first. Lives in the repo's SQLite
+-- so it persists across sessions with no external dependency; the agents
+-- additionally mirror each episode into the Agently knowledge graph (a
+-- cross-session/cross-tool brain) when that service is available.
+CREATE TABLE IF NOT EXISTS memory_episodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,                 -- decision | finding | lesson | note
+    symbol TEXT,                        -- ticker this concerns, if any
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,                 -- self-contained, with absolute dates
+    run_id TEXT,                        -- committee run that produced it, if any
+    mirrored_to_brain INTEGER NOT NULL DEFAULT 0,  -- 1 once persisted to Agently
+    created_at TEXT NOT NULL
+);
 """
 
 DEFAULT_WATCHLIST = [
@@ -352,6 +371,58 @@ class Storage:
         row = self._conn.execute(
             "SELECT COUNT(DISTINCT run_id) AS n FROM committee_events"
         ).fetchone()
+        return row["n"]
+
+    # --- collective memory -------------------------------------------------
+
+    def record_memory_episode(
+        self,
+        kind: str,
+        title: str,
+        body: str,
+        symbol: Optional[str] = None,
+        run_id: Optional[str] = None,
+        mirrored_to_brain: bool = False,
+    ) -> int:
+        cur = self._conn.execute(
+            """INSERT INTO memory_episodes
+               (kind, symbol, title, body, run_id, mirrored_to_brain, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (kind, symbol, title, body, run_id, int(mirrored_to_brain),
+             datetime.now(timezone.utc).isoformat()),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def recent_memory_episodes(
+        self, limit: int = 20, symbol: Optional[str] = None
+    ) -> list[dict[str, Any]]:
+        if symbol:
+            rows = self._conn.execute(
+                "SELECT * FROM memory_episodes WHERE symbol = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (symbol.upper(), limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM memory_episodes ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def search_memory_episodes(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Simple substring recall over title/body/symbol — enough for an agent
+        to pull prior conclusions on a name before starting a fresh review."""
+        like = f"%{query}%"
+        rows = self._conn.execute(
+            "SELECT * FROM memory_episodes WHERE title LIKE ? OR body LIKE ? OR symbol LIKE ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (like, like, like, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def memory_episode_count(self) -> int:
+        row = self._conn.execute("SELECT COUNT(*) AS n FROM memory_episodes").fetchone()
         return row["n"]
 
     def close(self) -> None:

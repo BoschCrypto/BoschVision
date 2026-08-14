@@ -813,11 +813,104 @@ def committee_demo(cfg, symbol, partial):
             run_id=run_id, agent_key=agent_key, event_type=etype,
             summary=summary, symbol=symbol, to_agent=to_agent,
         )
+    # A concluded review distills one durable memory episode — the recall
+    # layer for the next review. (A partial run hasn't concluded, so none.)
+    if not partial:
+        storage.record_memory_episode(
+            kind="decision", symbol=symbol, run_id=run_id,
+            title=f"{symbol}: BUY — asymmetric payoff, sized small",
+            body=(f"On {run_id[:8]}, the committee reviewed {symbol} and issued BUY at "
+                  f"4% of book, stop -30%, target +40%. Red team's strongest objection: "
+                  f"dilution before revenue — judged survivable because the position is "
+                  f"sized small. Falsification: a rival reaches the same milestone first, "
+                  f"or the runway assumption breaks. Sample/demo review."),
+            mirrored_to_brain=False,
+        )
     tail = " (partial — left mid-review)" if partial else ""
     click.echo(f"Recorded a {len(steps)}-event sample review as run {run_id}{tail}.")
+    if not partial:
+        click.echo("Distilled one shared-memory episode (`hf-bot memory list`).")
     click.echo("Open `hf-bot dashboard` to watch it, or `hf-bot committee show "
                f"{run_id}` to replay it in the terminal.")
     storage.close()
+
+
+@cli.group()
+def memory():
+    """The committee's durable, collectively-shared memory.
+
+    Distilled knowledge the team carries forward: what it concluded about a
+    name, what it learned, what it rejected. Persisted in the repo's SQLite so
+    it survives across sessions, and mirrored into the Agently knowledge graph
+    (a cross-session / cross-tool brain) when that service is reachable. This
+    is the recall layer — search it at the start of a review so the committee
+    builds on past work instead of starting cold.
+    """
+
+
+_MEMORY_KINDS = ["decision", "finding", "lesson", "note"]
+
+
+@memory.command("persist")
+@click.option("--title", required=True, help="Short title.")
+@click.option("--body", required=True, help="Self-contained text, with absolute dates.")
+@click.option("--kind", default="note", type=click.Choice(_MEMORY_KINDS, case_sensitive=False))
+@click.option("--symbol", default=None, help="Ticker this concerns, if any.")
+@click.option("--run", "run_id", default=None, help="Committee run that produced it, if any.")
+@click.option("--mirrored/--not-mirrored", default=False,
+              help="Set --mirrored only after the episode was also written to Agently.")
+@click.pass_obj
+def memory_persist(cfg, title, body, kind, symbol, run_id, mirrored):
+    """Append one durable episode to the shared memory ledger.
+
+    Agents call this at the end of a review. Persisting here always works
+    offline; mirroring to the Agently brain is a separate step the agent does
+    when that service is available, then re-runs this with --mirrored.
+    """
+    storage = _load_storage(cfg)
+    eid = storage.record_memory_episode(
+        kind=kind.lower(), title=title, body=body, symbol=symbol,
+        run_id=run_id, mirrored_to_brain=mirrored,
+    )
+    where = "shared brain + local ledger" if mirrored else "local ledger"
+    click.echo(f"Stored memory episode #{eid} ({kind}) in the {where}.")
+    storage.close()
+
+
+@memory.command("list")
+@click.option("--symbol", default=None, help="Filter to one ticker.")
+@click.option("--limit", default=20)
+@click.pass_obj
+def memory_list(cfg, symbol, limit):
+    """Show recent shared-memory episodes, newest first."""
+    storage = _load_storage(cfg)
+    eps = storage.recent_memory_episodes(limit=limit, symbol=symbol)
+    storage.close()
+    if not eps:
+        click.echo("No memory episodes yet.")
+        return
+    for e in eps:
+        mark = "◈" if e["mirrored_to_brain"] else "◇"
+        sym = f"[{e['symbol']}] " if e["symbol"] else ""
+        click.echo(f"  {mark} {e['created_at'][:10]}  {e['kind']:<9} {sym}{e['title']}")
+
+
+@memory.command("recall")
+@click.argument("query")
+@click.option("--limit", default=10)
+@click.pass_obj
+def memory_recall(cfg, query, limit):
+    """Search the shared-memory ledger — run this at the start of a review."""
+    storage = _load_storage(cfg)
+    eps = storage.search_memory_episodes(query, limit=limit)
+    storage.close()
+    if not eps:
+        click.echo(f"Nothing in shared memory matches {query!r}.")
+        return
+    for e in eps:
+        sym = f"[{e['symbol']}] " if e["symbol"] else ""
+        click.echo(f"  {e['created_at'][:10]}  {sym}{e['title']}")
+        click.echo(f"      {e['body']}")
 
 
 @cli.command()

@@ -444,9 +444,26 @@ _APP_JS = r"""
       h += '<div class="line"><span class="muted">discipline</span><span class="' +
            (m.discipline_pct >= 80 ? 'pos' : 'neg') + '">' + m.discipline_pct.toFixed(0) + '%</span></div>';
     }
+    // shared-memory episodes — the recall layer that carries across sessions
+    var eps = m.recent_episodes || [];
+    var mirrored = m.episodes_mirrored || 0, total = m.episodes_count || 0;
+    h += '<div class="line" style="margin-top:4px"><span class="muted">shared-brain episodes</span>' +
+         '<span>' + total + '</span></div>';
+    for (var i = 0; i < eps.length; i++) {
+      var e = eps[i];
+      var mk = e.mirrored ? '<span class="pos" title="mirrored to Agently">◈</span>'
+                          : '<span class="muted" title="local only — Agently not yet mirrored">◇</span>';
+      h += '<div class="ev"><span class="evk">' + mk + ' ' + (e.symbol || e.kind) +
+           '</span><span class="evt">' + e.title + '</span></div>';
+    }
+    var brainNote = total === 0
+      ? 'No episodes yet. Each concluded review distills one, recalled at the start of the next.'
+      : mirrored + ' of ' + total + ' mirrored to the Agently cross-session brain (◈); ' +
+        'the rest are held locally (◇) until that brain is reachable.';
     h += '<div class="muted" style="margin-top:6px;font-size:10px">Grows with every ' +
-         'review and outcome. Not a model that "gets smarter" — an accumulating ' +
-         'record that makes the team\'s calibration measurable.</div>';
+         'review and outcome — an accumulating record that makes the team\'s ' +
+         'calibration measurable, not a model that silently "gets smarter." ' +
+         brainNote + '</div>';
     return h + '</div>';
   }
 

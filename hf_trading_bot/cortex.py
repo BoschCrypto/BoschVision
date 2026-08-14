@@ -331,6 +331,10 @@ def _memory(storage: Storage, journal: Journal, all_decisions: list[dict], score
     lessons = storage._conn.execute(
         "SELECT COUNT(*) AS n FROM decisions WHERE lessons IS NOT NULL AND lessons != ''"
     ).fetchone()["n"]
+    episodes = storage.recent_memory_episodes(limit=6)
+    mirrored = storage._conn.execute(
+        "SELECT COUNT(*) AS n FROM memory_episodes WHERE mirrored_to_brain = 1"
+    ).fetchone()["n"]
     return {
         "decisions_logged": len(all_decisions),
         "reviewed": scorecard.get("reviewed", 0),
@@ -338,6 +342,13 @@ def _memory(storage: Storage, journal: Journal, all_decisions: list[dict], score
         "lessons_captured": lessons,
         "discipline_pct": scorecard.get("discipline_pct"),
         "accuracy_pct": scorecard.get("accuracy_pct"),
+        "episodes_count": storage.memory_episode_count(),
+        "episodes_mirrored": mirrored,
+        "recent_episodes": [
+            {"kind": e["kind"], "symbol": e["symbol"], "title": e["title"],
+             "mirrored": bool(e["mirrored_to_brain"])}
+            for e in episodes
+        ],
     }
 
 

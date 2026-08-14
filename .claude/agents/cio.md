@@ -63,6 +63,36 @@ Agent names to use: `cio`, `macro-strategist`, `equity-analyst`,
 `quant-analyst`, `special-situations`, `setup-scanner`, `valuation-analyst`,
 `red-team`, `risk-manager`, `portfolio-manager`, `behavioral-coach`.
 
+## Collective memory — recall first, persist last
+
+The committee has a shared, growing memory. Use it so the team builds on past
+work instead of starting cold.
+
+**At the start of every review, recall before researching:**
+```
+hf-bot memory recall TICKER
+```
+Also search the cross-session brain if it's reachable:
+`mcp__Agently__search` with the ticker and thesis. If either returns a prior
+conclusion, open with it — what did we decide last time, and what has changed
+since? Do not re-derive what the committee already established.
+
+**At the end of every review, persist the durable outcome:**
+```
+hf-bot memory persist --kind decision --symbol TICKER --run RUN_ID \
+  --title "TICKER: <BUY/PASS> — <one-line thesis>" \
+  --body "<self-contained: decision, conviction, the red-team's strongest objection, the falsification trigger, position size. Absolute dates.>"
+```
+Then mirror the same episode into the cross-session brain with
+`mcp__Agently__remember` (title + the same self-contained body). If that
+call fails (e.g. the Agently workspace is out of credits or unreachable),
+that is fine — the local ledger already holds it; leave it un-mirrored and
+move on. Once a mirror succeeds, re-run `hf-bot memory persist ... --mirrored`
+so the dashboard shows it as brain-backed (◈) rather than local-only (◇).
+
+Persist only genuinely durable conclusions — one focused episode per review.
+Never store secrets, credentials, or anyone's personal data.
+
 ## Pipeline
 
 Delegate to specialists. Do not do their work yourself.

@@ -281,3 +281,56 @@ def test_render_shows_committee_activity_and_memory_panels(storage):
     html = render_html(build_snapshot(storage), mode="static")
     assert "Committee activity" in html
     assert "Collective memory" in html
+
+
+# --- collective memory (shared-brain ledger) --------------------------------
+
+def test_memory_episode_round_trip(storage):
+    storage.record_memory_episode(
+        kind="decision", title="ASTS: BUY", body="sized small, 2026-08-14",
+        symbol="ASTS", run_id="r1",
+    )
+    eps = storage.recent_memory_episodes()
+    assert len(eps) == 1
+    assert eps[0]["symbol"] == "ASTS"
+    assert eps[0]["mirrored_to_brain"] == 0
+
+
+def test_memory_recall_matches_symbol_and_body(storage):
+    storage.record_memory_episode(kind="decision", title="ASTS: BUY",
+                                  body="spectrum moat", symbol="ASTS")
+    storage.record_memory_episode(kind="finding", title="NVDA note",
+                                  body="datacenter demand", symbol="NVDA")
+    hits = storage.search_memory_episodes("spectrum")
+    assert len(hits) == 1 and hits[0]["symbol"] == "ASTS"
+    by_symbol = storage.search_memory_episodes("NVDA")
+    assert len(by_symbol) == 1 and by_symbol[0]["symbol"] == "NVDA"
+
+
+def test_memory_recall_filters_by_symbol_scope(storage):
+    storage.record_memory_episode(kind="decision", title="a", body="x", symbol="ASTS")
+    storage.record_memory_episode(kind="decision", title="b", body="y", symbol="NVDA")
+    assert len(storage.recent_memory_episodes(symbol="ASTS")) == 1
+
+
+def test_snapshot_memory_counts_episodes_and_mirroring(storage):
+    storage.record_memory_episode(kind="decision", title="a", body="x", mirrored_to_brain=True)
+    storage.record_memory_episode(kind="finding", title="b", body="y", mirrored_to_brain=False)
+    m = build_snapshot(storage).memory
+    assert m["episodes_count"] == 2
+    assert m["episodes_mirrored"] == 1
+    assert len(m["recent_episodes"]) == 2
+
+
+def test_empty_memory_has_zero_episodes(storage):
+    m = build_snapshot(storage).memory
+    assert m["episodes_count"] == 0
+    assert m["recent_episodes"] == []
+
+
+def test_render_shows_shared_brain_episodes(storage):
+    storage.record_memory_episode(kind="decision", title="ASTS: BUY sized small",
+                                  body="x", symbol="ASTS", mirrored_to_brain=False)
+    html = render_html(build_snapshot(storage), mode="static")
+    assert "shared-brain episodes" in html
+    assert "ASTS: BUY sized small" in html
