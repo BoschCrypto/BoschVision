@@ -95,6 +95,22 @@ CREATE TABLE IF NOT EXISTS sweep_results (
     window_end TEXT,
     run_at TEXT NOT NULL
 );
+
+-- The committee's working record: one row per agent action during a review.
+-- This is what makes the dashboard's "agents interacting" real rather than
+-- decorative — every handoff pulse and active-node glow corresponds to an
+-- actual logged event emitted by an agent as it worked. No event, no motion.
+CREATE TABLE IF NOT EXISTS committee_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,               -- groups all events from one review
+    seq INTEGER NOT NULL,               -- order within the run
+    symbol TEXT,                        -- what's under review (from the run's first event)
+    agent_key TEXT NOT NULL,            -- who acted (e.g. "cio", "red-team")
+    event_type TEXT NOT NULL,           -- start | handoff | finding | verdict | memo
+    to_agent TEXT,                      -- handoff target, when event_type = handoff
+    summary TEXT NOT NULL,              -- one line: what happened
+    logged_at TEXT NOT NULL
+);
 """
 
 DEFAULT_WATCHLIST = [
@@ -264,6 +280,79 @@ class Storage:
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # --- committee activity ------------------------------------------------
+
+    def record_committee_event(
+        self,
+        run_id: str,
+        agent_key: str,
+        event_type: str,
+        summary: str,
+        symbol: Optional[str] = None,
+        to_agent: Optional[str] = None,
+    ) -> int:
+        """Append one agent action to a committee run. `seq` is assigned as the
+        next integer within the run, so events order deterministically even if
+        two land in the same millisecond."""
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM committee_events WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        seq = row["n"]
+        # A run's symbol is set by its first event; later events inherit it if
+        # the caller didn't repeat it.
+        if symbol is None:
+            prior = self._conn.execute(
+                "SELECT symbol FROM committee_events WHERE run_id = ? AND symbol IS NOT NULL "
+                "ORDER BY seq LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            symbol = prior["symbol"] if prior else None
+        cur = self._conn.execute(
+            """INSERT INTO committee_events
+               (run_id, seq, symbol, agent_key, event_type, to_agent, summary, logged_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (run_id, seq, symbol, agent_key, event_type, to_agent, summary,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def committee_run_events(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM committee_events WHERE run_id = ? ORDER BY seq",
+            (run_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def latest_committee_run_id(self) -> Optional[str]:
+        row = self._conn.execute(
+            "SELECT run_id FROM committee_events ORDER BY logged_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+        return row["run_id"] if row else None
+
+    def committee_run_ids(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Most recent runs, newest first: run_id, symbol, event count, last activity."""
+        rows = self._conn.execute(
+            """SELECT run_id,
+                      MAX(symbol) AS symbol,
+                      COUNT(*) AS events,
+                      MAX(logged_at) AS last_at,
+                      MAX(CASE WHEN event_type = 'memo' THEN 1 ELSE 0 END) AS concluded
+               FROM committee_events
+               GROUP BY run_id
+               ORDER BY last_at DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def committee_run_count(self) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(DISTINCT run_id) AS n FROM committee_events"
+        ).fetchone()
+        return row["n"]
 
     def close(self) -> None:
         self._conn.close()

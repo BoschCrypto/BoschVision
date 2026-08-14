@@ -364,6 +364,33 @@ builds the data, `cortex_render.py` draws it): the local server reads your
 SQLite DB live and auto-refreshes; `--publish` bakes the data into a single
 static HTML file with zero external requests, safe to host anywhere.
 
+### Watching the committee work
+
+The dashboard also shows the committee *interacting* — but only from real
+logged events, never a decorative animation. When you run a review, the CIO
+agent emits one event per stage (`hf-bot committee log-event`, wired into
+`.claude/agents/cio.md`): a delegation, a specialist's finding, a gate's
+verdict, the closing memo. The dashboard then pulses along the **actual**
+handoff path, glows whoever is working right now, and — when the memo lands —
+converges on APEX. When nothing is running it says **committee idle**, plainly.
+
+```bash
+# On your machine, a real review emits events as it runs:
+Use the cio agent to run a full review on ASTS
+
+# Or stage a realistic sample run to see the activity view immediately:
+hf-bot committee demo            # a full, concluded review
+hf-bot committee demo --partial  # left mid-review, an agent still working
+hf-bot committee runs            # list recorded reviews
+hf-bot committee show <run_id>   # replay one in the terminal
+```
+
+The **collective memory** panel is the honest version of "it learns": the
+decision journal and committee log accumulate with every review, and
+`scorecard()`'s discipline/accuracy make the team's calibration *measurable*
+over time. It is a growing record, not a model that silently gets smarter —
+the panel says so.
+
 ## Tests
 
 ```bash

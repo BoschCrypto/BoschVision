@@ -205,3 +205,79 @@ def test_render_live_mode_has_the_poll(storage):
 def test_render_embeds_the_disclaimer(storage):
     html = render_html(build_snapshot(storage), mode="static")
     assert "not a trained model" in html
+
+
+# --- committee activity -----------------------------------------------------
+
+def test_committee_none_when_no_run(storage):
+    snap = build_snapshot(storage)
+    assert snap.committee is None
+
+
+def test_committee_active_when_run_is_open_and_recent(storage):
+    storage.record_committee_event("r1", "cio", "start", "opening", symbol="ASTS")
+    storage.record_committee_event("r1", "cio", "handoff", "delegating",
+                                   to_agent="red-team")
+    snap = build_snapshot(storage)
+    c = snap.committee
+    assert c["state"] == "active"
+    # After a handoff, the target is the one now working.
+    assert c["active_agent"] == "red-team"
+    assert c["symbol"] == "ASTS"
+    assert c["concluded"] is False
+
+
+def test_committee_complete_when_memo_issued(storage):
+    storage.record_committee_event("r1", "cio", "start", "opening", symbol="NVDA")
+    storage.record_committee_event("r1", "red-team", "verdict", "survivable")
+    storage.record_committee_event("r1", "cio", "memo", "BUY, sized small")
+    snap = build_snapshot(storage)
+    c = snap.committee
+    assert c["state"] == "complete"
+    assert c["concluded"] is True
+    assert c["active_agent"] is None
+
+
+def test_committee_symbol_inherited_across_events(storage):
+    # Only the first event carries the symbol; later events inherit it.
+    storage.record_committee_event("r1", "cio", "start", "opening", symbol="ASTS")
+    storage.record_committee_event("r1", "macro-strategist", "finding", "late cycle")
+    events = storage.committee_run_events("r1")
+    assert all(e["symbol"] == "ASTS" for e in events)
+
+
+def test_committee_active_agent_is_actor_when_last_event_not_handoff(storage):
+    storage.record_committee_event("r1", "cio", "start", "opening", symbol="ASTS")
+    storage.record_committee_event("r1", "equity-analyst", "finding", "moat intact")
+    snap = build_snapshot(storage)
+    assert snap.committee["active_agent"] == "equity-analyst"
+
+
+def test_stale_open_run_is_idle_not_active(storage):
+    # Backdate the events beyond the active window by writing directly.
+    storage.record_committee_event("r1", "cio", "start", "opening", symbol="ASTS")
+    storage._conn.execute(
+        "UPDATE committee_events SET logged_at = ? WHERE run_id = 'r1'",
+        ("2020-01-01T00:00:00+00:00",),
+    )
+    storage._conn.commit()
+    snap = build_snapshot(storage)
+    assert snap.committee["state"] == "idle"
+
+
+def test_memory_grows_with_runs_and_decisions(storage):
+    j = Journal(storage._conn)
+    _buy(j, "NVDA", stop_price=90, position_pct=5)
+    storage.record_committee_event("r1", "cio", "start", "opening", symbol="NVDA")
+    storage.record_committee_event("r1", "cio", "memo", "BUY")
+    snap = build_snapshot(storage)
+    assert snap.memory["committee_runs"] == 1
+    assert snap.memory["decisions_logged"] == 1
+
+
+def test_render_shows_committee_activity_and_memory_panels(storage):
+    storage.record_committee_event("r1", "cio", "start", "opening review", symbol="ASTS")
+    storage.record_committee_event("r1", "cio", "memo", "BUY ASTS")
+    html = render_html(build_snapshot(storage), mode="static")
+    assert "Committee activity" in html
+    assert "Collective memory" in html

@@ -11,12 +11,17 @@ This module is the single source of truth for both delivery modes
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
 from .journal import Journal
 from .portfolio import ContributionLog, counterfactual
 from .storage import Storage
+
+# A run whose last event is older than this, with no memo, is treated as
+# stale rather than "live" — the dashboard won't claim an agent is working
+# when nothing has happened for half an hour.
+ACTIVE_WINDOW = timedelta(minutes=30)
 
 Status = Literal["live", "proxy", "no_data"]
 
@@ -90,6 +95,18 @@ class AgentReading:
 
 
 @dataclass
+class CommitteeActivity:
+    state: Literal["active", "complete", "idle"]
+    run_id: Optional[str] = None
+    symbol: Optional[str] = None
+    active_agent: Optional[str] = None   # agent key currently working, if state=="active"
+    concluded: bool = False
+    started_at: Optional[str] = None
+    last_at: Optional[str] = None
+    events: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
 class CortexSnapshot:
     generated_at: str
     agents: dict[str, AgentReading] = field(default_factory=dict)
@@ -97,6 +114,8 @@ class CortexSnapshot:
     open_theses: list[dict[str, Any]] = field(default_factory=list)
     latest_sweep: Optional[dict[str, Any]] = None
     watchlist: list[dict[str, Any]] = field(default_factory=list)
+    committee: Optional[dict[str, Any]] = None   # latest run activity, or None if never run
+    memory: dict[str, Any] = field(default_factory=dict)
 
 
 def _reading(
@@ -261,6 +280,67 @@ def _portfolio_panel(storage: Storage, clog: ContributionLog) -> Optional[dict[s
     }
 
 
+def _committee_activity(storage: Storage) -> Optional[dict[str, Any]]:
+    run_id = storage.latest_committee_run_id()
+    if run_id is None:
+        return None
+    events = storage.committee_run_events(run_id)
+    if not events:
+        return None
+
+    concluded = any(e["event_type"] == "memo" for e in events)
+    last = events[-1]
+    started_at = events[0]["logged_at"]
+    last_at = last["logged_at"]
+
+    # Recency: only claim "active" if something happened recently and no memo
+    # has been issued. A stale unfinished run is shown but not animated as live.
+    recent = False
+    try:
+        recent = (datetime.now(timezone.utc) - datetime.fromisoformat(last_at)) <= ACTIVE_WINDOW
+    except ValueError:
+        recent = False
+
+    if concluded:
+        state = "complete"
+        active_agent = None
+    elif recent:
+        state = "active"
+        # After a handoff, the target agent is the one now working.
+        active_agent = last["to_agent"] if last["event_type"] == "handoff" and last["to_agent"] else last["agent_key"]
+    else:
+        state = "idle"
+        active_agent = None
+
+    return {
+        "state": state,
+        "run_id": run_id,
+        "symbol": last["symbol"],
+        "active_agent": active_agent,
+        "concluded": concluded,
+        "started_at": started_at,
+        "last_at": last_at,
+        "events": events,
+    }
+
+
+def _memory(storage: Storage, journal: Journal, all_decisions: list[dict], scorecard: dict) -> dict[str, Any]:
+    """The committee's collective, growing record. Not a model that gets
+    'smarter' — an accumulating body of decisions and outcomes that makes
+    calibration measurable. It grows every time the team does real work."""
+    lessons = storage._conn.execute(
+        "SELECT COUNT(*) AS n FROM decisions WHERE lessons IS NOT NULL AND lessons != ''"
+    ).fetchone()["n"]
+    return {
+        "decisions_logged": len(all_decisions),
+        "reviewed": scorecard.get("reviewed", 0),
+        "committee_runs": storage.committee_run_count(),
+        "lessons_captured": lessons,
+        "discipline_pct": scorecard.get("discipline_pct"),
+        "accuracy_pct": scorecard.get("accuracy_pct"),
+    }
+
+
 def build_snapshot(storage: Storage) -> CortexSnapshot:
     journal = Journal(storage._conn)
     clog = ContributionLog(storage._conn)
@@ -294,4 +374,6 @@ def build_snapshot(storage: Storage) -> CortexSnapshot:
         open_theses=journal.open_decisions(),
         latest_sweep=latest_sweep,
         watchlist=watchlist,
+        committee=_committee_activity(storage),
+        memory=_memory(storage, journal, all_decisions, scorecard),
     )

@@ -44,6 +44,7 @@ def render_html(snap: CortexSnapshot, *, mode: Mode = "static") -> str:
 <div id="app">
   <header>
     <div class="brand">VANTRIX &middot; LIVE AGENT CORTEX</div>
+    <div id="committee-status"></div>
     <div class="mode-badge" data-mode="{mode}">{mode_badge}</div>
   </header>
   <main>
@@ -86,6 +87,11 @@ header { display: flex; align-items: center; justify-content: space-between;
 .mode-badge { font-size: 10px; letter-spacing: 2px; padding: 3px 9px; border-radius: 3px;
   border: 1px solid var(--live); color: var(--live); }
 .mode-badge[data-mode="static"] { border-color: var(--dim); color: var(--dim); }
+#committee-status { flex: 1 1 auto; text-align: center; font-size: 11px;
+  letter-spacing: 2px; color: var(--dim); }
+#committee-status .on { color: var(--live); }
+#committee-status .dotpulse { animation: dp 1.1s ease-in-out infinite; }
+@keyframes dp { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
 main { display: flex; flex: 1 1 auto; min-height: 0; }
 #stage { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; }
 #cortex { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -125,6 +131,12 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
   display: flex; justify-content: space-between; gap: 10px; }
 .readout .line:first-of-type { border-top: none; }
 .readout .muted { color: var(--dim); font-size: 11px; }
+.readout .ev { display: flex; gap: 8px; padding: 3px 0; font-size: 11px;
+  border-top: 1px solid var(--border); }
+.readout .ev:first-of-type { border-top: none; }
+.readout .ev .evk { flex: 0 0 auto; color: #9fb3c8; letter-spacing: 1px;
+  min-width: 108px; white-space: nowrap; }
+.readout .ev .evt { flex: 1 1 auto; color: var(--dim); }
 .disclaimer { font-size: 10px; line-height: 1.5; color: var(--dim); }
 .generated { font-size: 9px; color: #3b4656; letter-spacing: 1px; }
 @media (max-width: 820px) {
@@ -267,7 +279,84 @@ _APP_JS = r"""
       }
     }
     ctx.globalAlpha = 1;
+    drawActivity(t);
     requestAnimationFrame(draw);
+  }
+
+  // Handoff list for the current run: straight lines between the ACTUAL
+  // source and target agent nodes, in event order. Each corresponds to a real
+  // logged handoff — no handoff event, no pulse.
+  function handoffs() {
+    var c = window.__CORTEX__.committee;
+    if (!c || !c.events) return [];
+    var out = [];
+    for (var i = 0; i < c.events.length; i++) {
+      var e = c.events[i];
+      if (e.event_type === "handoff" && e.to_agent) out.push([e.agent_key, e.to_agent]);
+      else if (e.event_type === "memo") out.push([e.agent_key, "cio"]); // final convergence
+    }
+    return out;
+  }
+
+  function drawActivity(t) {
+    var c = window.__CORTEX__.committee;
+    if (!c || c.state === "idle") return;
+    var hs = handoffs();
+    if (!hs.length) return;
+
+    // Timeline: one traveling pulse advances through the handoff sequence,
+    // looping — this is the flow of work moving through the committee.
+    var SLOT = 780;               // ms per handoff
+    var GAP = 1400;               // pause before the sequence repeats
+    var cycle = hs.length * SLOT + GAP;
+    var pos = (t % cycle);
+    var idx = Math.floor(pos / SLOT);
+    var frac = (pos - idx * SLOT) / SLOT;
+
+    // trace already-completed handoffs of this cycle as faint settled lines
+    for (var k = 0; k < hs.length && k <= idx; k++) {
+      var A = byKey[hs[k][0]], B = byKey[hs[k][1]];
+      if (!A || !B) continue;
+      ctx.strokeStyle = "rgba(125,211,252,0.18)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke();
+    }
+    // the live pulse on the current handoff
+    if (idx < hs.length) {
+      var S = byKey[hs[idx][0]], T = byKey[hs[idx][1]];
+      if (S && T) {
+        var ease = frac < 0.5 ? 2 * frac * frac : 1 - Math.pow(-2 * frac + 2, 2) / 2;
+        var px = S.x + (T.x - S.x) * ease, py = S.y + (T.y - S.y) * ease;
+        // bright line from source fading to the pulse head
+        var grad = ctx.createLinearGradient(S.x, S.y, T.x, T.y);
+        grad.addColorStop(0, "rgba(125,211,252,0.05)");
+        grad.addColorStop(Math.min(1, ease), "rgba(125,211,252,0.55)");
+        grad.addColorStop(1, "rgba(125,211,252,0.0)");
+        ctx.strokeStyle = grad; ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.moveTo(S.x, S.y); ctx.lineTo(T.x, T.y); ctx.stroke();
+        // pulse head
+        ctx.globalAlpha = 1; ctx.fillStyle = "#cdeffe";
+        ctx.shadowColor = "#7dd3fc"; ctx.shadowBlur = 14;
+        ctx.beginPath(); ctx.arc(px, py, 3.2, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+    }
+    // steady glow ring on whoever is working now (active runs only)
+    if (c.state === "active" && c.active_agent && byKey[c.active_agent]) {
+      var N = byKey[c.active_agent];
+      var r = 30 + 6 * Math.sin(t / 220);
+      ctx.strokeStyle = "rgba(125,211,252," + (0.35 + 0.2 * Math.sin(t / 220)) + ")";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(N.x, N.y, r, 0, Math.PI * 2); ctx.stroke();
+    }
+    // when concluded, pulse a halo on APEX — the final say converges there
+    if (c.state === "complete" && byKey["cio"]) {
+      var P = byKey["cio"];
+      var rr = 34 + 8 * Math.sin(t / 500);
+      ctx.strokeStyle = "rgba(125,211,252," + (0.18 + 0.12 * Math.sin(t / 500)) + ")";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(P.x, P.y, rr, 0, Math.PI * 2); ctx.stroke();
+    }
   }
 
   function fmtPct(v) { return (v >= 0 ? "+" : "") + v.toFixed(1) + "%"; }
@@ -289,10 +378,80 @@ _APP_JS = r"""
     document.getElementById("roster-rows").innerHTML = rows;
     document.getElementById("gen-at").textContent = d.generated_at.replace("T", " ").slice(0, 19) + " UTC";
     document.getElementById("readouts").innerHTML = readouts(d);
+    document.getElementById("committee-status").innerHTML = statusLine(d);
+  }
+
+  function statusLine(d) {
+    var c = d.committee;
+    if (!c || c.state === "idle") return "COMMITTEE IDLE";
+    if (c.state === "active") {
+      var who = c.active_agent ? codenameOf(c.active_agent) : "committee";
+      return '<span class="on"><span class="dotpulse">●</span> REVIEWING ' +
+             (c.symbol || '') + ' &middot; ' + who + ' WORKING</span>';
+    }
+    return '<span class="on">✓ REVIEW OF ' + (c.symbol || '') +
+           ' CONCLUDED &middot; APEX ISSUED THE MEMO</span>';
+  }
+
+  var CODEBY = {};
+  function codenameOf(key) {
+    if (!CODEBY[key]) {
+      var a = window.__CORTEX__.agents[key];
+      CODEBY[key] = a ? a.codename : key;
+    }
+    return CODEBY[key];
+  }
+
+  function committeePanel(d) {
+    var c = d.committee;
+    var h = '<div class="readout"><h4>Committee activity</h4>';
+    if (!c) {
+      return h + '<div class="muted">No review has run yet. On your machine: ' +
+             '<code>Use the cio agent to review &lt;TICKER&gt;</code>, or ' +
+             '<code>hf-bot committee demo</code>.</div></div>';
+    }
+    var badge = c.state === "active" ? '<span class="pos">● WORKING</span>'
+              : c.state === "complete" ? '<span class="pos">✓ CONCLUDED</span>'
+              : '<span class="muted">○ IDLE</span>';
+    h += '<div class="sub" style="margin-bottom:6px">' + badge +
+         ' &middot; ' + (c.symbol || '—');
+    if (c.state === "active" && c.active_agent) {
+      h += ' &middot; <b style="color:' + d.agents[c.active_agent].color + '">' +
+           codenameOf(c.active_agent) + '</b> working';
+    }
+    h += '</div>';
+    // event ticker — last few actions, newest at the bottom
+    var ev = c.events || [];
+    for (var i = Math.max(0, ev.length - 6); i < ev.length; i++) {
+      var e = ev[i];
+      var who = codenameOf(e.agent_key);
+      var arrow = (e.event_type === "handoff" && e.to_agent)
+        ? ' → ' + codenameOf(e.to_agent) : '';
+      h += '<div class="ev"><span class="evk">' + who + arrow + '</span>' +
+           '<span class="evt">' + e.summary + '</span></div>';
+    }
+    return h + '</div>';
+  }
+
+  function memoryPanel(d) {
+    var m = d.memory || {};
+    var h = '<div class="readout"><h4>Collective memory</h4>';
+    h += '<div class="line"><span class="muted">reviews run</span><span>' + (m.committee_runs || 0) + '</span></div>';
+    h += '<div class="line"><span class="muted">decisions logged</span><span>' + (m.decisions_logged || 0) + '</span></div>';
+    h += '<div class="line"><span class="muted">reviewed &amp; scored</span><span>' + (m.reviewed || 0) + '</span></div>';
+    h += '<div class="line"><span class="muted">lessons captured</span><span>' + (m.lessons_captured || 0) + '</span></div>';
+    if (m.discipline_pct !== null && m.discipline_pct !== undefined) {
+      h += '<div class="line"><span class="muted">discipline</span><span class="' +
+           (m.discipline_pct >= 80 ? 'pos' : 'neg') + '">' + m.discipline_pct.toFixed(0) + '%</span></div>';
+    }
+    h += '<div class="muted" style="margin-top:6px;font-size:10px">Grows with every ' +
+         'review and outcome. Not a model that "gets smarter" — an accumulating ' +
+         'record that makes the team\'s calibration measurable.</div>';
+    return h + '</div>';
   }
 
   function readouts(d) {
-    var h = "";
+    var h = committeePanel(d) + memoryPanel(d);
     // portfolio vs SPY
     h += '<div class="readout"><h4>Portfolio vs SPY</h4>';
     if (d.portfolio) {

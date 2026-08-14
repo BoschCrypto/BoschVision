@@ -700,6 +700,126 @@ def portfolio_compare(cfg, benchmark, value):
         )
 
 
+@cli.group()
+def committee():
+    """The investment committee's working record — who acted, and how work
+    moved between agents during a review.
+
+    Agents emit events here as they run (`committee log-event`), which is what
+    makes the dashboard's activity view real: every handoff pulse and active
+    node corresponds to a logged action, not an animation.
+    """
+
+
+_COMMITTEE_EVENT_TYPES = ["start", "handoff", "finding", "verdict", "memo"]
+
+
+@committee.command("log-event")
+@click.option("--run", "run_id", required=True, help="Run id grouping this review's events.")
+@click.option("--agent", "agent_key", required=True, help="Acting agent (e.g. cio, red-team).")
+@click.option("--type", "event_type", required=True,
+              type=click.Choice(_COMMITTEE_EVENT_TYPES, case_sensitive=False))
+@click.option("--summary", required=True, help="One line: what happened.")
+@click.option("--symbol", default=None, help="Ticker under review (set on the run's first event).")
+@click.option("--to", "to_agent", default=None, help="Handoff target, for --type handoff.")
+@click.pass_obj
+def committee_log_event(cfg, run_id, agent_key, event_type, summary, symbol, to_agent):
+    """Record one agent action. Called by committee agents as they work."""
+    storage = _load_storage(cfg)
+    eid = storage.record_committee_event(
+        run_id=run_id, agent_key=agent_key, event_type=event_type.lower(),
+        summary=summary, symbol=symbol, to_agent=to_agent,
+    )
+    click.echo(f"logged event #{eid} [{run_id}] {agent_key} {event_type}"
+               + (f" → {to_agent}" if to_agent else ""))
+    storage.close()
+
+
+@committee.command("runs")
+@click.option("--limit", default=20)
+@click.pass_obj
+def committee_runs(cfg, limit):
+    """List recent committee reviews, newest first."""
+    storage = _load_storage(cfg)
+    rows = storage.committee_run_ids(limit=limit)
+    storage.close()
+    if not rows:
+        click.echo("No committee runs recorded yet.")
+        return
+    click.echo(f"{'run_id':<24} {'symbol':<8} {'events':>7} {'state':<9} last activity")
+    click.echo("-" * 72)
+    for r in rows:
+        state = "complete" if r["concluded"] else "open"
+        click.echo(f"{r['run_id']:<24} {r['symbol'] or '—':<8} {r['events']:>7} "
+                   f"{state:<9} {r['last_at'][:19]}")
+
+
+@committee.command("show")
+@click.argument("run_id")
+@click.pass_obj
+def committee_show(cfg, run_id):
+    """Replay one review's events in order."""
+    storage = _load_storage(cfg)
+    events = storage.committee_run_events(run_id)
+    storage.close()
+    if not events:
+        click.echo(f"No events for run {run_id}.")
+        return
+    for e in events:
+        arrow = f" → {e['to_agent']}" if e["to_agent"] else ""
+        click.echo(f"  {e['seq']:>2}. {e['agent_key']:<18} {e['event_type']:<8}{arrow}")
+        click.echo(f"      {e['summary']}")
+
+
+@committee.command("demo")
+@click.option("--symbol", default="ASTS", help="Ticker to stage a sample review for.")
+@click.option("--partial", is_flag=True,
+              help="Stop mid-review (no memo) so the dashboard shows an agent "
+                   "actively working rather than a finished run.")
+@click.pass_obj
+def committee_demo(cfg, symbol, partial):
+    """Record one realistic sample review, so the dashboard's activity view has
+    something to render without waiting for a live committee run. The events are
+    real DB rows following the actual pipeline — only the trigger is synthetic."""
+    import datetime as _d
+
+    storage = _load_storage(cfg)
+    run_id = _d.datetime.now(_d.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-demo"
+    steps = [
+        ("cio", "start", None, f"opening committee review on {symbol}"),
+        ("cio", "handoff", "macro-strategist", "requesting the current regime read"),
+        ("macro-strategist", "finding", None, "late-cycle, liquidity tightening — favor quality, size small"),
+        ("macro-strategist", "handoff", "equity-analyst", "regime noted; over to fundamentals"),
+        ("equity-analyst", "finding", None, "spectrum + first-mover moat; cash burn is the risk"),
+        ("equity-analyst", "handoff", "quant-analyst", "cross-check the setup statistically"),
+        ("quant-analyst", "finding", None, "no tradable edge in the price series; thesis is fundamental, not technical"),
+        ("quant-analyst", "handoff", "valuation-analyst", "over to valuation"),
+        ("valuation-analyst", "finding", None, "reverse-DCF implies flawless execution; ~40% embedded upside if it lands"),
+        ("valuation-analyst", "handoff", "red-team", "valuation done — attack it"),
+        ("red-team", "verdict", None, "dilution before revenue is the kill case; survivable if sized small"),
+        ("red-team", "handoff", "risk-manager", "not killed; size it"),
+        ("risk-manager", "verdict", None, "cap at 4% of book, hard stop -30%"),
+        ("risk-manager", "handoff", "behavioral-coach", "sizing set; gut-check the decision"),
+        ("behavioral-coach", "verdict", None, "no FOMO signature; conviction is thesis-driven, proceed"),
+        ("behavioral-coach", "handoff", "cio", "cleared all three gates"),
+        ("cio", "memo", None, f"BUY {symbol}, 4% position, stop -30%, target +40% — asymmetric, sized for the risk"),
+    ]
+    # --partial cuts off after risk-manager hands to behavioral-coach, so the
+    # coach shows as the agent currently working (no memo yet → state "active").
+    if partial:
+        steps = steps[:14]
+    for agent_key, etype, to_agent, summary in steps:
+        storage.record_committee_event(
+            run_id=run_id, agent_key=agent_key, event_type=etype,
+            summary=summary, symbol=symbol, to_agent=to_agent,
+        )
+    tail = " (partial — left mid-review)" if partial else ""
+    click.echo(f"Recorded a {len(steps)}-event sample review as run {run_id}{tail}.")
+    click.echo("Open `hf-bot dashboard` to watch it, or `hf-bot committee show "
+               f"{run_id}` to replay it in the terminal.")
+    storage.close()
+
+
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Bind address for the local server.")
 @click.option("--port", default=8420, type=int, help="Port for the local server.")

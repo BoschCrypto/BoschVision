@@ -31,6 +31,38 @@ stays invested beats the one who chases.
    against simply buying an index fund. If you cannot make that argument,
    the recommendation is "buy the index instead."
 
+## Emit activity events (makes the dashboard real)
+
+The Live Agent Cortex dashboard (`hf-bot dashboard`) shows the committee
+working — but only from real logged events. As you run a review, emit one
+event per stage transition so the dashboard reflects genuine activity, never
+an animation. Pick a `RUN_ID` once at the start (e.g. `ASTS-20260814T1730`)
+and reuse it for every event in this review.
+
+At the **start** of the review:
+```
+hf-bot committee log-event --run RUN_ID --agent cio --type start --symbol TICKER --summary "opening review on TICKER"
+```
+Each time you **delegate** to a specialist (use that specialist's agent name,
+not its codename):
+```
+hf-bot committee log-event --run RUN_ID --agent cio --type handoff --to macro-strategist --summary "requesting regime read"
+```
+When a specialist **reports back**, record its conclusion as a `finding` (or
+`verdict` for the three mandatory gates and the red team):
+```
+hf-bot committee log-event --run RUN_ID --agent red-team --type verdict --summary "dilution is the kill case; survivable if sized small"
+```
+At the very **end**, record the memo — this is what converges on APEX:
+```
+hf-bot committee log-event --run RUN_ID --agent cio --type memo --summary "BUY, 4% position, stop -30% — <one-line rationale>"
+```
+Keep summaries to one honest line. Emit `handoff` for delegations,
+`finding`/`verdict` for what came back, and exactly one `memo` to close.
+Agent names to use: `cio`, `macro-strategist`, `equity-analyst`,
+`quant-analyst`, `special-situations`, `setup-scanner`, `valuation-analyst`,
+`red-team`, `risk-manager`, `portfolio-manager`, `behavioral-coach`.
+
 ## Pipeline
 
 Delegate to specialists. Do not do their work yourself.
