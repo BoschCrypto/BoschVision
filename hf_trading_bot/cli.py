@@ -989,6 +989,135 @@ def memory_recall(cfg, query, limit):
         click.echo(f"      {e['body']}")
 
 
+@cli.group()
+def study():
+    """The team's continuous learning — each agent building a role-specific
+    library it recalls at task time.
+
+    The curriculum (knowledge/curriculum.yaml) lists what each agent should
+    study and why. The Python CLI cannot research — only a Claude session can —
+    so `study next` prints a brief for an executor to run; the executor writes
+    the distilled note under knowledge/<agent>/ and calls `study record`.
+    """
+
+
+@study.command("status")
+@click.pass_obj
+def study_status(cfg):
+    """Per-agent library size — the team's accumulated expertise."""
+    from hf_trading_bot.curriculum import agent_keys, coverage
+
+    storage = _load_storage(cfg)
+    keys = agent_keys()
+    if not keys:
+        click.echo("No curriculum found (knowledge/curriculum.yaml).")
+        storage.close()
+        return
+    absorbed_total = 0
+    topic_total = 0
+    click.echo(f"{'agent':<20} {'absorbed':>10}   library")
+    click.echo("-" * 52)
+    for k in keys:
+        studied = storage.studied_topics(k)
+        a, t = coverage(k, studied)
+        absorbed_total += a
+        topic_total += t
+        bar = "█" * a + "·" * (t - a)
+        click.echo(f"{k:<20} {f'{a}/{t}':>10}   {bar}")
+    click.echo("-" * 52)
+    click.echo(f"{'TOTAL':<20} {f'{absorbed_total}/{topic_total}':>10}")
+    storage.close()
+
+
+@study.command("next")
+@click.option("--agent", "agent_key", default=None,
+              help="Study the next topic for this agent. Omit to pick the least-studied agent.")
+@click.pass_obj
+def study_next(cfg, agent_key):
+    """Print the next uncovered topic and a study brief for a Claude executor."""
+    from hf_trading_bot.curriculum import agent_keys, coverage, next_topic, study_brief
+
+    storage = _load_storage(cfg)
+    keys = agent_keys()
+    if not keys:
+        storage.close()
+        raise click.ClickException("No curriculum found (knowledge/curriculum.yaml).")
+    if agent_key is None:
+        # pick the agent with the lowest coverage ratio, then most-behind first
+        def behind(k):
+            a, t = coverage(k, storage.studied_topics(k))
+            return (a / t if t else 1.0, a)
+        agent_key = min(keys, key=behind)
+    elif agent_key not in keys:
+        storage.close()
+        raise click.ClickException(f"Unknown agent {agent_key!r}. Known: {', '.join(keys)}")
+
+    t = next_topic(agent_key, storage.studied_topics(agent_key))
+    storage.close()
+    if t is None:
+        click.echo(f"# {agent_key} has absorbed its whole curriculum. Nothing to study.")
+        return
+    click.echo(study_brief(t))
+
+
+@study.command("record")
+@click.option("--agent", "agent_key", required=True)
+@click.option("--topic", required=True, help="Curriculum topic id that was studied.")
+@click.option("--slug", required=True, help="knowledge/<agent>/<slug>.md that was written.")
+@click.option("--sources", "sources_count", type=int, default=0)
+@click.pass_obj
+def study_record(cfg, agent_key, topic, slug, sources_count):
+    """Mark a topic absorbed (the executor calls this after writing the note)."""
+    from hf_trading_bot.curriculum import agent_keys
+
+    storage = _load_storage(cfg)
+    if agent_key not in agent_keys():
+        storage.close()
+        raise click.ClickException(f"Unknown agent {agent_key!r}.")
+    storage.record_study(agent_key, topic, slug, sources_count=sources_count)
+    click.echo(f"Recorded: {agent_key} studied '{topic}' "
+               f"(knowledge/{agent_key}/{slug}.md, {sources_count} sources).")
+    storage.close()
+
+
+@study.command("cycle")
+@click.option("--rounds", default=1, help="How many agents to dispatch this cycle.")
+@click.pass_obj
+def study_cycle(cfg, rounds):
+    """Print briefs for the next N least-studied agents — one study cycle.
+
+    A Claude session runs these; each dispatched agent researches its topic,
+    writes the note, and calls `study record`. This is the 'trickle' entry
+    point; a scheduled Routine can call it (see the README).
+    """
+    from hf_trading_bot.curriculum import agent_keys, coverage, next_topic, study_brief
+
+    storage = _load_storage(cfg)
+    keys = agent_keys()
+    if not keys:
+        storage.close()
+        raise click.ClickException("No curriculum found (knowledge/curriculum.yaml).")
+
+    def behind(k):
+        a, t = coverage(k, storage.studied_topics(k))
+        return (a / t if t else 1.0, a)
+
+    ordered = sorted(keys, key=behind)
+    dispatched = 0
+    for k in ordered:
+        if dispatched >= rounds:
+            break
+        t = next_topic(k, storage.studied_topics(k))
+        if t is None:
+            continue
+        click.echo(f"\n{'=' * 70}\n# CYCLE {dispatched + 1}/{rounds} — {k}\n{'=' * 70}")
+        click.echo(study_brief(t))
+        dispatched += 1
+    storage.close()
+    if dispatched == 0:
+        click.echo("Every agent has absorbed its whole curriculum. Nothing to study.")
+
+
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Bind address for the local server.")
 @click.option("--port", default=8420, type=int, help="Port for the local server.")

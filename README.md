@@ -410,6 +410,41 @@ Only a validated ticker ever reaches an executor, so no free-form text can be
 smuggled into a spawned process. The "Command deck" panel tracks each request's
 status (pending → running → done).
 
+### The team learns: a growing, role-specific library
+
+Each agent builds a curated body of expertise it **recalls at task time**, so
+the committee gets sharper the more it studies. The honest mechanics (this is
+learning-by-accumulation, not a retrained model) live in
+[`knowledge/README.md`](knowledge/README.md).
+
+```bash
+hf-bot study status                       # per-agent library size (coverage bars)
+hf-bot study next --agent red-team        # next curriculum topic + a study brief
+hf-bot study cycle --rounds 3             # briefs for the 3 least-studied agents
+# an executor researches, writes knowledge/<agent>/<slug>.md, then:
+hf-bot study record --agent red-team --topic famous-blowups --slug famous-blowups --sources 3
+```
+
+- **Curriculum:** `knowledge/curriculum.yaml` — per-agent topics (value
+  investing for LEDGER, monetary history for HORIZON, famous blow-ups for
+  TALON, …) with why-it-matters and research anchors.
+- **Library:** `knowledge/<agent>/<slug>.md` — distilled, sourced notes,
+  git-committed so the knowledge is durable (the memory *database* is
+  gitignored; these files are the source of truth). See
+  `knowledge/red-team/famous-blowups.md` for the format.
+- **Recall:** every specialist reads its `knowledge/<agent>/` dir and runs
+  `hf-bot memory recall` before any task — that's what turns a growing library
+  into sharper operators.
+- **Bootstrap then trickle:** `Use the cio agent to run a study cycle` (large
+  `--rounds` to seed the whole team, then `--rounds 1–2` ongoing).
+
+**Optional autonomous learning (off by default).** To have the team study on a
+schedule without you, a Claude Code Routine can fire a study cycle — e.g. daily
+— and commit the new notes. It spends tokens on its own, so it's opt-in: enable
+it deliberately (a `create_trigger` firing `Use the cio agent to run a study
+cycle --rounds 2` in this repo's environment), and disable it any time. Nothing
+runs autonomously unless you turn it on.
+
 ### Shared memory that persists across sessions
 
 Beyond the counts, the committee keeps a **durable, recallable memory** — the

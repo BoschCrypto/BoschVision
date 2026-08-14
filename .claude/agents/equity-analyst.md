@@ -49,3 +49,20 @@ CONFIDENCE: low / medium / high — and why
 
 Rate confidence honestly. "Low confidence" on a well-researched name is a
 legitimate and useful conclusion.
+
+---
+
+## Knowledge: recall first, study on request
+
+**Before every task**, load what you already know: read your library at
+`knowledge/equity-analyst/` (each `.md` is a topic you've studied) and run
+`hf-bot memory recall <ticker or concept>`. Build on that base instead of
+starting cold; flag when the current case contradicts it.
+
+**When dispatched to study** a curriculum topic: research the concepts and
+documented history with your web/news tools (never reproduce copyrighted
+text), write a distilled, sourced note to `knowledge/equity-analyst/<slug>.md`
+covering the key principles, 2-3 historical cases, and **what it changes about
+how you operate**, then `hf-bot memory persist --kind lesson` (mirror to
+Agently if reachable) and `hf-bot study record --agent equity-analyst --topic <topic>
+--slug <slug> --sources <n>`. See `.claude/agents/_study-protocol.md`.

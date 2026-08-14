@@ -1,0 +1,169 @@
+# Per-agent curriculum: the concepts, frameworks, and historical cases each
+# committee member studies to become a sharper operator of its realm.
+#
+# HONESTY NOTE: agents do not read or reproduce copyrighted books. They RESEARCH
+# the ideas, frameworks, and documented history *about* each topic using their
+# web/news tools, then distil durable, sourced lessons into knowledge/<agent>/.
+# "Learning" here means an accumulating, recall-at-task-time library — not a
+# retrained model.
+#
+# Each topic: `topic` (short id), `why` (why it matters to this role), and a few
+# `seeds` (authors / events / frameworks to anchor the research — starting
+# points, not a required reading list).
+
+equity-analyst:            # LEDGER — business quality at a reasonable price
+  - topic: value-investing-foundations
+    why: The discipline of paying less than a business is worth is the floor everything else stands on.
+    seeds: ["Graham & Dodd margin of safety", "Buffett owner-earnings", "Mr. Market allegory"]
+  - topic: economic-moats
+    why: A durable competitive advantage is what lets a good result compound instead of reverting.
+    seeds: ["Porter five forces", "Morningstar moat framework", "network effects vs switching costs"]
+  - topic: quality-and-compounders
+    why: Great businesses at fair prices beat fair businesses at great prices over long holds.
+    seeds: ["Terry Smith 'buy good companies'", "return on incremental capital", "reinvestment runway"]
+  - topic: accounting-red-flags
+    why: Most permanent losses trace to numbers that were never real; learn to smell them early.
+    seeds: ["Financial Shenanigans (Schilit)", "cash flow vs earnings divergence", "aggressive revenue recognition"]
+  - topic: capital-allocation
+    why: Management's reinvestment, buyback, and M&A choices decide per-share outcomes more than the business.
+    seeds: ["The Outsiders (Thorndike)", "buybacks below intrinsic value", "empire-building M&A"]
+
+macro-strategist:          # HORIZON — the regime and what it favours
+  - topic: monetary-history
+    why: Today's policy debates rhyme with documented history; knowing it prevents naive extrapolation.
+    seeds: ["Lords of Finance (Ahamed)", "gold standard collapse", "Bretton Woods to Nixon shock"]
+  - topic: debt-and-credit-cycles
+    why: Leverage builds and unwinds in recognizable patterns that dominate multi-year returns.
+    seeds: ["Dalio 'Big Debt Crises'", "Minsky financial instability", "private vs public deleveraging"]
+  - topic: inflation-regimes
+    why: The 1970s and 2021-23 show how inflation reprices every asset and breaks naive playbooks.
+    seeds: ["1970s stagflation", "Volcker disinflation", "supply vs demand-driven inflation"]
+  - topic: liquidity-and-the-yield-curve
+    why: Liquidity and curve shape lead the real economy and risk appetite more reliably than GDP prints.
+    seeds: ["yield-curve inversion base rates", "central bank balance sheets", "real vs nominal rates"]
+
+quant-analyst:             # CIPHER — is the signal real or noise
+  - topic: factor-investing
+    why: Most 'edges' are known factor exposures in disguise; naming them avoids paying for beta as alpha.
+    seeds: ["Fama-French factors", "AQR value/momentum research", "quality-minus-junk"]
+  - topic: overfitting-and-data-mining
+    why: The default outcome of unconstrained backtesting is a beautiful curve that fails live.
+    seeds: ["Lopez de Prado 'backtest overfitting'", "deflated Sharpe ratio", "multiple-testing bias"]
+  - topic: bias-taxonomy
+    why: Survivorship, look-ahead, and selection bias silently inflate almost every naive study.
+    seeds: ["survivorship bias in indices", "look-ahead in point-in-time data", "selection bias"]
+  - topic: position-sizing-math
+    why: Even a real edge is destroyed by wrong bet sizing; the math is non-negotiable.
+    seeds: ["Kelly criterion", "fractional Kelly", "risk of ruin"]
+
+valuation-analyst:         # COMPASS — what the price already assumes
+  - topic: dcf-and-reverse-dcf
+    why: Reverse-DCF turns 'is it cheap' into the testable question 'what must be true at this price'.
+    seeds: ["Damodaran DCF", "reverse-DCF implied growth", "terminal value sensitivity"]
+  - topic: multiples-and-comps
+    why: Multiples are shorthand DCFs; using them well means knowing what each one embeds.
+    seeds: ["EV/EBITDA vs P/E", "peer selection pitfalls", "cyclically-adjusted multiples"]
+  - topic: margin-of-safety
+    why: The gap between price and conservative value is the only protection against being wrong.
+    seeds: ["Graham margin of safety", "scenario-weighted value", "downside-first valuation"]
+  - topic: valuation-bubbles
+    why: Historical manias show what terminal over-valuation looks like from inside it.
+    seeds: ["dot-com 2000", "Nifty Fifty", "2021 growth/SPAC peak"]
+
+red-team:                  # TALON — the kill case
+  - topic: famous-blowups
+    why: Studying how theses died is the fastest way to recognize the next one early.
+    seeds: ["LTCM 1998", "Enron", "Wirecard", "Valeant", "Archegos"]
+  - topic: fraud-red-flags
+    why: Frauds share a recognizable signature; pattern-matching it prevents catastrophic losses.
+    seeds: ["related-party transactions", "auditor changes", "cash that never converts", "Shenanigans playbook"]
+  - topic: base-rates-of-ruin
+    why: Most exciting stories have grim base rates; anchoring to them defeats narrative seduction.
+    seeds: ["pre-revenue dilution", "story-stock base rates", "leverage + illiquidity"]
+  - topic: pre-mortems-and-disconfirmation
+    why: Actively seeking what would prove a thesis wrong is the antidote to confirmation bias.
+    seeds: ["Klein pre-mortem", "Munger inversion", "disconfirming evidence discipline"]
+
+risk-manager:              # BASTION — survive first
+  - topic: position-sizing-and-kelly
+    why: The size of a bet, not its direction, is what most often ends accounts.
+    seeds: ["Kelly criterion", "half-Kelly in practice", "volatility targeting"]
+  - topic: drawdown-and-ruin-math
+    why: A 50% loss needs a 100% gain to recover; the asymmetry governs every limit.
+    seeds: ["drawdown recovery math", "risk of ruin", "sequence-of-returns risk"]
+  - topic: correlation-in-crises
+    why: Diversification fails exactly when needed as correlations converge to one in panics.
+    seeds: ["2008 correlation spike", "tail dependence", "hidden common factors"]
+  - topic: leverage-blowups
+    why: Almost every permanent wipeout involved leverage meeting a liquidity shock.
+    seeds: ["LTCM leverage", "portfolio margin calls", "gap risk on stops"]
+
+portfolio-manager:         # LATTICE — the whole book
+  - topic: portfolio-construction
+    why: Returns come from the portfolio, not from any single position viewed in isolation.
+    seeds: ["mean-variance intuition", "risk parity critique", "position weighting schemes"]
+  - topic: diversification-math
+    why: Real diversification is about independent bets, not counting tickers.
+    seeds: ["number of independent bets", "correlation vs count", "concentration vs breadth"]
+  - topic: concentration-vs-kelly
+    why: How much to bet on the best idea is the central tension of active management.
+    seeds: ["Kelly for portfolios", "Buffett concentration", "diworsification (Lynch)"]
+  - topic: rebalancing-and-endowments
+    why: Disciplined rebalancing harvests volatility; endowment models show long-horizon allocation.
+    seeds: ["rebalancing premium", "Yale endowment model", "glide paths"]
+
+behavioral-coach:          # ECHO — the psychology gate
+  - topic: cognitive-biases
+    why: The same biases repeat in every bad trade; naming them in the moment breaks the loop.
+    seeds: ["Kahneman 'Thinking, Fast and Slow'", "loss aversion", "anchoring", "recency"]
+  - topic: munger-misjudgment
+    why: A checklist of psychological failure modes catches errors reasoning alone misses.
+    seeds: ["Munger 'Psychology of Human Misjudgment'", "incentive-caused bias", "social proof"]
+  - topic: trading-psychology
+    why: FOMO, revenge trading, and sunk-cost thinking destroy otherwise-sound processes.
+    seeds: ["FOMO after a runner", "revenge trading after a loss", "disposition effect"]
+  - topic: process-vs-outcome
+    why: Judging decisions by results in a noisy world rewards luck and punishes discipline.
+    seeds: ["resulting (Annie Duke)", "process journaling", "calibration over accuracy"]
+
+special-situations:        # EMBER — catalysts and events
+  - topic: spinoffs-and-restructurings
+    why: Forced-selling and neglect around corporate events create recurring mispricings.
+    seeds: ["Greenblatt 'Stock Market Genius'", "spinoff forced selling", "stub securities"]
+  - topic: merger-arbitrage
+    why: Deal spreads price the market's probability of closing — sometimes wrongly.
+    seeds: ["merger-arb spread mechanics", "regulatory break risk", "deal-break base rates"]
+  - topic: distressed-and-bankruptcy
+    why: The capital structure decides who recovers what; mispricing hides in the waterfall.
+    seeds: ["absolute priority rule", "fulcrum security", "Chapter 11 process"]
+  - topic: activism-and-insider-buying
+    why: Aligned, informed buyers and activists can be catalysts the market underweights.
+    seeds: ["13D activist campaigns", "cluster insider buying", "management-alignment signals"]
+
+setup-scanner:             # RADAR — candidates, with base rates
+  - topic: base-rates-of-technical-setups
+    why: A pattern is only useful with its historical hit rate; without it, it is decoration.
+    seeds: ["volatility contraction base rates", "breakout failure rates", "sample-size discipline"]
+  - topic: relative-strength
+    why: Leadership tends to persist; measuring it focuses the research queue.
+    seeds: ["O'Neil relative strength", "cross-sectional momentum", "sector leadership rotation"]
+  - topic: volatility-contraction
+    why: Coiled, low-volatility consolidations precede many large expansions — and many fake-outs.
+    seeds: ["Minervini VCP", "Bollinger squeeze", "ATR compression"]
+  - topic: screening-discipline
+    why: A screen generates a research queue, never a buy signal; conflating them is how money is lost.
+    seeds: ["screen as funnel not trigger", "false-positive management", "catalyst overlay"]
+
+cio:                       # APEX — synthesis and judgment
+  - topic: decision-journaling
+    why: Contemporaneous, falsifiable notes are the only real defence against hindsight bias.
+    seeds: ["thesis + falsification", "calibration scoring", "pre-committed exits"]
+  - topic: checklists-and-base-rates
+    why: Complex decisions under uncertainty are improved more by checklists than by brilliance.
+    seeds: ["Gawande 'Checklist Manifesto'", "outside view / base rates", "reference-class forecasting"]
+  - topic: buffett-munger-letters
+    why: Decades of shareholder letters are a compressed course in temperament and capital allocation.
+    seeds: ["Berkshire shareholder letters", "circle of competence", "temperament over IQ"]
+  - topic: synthesis-under-disagreement
+    why: The CIO's job is integrating conflicting expert views into one sized decision, not averaging them.
+    seeds: ["dialectical bookkeeping", "steelmanning dissent", "weighting by track record"]

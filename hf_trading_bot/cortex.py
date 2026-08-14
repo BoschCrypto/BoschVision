@@ -154,6 +154,7 @@ class CortexSnapshot:
     committee: Optional[dict[str, Any]] = None   # latest run activity, or None if never run
     memory: dict[str, Any] = field(default_factory=dict)
     commands: list[dict[str, Any]] = field(default_factory=list)   # command-deck history
+    knowledge: dict[str, Any] = field(default_factory=dict)        # per-agent library growth
 
 
 def _reading(
@@ -390,6 +391,33 @@ def _memory(storage: Storage, journal: Journal, all_decisions: list[dict], score
     }
 
 
+def _knowledge(storage: Storage) -> dict[str, Any]:
+    """Per-agent curriculum coverage — the team's accumulated, recallable
+    expertise. Grows as agents study; the dashboard renders it honestly as a
+    library, not as a retrained model."""
+    from .curriculum import coverage, load_curriculum
+
+    curric = load_curriculum()
+    per_agent = {}
+    absorbed_total = 0
+    topic_total = 0
+    for agent_key in curric:
+        studied = storage.studied_topics(agent_key)
+        a, t = coverage(agent_key, studied)
+        per_agent[agent_key] = {"absorbed": a, "total": t}
+        absorbed_total += a
+        topic_total += t
+    return {
+        "per_agent": per_agent,
+        "absorbed_total": absorbed_total,
+        "topic_total": topic_total,
+        "recent": [
+            {"agent": r["agent_key"], "topic": r["topic"], "slug": r["slug"]}
+            for r in storage.recent_study(limit=6)
+        ],
+    }
+
+
 def build_snapshot(storage: Storage) -> CortexSnapshot:
     journal = Journal(storage._conn)
     clog = ContributionLog(storage._conn)
@@ -430,4 +458,5 @@ def build_snapshot(storage: Storage) -> CortexSnapshot:
              "detail": c["detail"], "created_at": c["created_at"]}
             for c in storage.recent_commands(limit=8)
         ],
+        knowledge=_knowledge(storage),
     )

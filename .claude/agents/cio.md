@@ -93,6 +93,21 @@ so the dashboard shows it as brain-backed (◈) rather than local-only (◇).
 Persist only genuinely durable conclusions — one focused episode per review.
 Never store secrets, credentials, or anyone's personal data.
 
+## Running a study cycle (growing the team)
+
+When asked to run a study cycle (or `Use the cio agent to run a study cycle`),
+you make the team sharper:
+
+1. `hf-bot study cycle --rounds <n>` prints briefs for the least-studied
+   agents. For **bootstrap**, use a larger `--rounds` (e.g. one per agent) to
+   seed the whole committee; for the ongoing **trickle**, `--rounds 1` or `2`.
+2. For each brief, dispatch that specialist to study its topic — it researches,
+   writes `knowledge/<agent>/<slug>.md`, persists a lesson, mirrors to Agently
+   if reachable, and calls `hf-bot study record`.
+3. Commit the new `knowledge/` notes. `hf-bot study status` shows the library
+   growing. This is the honest engine of "the team learns the more it does" —
+   an accumulating, recalled library, not a retrained model.
+
 ## Pipeline
 
 Delegate to specialists. Do not do their work yourself.

@@ -148,6 +148,20 @@ CREATE TABLE IF NOT EXISTS command_queue (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- Index of what each agent has studied. The distilled lesson itself lives in
+-- knowledge/<agent>/<slug>.md (git-committed, durable) and as a memory_episodes
+-- row; this table just records that a curriculum topic was absorbed, so the
+-- trickle knows what's next and the dashboard can show each agent's growth.
+CREATE TABLE IF NOT EXISTS study_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_key TEXT NOT NULL,
+    topic TEXT NOT NULL,                -- curriculum topic id
+    slug TEXT NOT NULL,                 -- knowledge/<agent>/<slug>.md
+    sources_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    UNIQUE(agent_key, topic)
+);
 """
 
 DEFAULT_WATCHLIST = [
@@ -483,6 +497,45 @@ class Storage:
             "SELECT * FROM command_queue WHERE id = ?", (command_id,)
         ).fetchone()
         return dict(row) if row else None
+
+    # --- study log ---------------------------------------------------------
+
+    def record_study(self, agent_key: str, topic: str, slug: str,
+                     sources_count: int = 0) -> int:
+        """Mark a curriculum topic as absorbed by an agent. Idempotent on
+        (agent, topic): re-studying updates the note count and timestamp."""
+        cur = self._conn.execute(
+            """INSERT INTO study_log (agent_key, topic, slug, sources_count, created_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(agent_key, topic) DO UPDATE SET
+                   slug=excluded.slug, sources_count=excluded.sources_count,
+                   created_at=excluded.created_at""",
+            (agent_key, topic, slug, sources_count,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def studied_topics(self, agent_key: str) -> set[str]:
+        rows = self._conn.execute(
+            "SELECT topic FROM study_log WHERE agent_key = ?", (agent_key,)
+        ).fetchall()
+        return {r["topic"] for r in rows}
+
+    def study_counts(self) -> dict[str, int]:
+        rows = self._conn.execute(
+            "SELECT agent_key, COUNT(*) AS n FROM study_log GROUP BY agent_key"
+        ).fetchall()
+        return {r["agent_key"]: r["n"] for r in rows}
+
+    def recent_study(self, limit: int = 12) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM study_log ORDER BY created_at DESC, id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def study_total(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) AS n FROM study_log").fetchone()["n"]
 
     def close(self) -> None:
         self._conn.close()

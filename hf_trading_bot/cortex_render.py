@@ -604,8 +604,38 @@ _APP_JS = r"""
     return h + '</div>';
   }
 
+  function knowledgePanel(d) {
+    var k = d.knowledge || {};
+    var pa = k.per_agent || {};
+    var h = '<div class="readout"><h4>Knowledge / curriculum</h4>';
+    var total = k.absorbed_total || 0, cap = k.topic_total || 0;
+    if (!cap) { return h + '<div class="muted">No curriculum loaded.</div></div>'; }
+    h += '<div class="line"><span class="muted">library absorbed</span><span>' +
+         total + ' / ' + cap + ' topics</span></div>';
+    // per-agent coverage bars, in committee order
+    for (var key in d.agents) {
+      var c = pa[key]; if (!c) continue;
+      var a = c.absorbed, t = c.total, col = d.agents[key].color;
+      var bar = '';
+      for (var i = 0; i < t; i++) {
+        bar += '<span style="color:' + (i < a ? col : '#2a3a4a') + '">&#9632;</span>';
+      }
+      h += '<div class="ev"><span class="evk">' + codenameOf(key) + '</span>' +
+           '<span class="evt" style="letter-spacing:1px">' + bar + '</span></div>';
+    }
+    var rec = k.recent || [];
+    if (rec.length) {
+      h += '<div class="muted" style="margin-top:6px;font-size:10px">latest: ' +
+           codenameOf(rec[0].agent) + ' &middot; ' + rec[0].topic + '</div>';
+    }
+    h += '<div class="muted" style="margin-top:4px;font-size:10px">Each agent ' +
+         'recalls its library at task time. A growing store of studied concepts ' +
+         'and cases — not a retrained model.</div>';
+    return h + '</div>';
+  }
+
   function readouts(d) {
-    var h = commandDeckPanel(d) + committeePanel(d) + memoryPanel(d);
+    var h = commandDeckPanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
     // portfolio vs SPY
     h += '<div class="readout"><h4>Portfolio vs SPY</h4>';
     if (d.portfolio) {
