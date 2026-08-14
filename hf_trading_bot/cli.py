@@ -1129,9 +1129,12 @@ def study_cycle(cfg, rounds):
               help="Let the dashboard SPAWN a real committee review (via the local "
                    "`claude` CLI) when you issue a command. Off by default: this runs "
                    "Claude with your tools and spends tokens, so it must be opted into.")
+@click.option("--open", "open_browser", is_flag=True,
+              help="Open the dashboard in your default browser once the server is up.")
 @click.pass_obj
 def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
-              publish_path: Optional[str], enable_agent_runner: bool):
+              publish_path: Optional[str], enable_agent_runner: bool,
+              open_browser: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
 
     Each agent's firing-rate number is real logged data (journal, sweeps,
@@ -1303,14 +1306,44 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         if enable_agent_runner else
         "  agent-runner off — commands queue for a Claude session to run"
     )
-    click.echo(f"Live Agent Cortex — http://{host}:{port}  (refresh {refresh}s, Ctrl+C to stop)")
+    # The address to actually type in a browser: when bound to all interfaces,
+    # localhost still works here, and other devices use this machine's LAN IP.
+    local_url = f"http://127.0.0.1:{port}" if host in ("0.0.0.0", "127.0.0.1", "localhost") \
+        else f"http://{host}:{port}"
+    click.echo(f"Live Agent Cortex — {local_url}  (refresh {refresh}s, Ctrl+C to stop)")
     click.echo(runner_note)
+    if host == "0.0.0.0":
+        lan_ip = _lan_ip()
+        if lan_ip:
+            click.echo(f"  on this network (e.g. your phone): http://{lan_ip}:{port}")
+        click.echo("  NOTE: bound to all interfaces — anyone on your network can reach "
+                   "this. Keep --enable-agent-runner OFF unless you trust the network.")
+    if open_browser:
+        import threading
+        import webbrowser
+        threading.Timer(0.8, lambda: webbrowser.open(local_url)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         click.echo("\nStopped.")
     finally:
         server.server_close()
+
+
+def _lan_ip() -> Optional[str]:
+    """Best-effort local network IP, so other devices can reach the dashboard.
+    Uses a UDP socket that never actually sends anything."""
+    import socket
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":
