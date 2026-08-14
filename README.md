@@ -330,10 +330,38 @@ data, with live readout panels (portfolio-vs-SPY gap, open theses, latest
 sweep verdict, watchlist).
 
 ```bash
-hf-bot dashboard                       # serve live at http://127.0.0.1:8420
+hf-bot dashboard --open                # serve live and open your browser
+hf-bot dashboard --host 0.0.0.0 --open # + reachable from your phone on the same wifi
 hf-bot dashboard --port 9000 --refresh 30
 hf-bot dashboard --publish cortex.html # one self-contained static file
 ```
+
+On Windows, double-click **`run-dashboard.bat`** — it activates the venv,
+starts the server, and opens your browser.
+
+### Reaching it from anywhere (secure tunnel)
+
+The dashboard can dispatch committee reviews, so **never expose it without a
+token**. Turn on auth, then point a tunnel at it:
+
+```bash
+# 1. Start with an access token (auto-generated and printed):
+hf-bot dashboard --auth
+#    → prints:  access token: <TOKEN>   and a  http://127.0.0.1:8420/?key=<TOKEN>  link
+
+# 2. In a second terminal, open a public HTTPS tunnel to the same port:
+cloudflared tunnel --url http://localhost:8420      # or: ngrok http 8420
+#    → gives a public URL like https://something.trycloudflare.com
+
+# 3. Open  https://something.trycloudflare.com/?key=<TOKEN>  on any device.
+```
+
+The `?key=<TOKEN>` sets a cookie, so you only paste it once per device. Every
+request — the page, the live poll, and command dispatch — is rejected without
+it (`401`), with constant-time token comparison. Keep `--enable-agent-runner`
+**off** on a tunnel unless you fully trust it: the token gates access, but the
+runner spawns Claude with your tools. The tunnel and your PC must stay running;
+for always-on access, host it on a small server instead.
 
 Each agent carries a personal codename and a metric drawn straight from the
 database — no fabricated numbers, matching the standard in

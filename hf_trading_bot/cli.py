@@ -1131,10 +1131,16 @@ def study_cycle(cfg, rounds):
                    "Claude with your tools and spends tokens, so it must be opted into.")
 @click.option("--open", "open_browser", is_flag=True,
               help="Open the dashboard in your default browser once the server is up.")
+@click.option("--token", default=None,
+              help="Require this secret to access the dashboard — essential before "
+                   "exposing it via a tunnel. Opened once as ?key=..., then a cookie.")
+@click.option("--auth", is_flag=True,
+              help="Require a token; auto-generate and print a strong one if --token "
+                   "isn't given. Use this for tunnels.")
 @click.pass_obj
 def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               publish_path: Optional[str], enable_agent_runner: bool,
-              open_browser: bool):
+              open_browser: bool, token: Optional[str], auth: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
 
     Each agent's firing-rate number is real logged data (journal, sweeps,
@@ -1183,6 +1189,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     refresh_ms = max(2000, refresh * 1000)
     claude_bin = shutil.which("claude") if enable_agent_runner else None
 
+    # Access token: required before exposing the dashboard past this machine.
+    if auth and not token:
+        import secrets
+        token = secrets.token_urlsafe(18)
+    require_auth = bool(token)
+
     def _run_review(command_id: int, symbol: str, prompt: str):
         """Spawn a real committee review via the local `claude` CLI. Runs in a
         background thread; the review emits its own committee events, so the
@@ -1215,14 +1227,44 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                 s.close()
 
     class Handler(BaseHTTPRequestHandler):
-        def _send(self, code: int, body: bytes, content_type: str):
+        def _send(self, code: int, body: bytes, content_type: str, set_cookie: bool = False):
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            if set_cookie and require_auth:
+                # host-only cookie; carried automatically by same-origin fetches
+                self.send_header("Set-Cookie",
+                                 f"cortex_key={token}; Path=/; HttpOnly; SameSite=Lax")
             self.end_headers()
             self.wfile.write(body)
 
+        def _auth_state(self):
+            """(authed, via_query) — via_query means the token arrived as
+            ?key=... and we should set the cookie on the response."""
+            from urllib.parse import urlparse
+
+            if not require_auth:
+                return True, False
+            return _token_match(
+                token,
+                header=self.headers.get("X-Cortex-Key", ""),
+                cookie=self.headers.get("Cookie", ""),
+                query=urlparse(self.path).query,
+            )
+
+        def _deny(self):
+            body = (b"<!doctype html><meta charset=utf-8>"
+                    b"<body style='font-family:monospace;background:#03060b;color:#dbe9f4;"
+                    b"padding:40px'><h3>Live Agent Cortex &mdash; locked</h3>"
+                    b"<p>This dashboard requires an access token. Open the link that "
+                    b"includes <code>?key=&lt;your token&gt;</code> printed by the server.</p></body>")
+            self._send(401, body, "text/html; charset=utf-8")
+
         def do_GET(self):
+            authed, via_query = self._auth_state()
+            if not authed:
+                self._deny()
+                return
             try:
                 req_storage = Storage(db_path)
                 try:
@@ -1242,7 +1284,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     f"window.__CORTEX_REFRESH_MS__ = {refresh_ms};\nwindow.__CORTEX__ =",
                     1,
                 )
-                self._send(200, html.encode(), "text/html; charset=utf-8")
+                self._send(200, html.encode(), "text/html; charset=utf-8", set_cookie=via_query)
             except Exception:  # never return an empty response — show the error
                 tb = traceback.format_exc()
                 body = ("<pre style='color:#f87171;background:#05070a;padding:20px'>"
@@ -1254,6 +1296,10 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
 
         def do_POST(self):
             try:
+                authed, _ = self._auth_state()
+                if not authed:
+                    self._send(401, b'{"error":"unauthorized"}', "application/json")
+                    return
                 if not self.path.startswith("/api/command"):
                     self._send(404, b'{"error":"not found"}', "application/json")
                     return
@@ -1310,8 +1356,14 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     # localhost still works here, and other devices use this machine's LAN IP.
     local_url = f"http://127.0.0.1:{port}" if host in ("0.0.0.0", "127.0.0.1", "localhost") \
         else f"http://{host}:{port}"
-    click.echo(f"Live Agent Cortex — {local_url}  (refresh {refresh}s, Ctrl+C to stop)")
+    open_url = f"{local_url}/?key={token}" if require_auth else local_url
+    click.echo(f"Live Agent Cortex — {open_url}  (refresh {refresh}s, Ctrl+C to stop)")
     click.echo(runner_note)
+    if require_auth:
+        click.echo(f"  access token: {token}")
+        click.echo("  token required — the ?key=... link above sets a cookie; share "
+                   "only with yourself. To expose it, point a tunnel at "
+                   f"127.0.0.1:{port} and open <tunnel-url>/?key={token}")
     if host == "0.0.0.0":
         lan_ip = _lan_ip()
         if lan_ip:
@@ -1344,6 +1396,32 @@ def _lan_ip() -> Optional[str]:
             s.close()
     except Exception:
         return None
+
+
+def _token_match(expected: str, *, header: str = "", cookie: str = "",
+                 query: str = "") -> tuple[bool, bool]:
+    """Whether a request is authorized for the dashboard, and whether the token
+    arrived via ?key=... (so the caller should set the cookie). Constant-time
+    comparison throughout, so a wrong guess leaks no timing signal.
+
+    An empty `expected` means auth is disabled → always authorized.
+    """
+    import hmac
+    from urllib.parse import parse_qs
+
+    if not expected:
+        return True, False
+    if header and hmac.compare_digest(header, expected):
+        return True, False
+    for part in cookie.split(";"):
+        if "=" in part:
+            k, _, v = part.strip().partition("=")
+            if k == "cortex_key" and hmac.compare_digest(v, expected):
+                return True, False
+    for v in parse_qs(query).get("key", []):
+        if hmac.compare_digest(v, expected):
+            return True, True
+    return False, False
 
 
 if __name__ == "__main__":

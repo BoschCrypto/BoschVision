@@ -437,3 +437,32 @@ def test_render_shows_command_deck(storage):
     html = render_html(build_snapshot(storage), mode="static")
     assert "Command deck" in html
     assert "COMMAND" in html  # the command bar prompt
+
+
+# --- dashboard access token -------------------------------------------------
+
+def test_token_match_disabled_when_no_token():
+    from hf_trading_bot.cli import _token_match
+    authed, via_query = _token_match("")
+    assert authed is True and via_query is False
+
+
+def test_token_match_via_query_signals_cookie():
+    from hf_trading_bot.cli import _token_match
+    authed, via_query = _token_match("s3cret", query="key=s3cret")
+    assert authed is True and via_query is True
+
+
+def test_token_match_via_cookie_and_header():
+    from hf_trading_bot.cli import _token_match
+    assert _token_match("s3cret", cookie="cortex_key=s3cret") == (True, False)
+    assert _token_match("s3cret", header="s3cret") == (True, False)
+    # other cookies alongside the right one still authorize
+    assert _token_match("s3cret", cookie="foo=bar; cortex_key=s3cret")[0] is True
+
+
+def test_token_match_rejects_wrong_or_missing():
+    from hf_trading_bot.cli import _token_match
+    assert _token_match("s3cret", query="key=nope") == (False, False)
+    assert _token_match("s3cret", cookie="cortex_key=nope") == (False, False)
+    assert _token_match("s3cret") == (False, False)
