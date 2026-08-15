@@ -1153,6 +1153,95 @@ def chart_cmd(cfg, symbol, days):
     click.echo(f"  {bars[0].t[:10]} → {bars[-1].t[:10]}\n")
 
 
+@cli.command("seed-demo")
+@click.pass_obj
+def seed_demo(cfg):
+    """Populate sample data so every agent lights up on the dashboard.
+
+    Clearly-labeled DEMO data — delete the DB (or use a fresh --config) to
+    reset. Uses no network."""
+    import datetime as _d
+
+    from hf_trading_bot.journal import Decision, Journal
+    from hf_trading_bot.portfolio import Contribution, ContributionLog
+
+    storage = _load_storage(cfg)
+    j = Journal(storage._conn)
+    j.record(Decision(symbol="ASTS", decision="BUY", conviction="high",
+        thesis="Direct-to-cell has a multi-year lead and a spectrum moat (demo data).",
+        falsification="A rival reaches commercial direct-to-cell first, or launch cadence slips past 2027.",
+        red_team_objection="Cash burn forces dilution before revenue.",
+        entry_price=28, stop_price=19, target_price=55, position_pct=4))
+    j.record(Decision(symbol="NVDA", decision="BUY", conviction="medium",
+        thesis="Datacenter GPU demand is structurally underestimated (demo data).",
+        falsification="Two consecutive quarters of falling hyperscaler capex, or gross margin below 60%.",
+        red_team_objection="Custom silicon erodes the CUDA moat.",
+        entry_price=170, stop_price=140, target_price=240, position_pct=6))
+    did = j.record(Decision(symbol="PLTR", decision="BUY", conviction="medium",
+        thesis="Government AI backlog is compounding and commercial is inflecting (demo data).",
+        falsification="Commercial net-retention below 115%, or a major government cancellation.",
+        red_team_objection="Valuation leaves no margin of safety.",
+        entry_price=25, stop_price=20, target_price=40, position_pct=3))
+    j.review(did, outcome="right", exit_price=38, pnl_pct=52, followed_own_rules=True,
+             lessons="Exited at the pre-committed target (demo).")
+    j.record(Decision(symbol="INTC", decision="PASS", conviction="low",
+        thesis="No durable moat at this price (demo data).",
+        falsification="Foundry execution turns and yields recover."))
+
+    storage.record_sweep_result(run_id="demo", strategy_key="rsi_mean_reversion",
+        symbols_tested=24, wins=8, hit_rate_pct=33.0, median_excess_pts=-37.4,
+        total_trades=185, window_start="2021-01-01", window_end="2026-08-15")
+
+    for i, (sym, strat) in enumerate([("AAPL", "momentum_90d"), ("NVDA", "momentum_90d"),
+                                      ("MSFT", "sma_crossover")]):
+        storage.upsert_watchlist_symbol(sym, strat, live_enabled=True, rank=i)
+
+    clog = ContributionLog(storage._conn)
+    clog.add(Contribution("2026-06-01", 5000.0, "demo"))
+    clog.add(Contribution("2026-07-01", 2000.0, "demo"))
+    eq = 7000.0
+    for i in range(12):
+        eq *= 1 + (0.011 if i % 3 else -0.006)
+        d = (_d.date(2026, 7, 1) + _d.timedelta(days=i * 3)).isoformat()
+        storage._conn.execute(
+            "INSERT INTO equity_snapshots (equity, cash, snapshot_at) VALUES (?,?,?)",
+            (round(eq, 2), round(eq * 0.4, 2), d + "T16:00:00+00:00"))
+    storage._conn.commit()
+
+    rid = "demo-" + _d.datetime.now(_d.timezone.utc).strftime("%H%M%S")
+    steps = [("cio", "start", None, "opening demo review on ASTS"),
+             ("cio", "handoff", "macro-strategist", "requesting the regime read"),
+             ("macro-strategist", "finding", None, "late-cycle, tightening — size small"),
+             ("macro-strategist", "handoff", "equity-analyst", "over to fundamentals"),
+             ("equity-analyst", "finding", None, "spectrum moat intact, cash burn is the risk"),
+             ("equity-analyst", "handoff", "sniper", "time the entry"),
+             ("sniper", "finding", None, "basing above support, volume firming"),
+             ("sniper", "handoff", "red-team", "attack it"),
+             ("red-team", "verdict", None, "dilution is the kill case; survivable if small"),
+             ("red-team", "handoff", "risk-manager", "size it"),
+             ("risk-manager", "verdict", None, "cap 4%, stop -30%"),
+             ("risk-manager", "handoff", "cio", "cleared the gates"),
+             ("cio", "memo", None, "BUY ASTS, 4% (demo)")]
+    for a, t, to, summ in steps:
+        storage.record_committee_event(rid, a, t, summ, symbol="ASTS", to_agent=to)
+
+    storage.record_memory_episode(kind="lesson",
+        title="Blow-ups share a signature: leverage + hidden correlation (demo)",
+        body="LTCM/Enron/Archegos — leverage + illiquidity + a correlation treated as independent.")
+    for a, topic in [("red-team", "famous-blowups"),
+                     ("equity-analyst", "value-investing-foundations"),
+                     ("sniper", "price-action-and-candles")]:
+        storage.record_study(a, topic, topic, sources_count=3)
+
+    storage.record_order_proposal(symbol="ASTS", side="buy", qty=7.14, est_price=28.0,
+        est_notional=200.0, stop_price=19.0, broker=cfg.broker, decision_id=1,
+        rationale="demo — approve from the Orders panel")
+
+    click.echo("Seeded DEMO data. Launch `hf-bot dashboard --open` — every agent should light up.")
+    click.echo("This is labeled demo data; delete the DB or use a fresh --config to reset.")
+    storage.close()
+
+
 @cli.command("account")
 @click.pass_obj
 def account_cmd(cfg):
