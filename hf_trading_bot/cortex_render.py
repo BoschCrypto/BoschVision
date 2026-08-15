@@ -212,6 +212,21 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
   white-space: pre-wrap; border-left: 2px solid var(--cyan-dim); padding-left: 8px; }
 .turn .apex.working { color: var(--cyan); }
 .turn .apex.muted2 { color: var(--dim); border-left-color: var(--border); }
+/* orders (execution bridge) */
+.ord { margin: 7px 0; border-top: 1px solid var(--border); padding-top: 7px; }
+.ord:first-of-type { border-top: none; padding-top: 0; }
+.ordline { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.ord .osym { font-size: 11px; color: var(--text); letter-spacing: 1px; }
+.cst.proposed { color: var(--gold); border: 1px solid rgba(255,207,112,0.4); }
+.cst.placed, .cst.filled { color: var(--live); border: 1px solid rgba(70,230,200,0.4); }
+.ordbtns { display: flex; gap: 8px; margin-top: 6px; }
+.order-btn { flex: 1 1 auto; font-family: inherit; font-size: 10px; letter-spacing: 2px;
+  padding: 5px 0; border-radius: 3px; cursor: pointer; background: transparent; }
+.order-btn.ok { color: var(--live); border: 1px solid rgba(70,230,200,0.5); }
+.order-btn.ok:hover { background: rgba(70,230,200,0.15); }
+.order-btn.no { color: var(--dim); border: 1px solid var(--border); }
+.order-btn.no:hover { background: rgba(255,107,107,0.12); color: var(--danger); border-color: rgba(255,107,107,0.4); }
+.order-btn:disabled { opacity: 0.5; cursor: default; }
 .rrow { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 0; }
 .rrow .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .rrow .rcn { flex: 1 1 auto; letter-spacing: 1px; }
@@ -664,8 +679,38 @@ _APP_JS = r"""
     return h + '</div>';
   }
 
+  function ordersPanel(d) {
+    var orders = d.orders || [];
+    var h = '<div class="readout"><h4>Orders &middot; paper</h4>';
+    if (!orders.length) {
+      return h + '<div class="muted">No orders staged. When the committee decides, ' +
+             'VECTOR stages a proposal here for you to approve.</div></div>';
+    }
+    var live = !!window.__CORTEX_LIVE__;
+    for (var i = 0; i < orders.length; i++) {
+      var o = orders[i];
+      var stop = o.stop_price ? ' &middot; stop $' + Number(o.stop_price).toFixed(2) : '';
+      h += '<div class="ord"><div class="ordline">' +
+           '<span class="osym">' + o.side.toUpperCase() + ' ' + Number(o.qty).toFixed(4) +
+           ' ' + o.symbol + ' <span class="muted">~$' +
+           Number(o.est_notional).toLocaleString(undefined,{maximumFractionDigits:0}) + stop +
+           '</span></span>' +
+           '<span class="cst ' + o.status + '">' + o.status.toUpperCase() + '</span></div>';
+      if (o.status === 'proposed' && live) {
+        h += '<div class="ordbtns">' +
+             '<button class="order-btn ok" data-id="' + o.id + '" data-action="approve">APPROVE</button>' +
+             '<button class="order-btn no" data-id="' + o.id + '" data-action="reject">REJECT</button>' +
+             '</div>';
+      } else if (o.detail && (o.status === 'failed' || o.status === 'rejected')) {
+        h += '<div class="muted" style="font-size:10px">' + esc(o.detail) + '</div>';
+      }
+      h += '</div>';
+    }
+    return h + '</div>';
+  }
+
   function readouts(d) {
-    var h = apexConsolePanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
+    var h = apexConsolePanel(d) + ordersPanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
     // portfolio vs SPY
     h += '<div class="readout"><h4>Portfolio vs SPY</h4>';
     if (d.portfolio) {
@@ -723,6 +768,29 @@ _APP_JS = r"""
 # snapshots so an exported file contains no fetch() and stays self-contained.
 _CMD_JS = r"""
 (function () {
+  window.__CORTEX_LIVE__ = true;   // enables order Approve/Reject buttons in the panel
+
+  // Approve / reject a staged order — a direct, token-free action.
+  document.addEventListener("click", function (ev) {
+    var btn = ev.target.closest ? ev.target.closest(".order-btn") : null;
+    if (!btn || btn.disabled) return;
+    var id = btn.getAttribute("data-id"), action = btn.getAttribute("data-action");
+    if (action === "approve" && !window.confirm("Place this PAPER order now?")) return;
+    var row = btn.parentNode;
+    row.innerHTML = '<span class="muted">' + (action === "approve" ? "placing…" : "rejecting…") + '</span>';
+    fetch("/api/order", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action: action, id: Number(id)})
+    }).then(function (r) { return r.json(); })
+      .then(function (res) {
+        row.innerHTML = '<span class="' + (res.ok ? "" : "muted") + '" style="font-size:10px">' +
+          (res.ok ? (res.status || "done").toUpperCase() + (res.order_id ? " · " + res.order_id : "")
+                  : (res.error || "refused")) + '</span>';
+        if (window.__CORTEX_REFRESH__) window.__CORTEX_REFRESH__();
+      })
+      .catch(function () { row.innerHTML = '<span class="muted">no server</span>'; });
+  });
+
   var cmdbar = document.getElementById("cmdbar");
   if (!cmdbar || cmdbar.tagName !== "FORM") return;
   cmdbar.addEventListener("submit", function (ev) {

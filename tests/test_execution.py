@@ -158,3 +158,26 @@ def test_proposal_lifecycle_in_storage(storage):
     r = storage.get_order_proposal(pid)
     assert r["status"] == "filled" and r["broker_order_id"] == "paper-1"
     assert r["decision_id"] == 7
+
+
+# --- dashboard reflection ---------------------------------------------------
+
+def test_snapshot_includes_order_proposals(storage):
+    from hf_trading_bot.cortex import build_snapshot
+    storage.record_order_proposal(symbol="AAPL", side="buy", qty=2, est_price=200,
+                                  est_notional=400, stop_price=180, broker="paper")
+    snap = build_snapshot(storage)
+    assert len(snap.orders) == 1
+    o = snap.orders[0]
+    assert o["symbol"] == "AAPL" and o["status"] == "proposed"
+    assert o["est_notional"] == pytest.approx(400)
+
+
+def test_render_shows_orders_panel_and_proposal(storage):
+    from hf_trading_bot.cortex import build_snapshot
+    from hf_trading_bot.cortex_render import render_html
+    storage.record_order_proposal(symbol="AAPL", side="buy", qty=2, est_price=200,
+                                  est_notional=400, broker="paper")
+    html = render_html(build_snapshot(storage), mode="static")
+    assert "Orders" in html
+    assert "AAPL" in html

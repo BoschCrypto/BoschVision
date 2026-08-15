@@ -1439,6 +1439,63 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
             finally:
                 s.close()
 
+    def _handle_order_action(action, proposal_id):
+        """Approve (place) or reject a proposed order from the dashboard. A
+        direct action — no Claude, no tokens — behind the same guards as the
+        CLI. Places paper orders only."""
+        from hf_trading_bot.execution import ProposedOrder, place, validate
+
+        try:
+            proposal_id = int(proposal_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "missing or invalid order id"}
+        s = Storage(db_path)
+        try:
+            r = s.get_order_proposal(proposal_id)
+            if not r:
+                return {"ok": False, "error": f"no proposal #{proposal_id}"}
+            if r["status"] != "proposed":
+                return {"ok": False, "error": f"proposal #{proposal_id} is '{r['status']}', not open"}
+            if action == "reject":
+                s.update_order_proposal(proposal_id, status="rejected",
+                                        detail="rejected from dashboard")
+                return {"ok": True, "id": proposal_id, "status": "rejected"}
+            if action != "approve":
+                return {"ok": False, "error": f"unknown action {action!r}"}
+
+            settings = s.get_settings()
+            proposal = ProposedOrder(
+                symbol=r["symbol"], side=r["side"], qty=r["qty"], est_price=r["est_price"],
+                est_notional=r["est_notional"], stop_price=r["stop_price"],
+                take_profit=r["take_profit"], decision_id=r["decision_id"],
+            )
+            try:
+                broker = _build_broker(cfg)
+                broker.get_daily_bars([proposal.symbol])   # establish a price
+                acct = broker.get_account()
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "error": f"could not read the broker: {e}"}
+
+            ok, reasons = validate(
+                proposal, broker_name=cfg.broker,
+                kill_switch=bool(settings["kill_switch_active"]),
+                buying_power=acct.buying_power,
+            )
+            if not ok:
+                s.update_order_proposal(proposal_id, status="rejected", detail="; ".join(reasons))
+                return {"ok": False, "error": "; ".join(reasons), "id": proposal_id}
+            try:
+                placed = place(broker, proposal)
+            except Exception as e:  # noqa: BLE001
+                s.update_order_proposal(proposal_id, status="failed", detail=str(e))
+                return {"ok": False, "error": f"placement failed: {e}", "id": proposal_id}
+            s.update_order_proposal(proposal_id, status=placed.status or "placed",
+                                    detail=f"placed via {cfg.broker}", broker_order_id=placed.id)
+            return {"ok": True, "id": proposal_id, "status": placed.status or "placed",
+                    "order_id": placed.id, "summary": proposal.summary()}
+        finally:
+            s.close()
+
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code: int, body: bytes, content_type: str, set_cookie: bool = False):
             self.send_response(code)
@@ -1512,6 +1569,16 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                 authed, _ = self._auth_state()
                 if not authed:
                     self._send(401, b'{"error":"unauthorized"}', "application/json")
+                    return
+                # Order approval/rejection — a direct, token-FREE action (no
+                # Claude run). Places a paper order behind the same guards.
+                if self.path.startswith("/api/order"):
+                    length = int(self.headers.get("Content-Length", 0))
+                    raw = self.rfile.read(length) if length else b"{}"
+                    payload = json.loads(raw or b"{}")
+                    out = _handle_order_action(payload.get("action"), payload.get("id"))
+                    code = 200 if out.get("ok") else 400
+                    self._send(code, json.dumps(out).encode(), "application/json")
                     return
                 if not self.path.startswith("/api/command"):
                     self._send(404, b'{"error":"not found"}', "application/json")

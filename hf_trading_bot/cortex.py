@@ -210,6 +210,7 @@ class CortexSnapshot:
     memory: dict[str, Any] = field(default_factory=dict)
     commands: list[dict[str, Any]] = field(default_factory=list)   # command-deck history
     knowledge: dict[str, Any] = field(default_factory=dict)        # per-agent library growth
+    orders: list[dict[str, Any]] = field(default_factory=list)     # execution-bridge proposals
 
 
 def _reading(
@@ -515,4 +516,10 @@ def build_snapshot(storage: Storage) -> CortexSnapshot:
             for c in storage.recent_commands(limit=8)
         ],
         knowledge=_knowledge(storage),
+        orders=[
+            {"id": o["id"], "symbol": o["symbol"], "side": o["side"], "qty": o["qty"],
+             "est_notional": o["est_notional"], "status": o["status"],
+             "stop_price": o["stop_price"], "detail": o["detail"]}
+            for o in storage.recent_order_proposals(limit=8)
+        ],
     )
