@@ -247,6 +247,20 @@ class Storage:
     def set_kill_switch(self, active: bool) -> None:
         self.update_settings(kill_switch_active=int(active))
 
+    def latest_equity_snapshot(self) -> Optional[dict[str, Any]]:
+        row = self._conn.execute(
+            "SELECT * FROM equity_snapshots ORDER BY snapshot_at DESC, id DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
+
+    def equity_history(self, limit: int = 90) -> list[dict[str, Any]]:
+        """Equity snapshots oldest-first, for charting."""
+        rows = self._conn.execute(
+            "SELECT equity, cash, snapshot_at FROM equity_snapshots "
+            "ORDER BY snapshot_at DESC, id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
     def get_watchlist(self) -> list[dict[str, Any]]:
         rows = self._conn.execute("SELECT * FROM watchlist_symbols ORDER BY rank, symbol").fetchall()
         out = []

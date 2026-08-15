@@ -240,6 +240,7 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
 .readout h4 { margin: 0 0 6px; font-size: 10px; letter-spacing: 2px; color: var(--dim);
   text-transform: uppercase; }
 .readout .big { font-size: 22px; font-variant-numeric: tabular-nums; }
+.spark { width: 100%; height: 46px; display: block; margin: 8px 0 2px; }
 .readout .sub { font-size: 11px; color: var(--dim); }
 .readout .pos { color: var(--live); } .readout .neg { color: #f87171; }
 .readout .line { font-size: 11px; padding: 3px 0; border-top: 1px solid var(--border);
@@ -709,8 +710,47 @@ _APP_JS = r"""
     return h + '</div>';
   }
 
+  function sparkline(hist, w, hgt) {
+    if (!hist || hist.length < 2) return "";
+    var vals = hist.map(function (p) { return p.equity; });
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    var span = (hi - lo) || 1, n = vals.length;
+    var pts = vals.map(function (v, i) {
+      var x = (i / (n - 1)) * w;
+      var y = hgt - ((v - lo) / span) * (hgt - 4) - 2;
+      return x.toFixed(1) + "," + y.toFixed(1);
+    });
+    var up = vals[n - 1] >= vals[0];
+    var col = up ? "var(--live)" : "var(--danger)";
+    var area = "0," + hgt + " " + pts.join(" ") + " " + w + "," + hgt;
+    return '<svg class="spark" viewBox="0 0 ' + w + ' ' + hgt + '" preserveAspectRatio="none">' +
+           '<polygon points="' + area + '" fill="' + col + '" fill-opacity="0.10"/>' +
+           '<polyline points="' + pts.join(" ") + '" fill="none" stroke="' + col +
+           '" stroke-width="1.5"/>' +
+           '<circle cx="' + w + '" cy="' + pts[n-1].split(",")[1] + '" r="2.5" fill="' + col + '"/>' +
+           '</svg>';
+  }
+
+  function accountPanel(d) {
+    var a = d.account;
+    var h = '<div class="readout"><h4>Account &middot; paper</h4>';
+    if (!a) {
+      return h + '<div class="muted">No balance recorded yet. Run ' +
+             '<code>hf-bot account</code> to pull it from the broker.</div></div>';
+    }
+    var cls = a.change_pct >= 0 ? "pos" : "neg";
+    h += '<div class="big">$' + Number(a.equity).toLocaleString(undefined,{maximumFractionDigits:2}) + '</div>';
+    h += '<div class="sub">equity &middot; <span class="' + cls + '">' + fmtPct(a.change_pct) +
+         '</span> over ' + (a.history ? a.history.length : 0) + ' snapshots</div>';
+    h += sparkline(a.history, 300, 46);
+    h += '<div class="line" style="margin-top:6px"><span class="muted">cash</span><span>$' +
+         Number(a.cash).toLocaleString(undefined,{maximumFractionDigits:2}) + '</span></div>';
+    h += '<div class="line"><span class="muted">as of</span><span>' + (a.as_of||'').slice(0,16).replace('T',' ') + '</span></div>';
+    return h + '</div>';
+  }
+
   function readouts(d) {
-    var h = apexConsolePanel(d) + ordersPanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
+    var h = accountPanel(d) + apexConsolePanel(d) + ordersPanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
     // portfolio vs SPY
     h += '<div class="readout"><h4>Portfolio vs SPY</h4>';
     if (d.portfolio) {

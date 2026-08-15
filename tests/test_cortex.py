@@ -514,3 +514,25 @@ def test_token_match_rejects_wrong_or_missing():
     assert _token_match("s3cret", query="key=nope") == (False, False)
     assert _token_match("s3cret", cookie="cortex_key=nope") == (False, False)
     assert _token_match("s3cret") == (False, False)
+
+
+# --- account panel + equity chart ------------------------------------------
+
+def test_account_none_without_snapshots(storage):
+    assert build_snapshot(storage).account is None
+
+
+def test_account_block_has_balance_and_history(storage):
+    storage.record_equity_snapshot(equity=10000.0, cash=4000.0)
+    storage.record_equity_snapshot(equity=10500.0, cash=3500.0)
+    a = build_snapshot(storage).account
+    assert a["equity"] == 10500.0 and a["cash"] == 3500.0
+    assert len(a["history"]) == 2
+    assert a["change_pct"] == pytest.approx(5.0)   # 10000 -> 10500
+
+
+def test_render_shows_account_panel_and_sparkline(storage):
+    storage.record_equity_snapshot(equity=10000.0, cash=4000.0)
+    storage.record_equity_snapshot(equity=10500.0, cash=3500.0)
+    html = render_html(build_snapshot(storage), mode="static")
+    assert "Account" in html and "sparkline" in html

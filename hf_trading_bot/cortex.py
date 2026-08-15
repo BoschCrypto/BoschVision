@@ -214,6 +214,7 @@ class CortexSnapshot:
     commands: list[dict[str, Any]] = field(default_factory=list)   # command-deck history
     knowledge: dict[str, Any] = field(default_factory=dict)        # per-agent library growth
     orders: list[dict[str, Any]] = field(default_factory=list)     # execution-bridge proposals
+    account: Optional[dict[str, Any]] = None                        # balance + equity history
 
 
 def _reading(
@@ -533,4 +534,21 @@ def build_snapshot(storage: Storage) -> CortexSnapshot:
              "stop_price": o["stop_price"], "detail": o["detail"]}
             for o in storage.recent_order_proposals(limit=8)
         ],
+        account=_account(storage),
     )
+
+
+def _account(storage: Storage) -> Optional[dict[str, Any]]:
+    latest = storage.latest_equity_snapshot()
+    if latest is None:
+        return None
+    hist = storage.equity_history(limit=90)
+    equities = [h["equity"] for h in hist]
+    first = equities[0] if equities else latest["equity"]
+    return {
+        "equity": latest["equity"],
+        "cash": latest["cash"],
+        "as_of": latest["snapshot_at"],
+        "change_pct": ((latest["equity"] / first - 1) * 100) if first else 0.0,
+        "history": [{"t": h["snapshot_at"][:10], "equity": h["equity"]} for h in hist],
+    }

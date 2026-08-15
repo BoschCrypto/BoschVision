@@ -1118,6 +1118,26 @@ def study_cycle(cfg, rounds):
         click.echo("Every agent has absorbed its whole curriculum. Nothing to study.")
 
 
+@cli.command("account")
+@click.pass_obj
+def account_cmd(cfg):
+    """Show the broker balance and record an equity snapshot (feeds the chart)."""
+    storage = _load_storage(cfg)
+    try:
+        broker = _build_broker(cfg)
+        acct = broker.get_account()
+    except Exception as e:  # noqa: BLE001
+        storage.close()
+        raise click.ClickException(f"Could not read the broker: {e}") from e
+    storage.record_equity_snapshot(equity=acct.equity, cash=acct.cash)
+    chg = (acct.equity - acct.last_equity)
+    click.echo(f"  Equity        ${acct.equity:>12,.2f}   ({chg:+,.2f} vs last)")
+    click.echo(f"  Cash          ${acct.cash:>12,.2f}")
+    click.echo(f"  Buying power  ${acct.buying_power:>12,.2f}   (broker: {cfg.broker})")
+    click.echo("  Snapshot recorded — it will show on the dashboard's Account chart.")
+    storage.close()
+
+
 @cli.group()
 def order():
     """The execution bridge — turn a committee decision into a broker order.
