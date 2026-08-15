@@ -421,18 +421,28 @@ _APP_JS = r"""
       ctx.strokeStyle = "rgba(95,230,255," + pulse + ")";
       ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke();
     }
-    // particles
+    // particles — the agent working RIGHT NOW flares bright (a live burst as
+    // each agent acts during a run), so you see the committee firing in real time.
+    var comm = window.__CORTEX__.committee;
+    var activeKey = (comm && comm.state === "active") ? comm.active_agent : null;
     for (var c = 0; c < clusters.length; c++) {
       var cl = clusters[c];
+      var hot = (cl.key === activeKey);
+      // a fast burst envelope for the active agent (0.6..1.0), else steady
+      var burst = hot ? (0.7 + 0.3 * Math.sin(t / 130)) : 1;
       for (var j = 0; j < cl.parts.length; j++) {
         var pt = cl.parts[j];
         var wob = pt.core ? 3 + cl.n * 5 : 4;
         var x = cl.x + pt.bx + Math.cos(t / 1000 * pt.sp + pt.ph) * wob;
         var y = cl.y + pt.by + Math.sin(t / 1000 * pt.sp + pt.ph * 1.7) * wob;
         var alpha = pt.core ? (0.55 + 0.4 * Math.sin(t / 600 * pt.sp + pt.ph)) : 0.10;
+        var rad = pt.rad;
+        if (hot && pt.core) { alpha = Math.min(1, alpha * 1.6) * burst + 0.15; rad = pt.rad * 1.35; }
         ctx.globalAlpha = Math.max(0, alpha);
         ctx.fillStyle = cl.color;
-        ctx.beginPath(); ctx.arc(x, y, pt.rad, 0, Math.PI * 2); ctx.fill();
+        if (hot && pt.core) { ctx.shadowColor = cl.color; ctx.shadowBlur = 7; }
+        ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill();
+        if (hot && pt.core) ctx.shadowBlur = 0;
       }
     }
     ctx.globalAlpha = 1;
