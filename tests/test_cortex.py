@@ -536,3 +536,20 @@ def test_render_shows_account_panel_and_sparkline(storage):
     storage.record_equity_snapshot(equity=10500.0, cash=3500.0)
     html = render_html(build_snapshot(storage), mode="static")
     assert "Account" in html and "sparkline" in html
+
+
+# --- agent activity → growing dots -----------------------------------------
+
+def test_agent_activity_counts_committee_and_study(storage):
+    storage.record_committee_event("r1", "red-team", "verdict", "x", symbol="AAPL")
+    storage.record_committee_event("r1", "red-team", "handoff", "y", to_agent="cio")
+    storage.record_study("red-team", "famous-blowups", "famous-blowups")
+    snap = build_snapshot(storage)
+    assert snap.agents["red-team"].activity == 3   # 2 events + 1 study
+    assert snap.agents["sniper"].activity == 0
+
+
+def test_activity_is_in_the_snapshot_payload(storage):
+    storage.record_committee_event("r1", "sniper", "finding", "chart read", symbol="NVDA")
+    snap = build_snapshot(storage)
+    assert snap.agents["sniper"].activity == 1

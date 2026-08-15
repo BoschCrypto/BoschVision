@@ -193,6 +193,7 @@ class AgentReading:
     status: Status
     source: str
     note: Optional[str] = None
+    activity: int = 0        # logged actions + studies — grows the agent's cloud
 
 
 @dataclass
@@ -517,6 +518,9 @@ def build_snapshot(storage: Storage) -> CortexSnapshot:
         "red-team": _talon(buy_sell),
         "sniper": _sniper(),
     }
+    activity = storage.agent_activity_counts()
+    for key, reading in agents.items():
+        reading.activity = activity.get(key, 0)
 
     return CortexSnapshot(
         generated_at=datetime.now(timezone.utc).isoformat(),

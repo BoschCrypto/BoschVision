@@ -315,7 +315,12 @@ _APP_JS = r"""
       var p = pos[key], a = p.a;
       var n = norm(key, a.metric_value);
       var isHub = a.ring === "center";
-      var coreN = a.status === "no_data" ? 0 : Math.round(6 + n * (isHub ? 70 : 48));
+      // Core particles = a baseline + the metric + logged ACTIVITY. The more an
+      // agent has actually done (committee actions, studies), the denser its
+      // cloud — so memory growth is visible as more dots by the agent's name.
+      var metricN = a.status === "no_data" ? 0 : Math.round(n * (isHub ? 64 : 42));
+      var actN = Math.min(isHub ? 60 : 44, (a.activity || 0) * 2);
+      var coreN = Math.min(isHub ? 120 : 90, 3 + metricN + actN);
       var haloN = isHub ? 26 : 16;
       var spread = (isHub ? 78 : 46) * (Math.min(W, H) / 900);
       var parts = [];

@@ -456,6 +456,21 @@ class Storage:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def agent_activity_counts(self) -> dict[str, int]:
+        """Per-agent tally of logged work — committee actions plus topics
+        studied. Drives the growing particle density on the cortex: the more an
+        agent has actually done, the denser its cloud."""
+        counts: dict[str, int] = {}
+        for r in self._conn.execute(
+            "SELECT agent_key, COUNT(*) AS n FROM committee_events GROUP BY agent_key"
+        ).fetchall():
+            counts[r["agent_key"]] = counts.get(r["agent_key"], 0) + r["n"]
+        for r in self._conn.execute(
+            "SELECT agent_key, COUNT(*) AS n FROM study_log GROUP BY agent_key"
+        ).fetchall():
+            counts[r["agent_key"]] = counts.get(r["agent_key"], 0) + r["n"]
+        return counts
+
     def committee_run_count(self) -> int:
         row = self._conn.execute(
             "SELECT COUNT(DISTINCT run_id) AS n FROM committee_events"
