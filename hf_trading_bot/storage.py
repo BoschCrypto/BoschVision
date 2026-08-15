@@ -169,6 +169,30 @@ CREATE TABLE IF NOT EXISTS study_log (
     created_at TEXT NOT NULL,
     UNIQUE(agent_key, topic)
 );
+
+-- The execution bridge: a committee decision becomes a PROPOSED order here.
+-- Nothing is sent to the broker until the proposal is explicitly approved, and
+-- even then only through the same guards the strategy engine enforces (kill
+-- switch, position caps, paper-only). Every state transition is recorded, so
+-- the path from "the committee decided" to "an order was placed" is auditable.
+CREATE TABLE IF NOT EXISTS order_proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id INTEGER,               -- journal decision that motivated it, if any
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,                -- buy | sell
+    qty REAL NOT NULL,
+    est_price REAL NOT NULL,
+    est_notional REAL NOT NULL,
+    stop_price REAL,
+    take_profit REAL,
+    rationale TEXT,
+    broker TEXT,                       -- broker context that sized it
+    status TEXT NOT NULL,              -- proposed | approved | placed | filled | rejected | failed | canceled
+    broker_order_id TEXT,
+    detail TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 DEFAULT_WATCHLIST = [
@@ -559,6 +583,55 @@ class Storage:
 
     def study_total(self) -> int:
         return self._conn.execute("SELECT COUNT(*) AS n FROM study_log").fetchone()["n"]
+
+    # --- order proposals (execution bridge) --------------------------------
+
+    def record_order_proposal(
+        self, symbol: str, side: str, qty: float, est_price: float, est_notional: float,
+        stop_price: Optional[float] = None, take_profit: Optional[float] = None,
+        rationale: Optional[str] = None, broker: Optional[str] = None,
+        decision_id: Optional[int] = None, status: str = "proposed",
+    ) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        cur = self._conn.execute(
+            """INSERT INTO order_proposals
+               (decision_id, symbol, side, qty, est_price, est_notional, stop_price,
+                take_profit, rationale, broker, status, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (decision_id, symbol.upper(), side.lower(), qty, est_price, est_notional,
+             stop_price, take_profit, rationale, broker, status, now, now),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def update_order_proposal(
+        self, proposal_id: int, status: str,
+        detail: Optional[str] = None, broker_order_id: Optional[str] = None,
+    ) -> None:
+        self._conn.execute(
+            "UPDATE order_proposals SET status = ?, detail = COALESCE(?, detail), "
+            "broker_order_id = COALESCE(?, broker_order_id), updated_at = ? WHERE id = ?",
+            (status, detail, broker_order_id, datetime.now(timezone.utc).isoformat(), proposal_id),
+        )
+        self._conn.commit()
+
+    def get_order_proposal(self, proposal_id: int) -> Optional[dict[str, Any]]:
+        row = self._conn.execute(
+            "SELECT * FROM order_proposals WHERE id = ?", (proposal_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def pending_order_proposals(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM order_proposals WHERE status = 'proposed' ORDER BY id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def recent_order_proposals(self, limit: int = 10) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM order_proposals ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def close(self) -> None:
         self._conn.close()

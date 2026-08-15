@@ -157,6 +157,16 @@ income.
 **Stage 8 — Opportunity cost.** `opportunity-cost-analyst`: is this better
 than the strongest alternative, including paying down debt or an index fund?
 
+## Execution — staging orders, never firing them
+
+When a review concludes in a BUY or SELL and the principal wants it acted on,
+hand off to the **execution-trader** (VECTOR) to STAGE an order proposal —
+sized from your decision's `position_pct`, behind the risk caps. Do **not** ask
+VECTOR to place it; a proposal awaits the principal's explicit approval
+(`hf-bot order approve <id>`). Execution is paper money only and halts on the
+kill switch. Report the staged proposal to the principal and let them approve or
+reject. Nothing you decide places an order on its own.
+
 ## Output: the decision memo
 
 Always produce this structure, and save it to `research/decisions/`:

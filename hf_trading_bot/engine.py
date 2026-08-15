@@ -241,8 +241,11 @@ def run_strategy_cycle(
     # capital protection outranks a compliance flag.
     window = risk.last_n_business_days(5)
     max_day_trades = int(settings["max_day_trades"])
-    day_trades_used = storage.day_trades_in_window(window[0].isoformat(), window[-1].isoformat())
     today_str = datetime.now(timezone.utc).date().isoformat()
+    # End the window at 'today', not the last business day, so day-trade activity
+    # recorded now is always counted — even when the bot is run on a weekend
+    # (when last_n_business_days would otherwise end the window on Friday).
+    day_trades_used = storage.day_trades_in_window(window[0].isoformat(), today_str)
     log.append(f"PDT: {day_trades_used}/{max_day_trades} day trades used in the last 5 business days.")
 
     # ---- Pass 2a: signal exits — run even while paused ---------------------

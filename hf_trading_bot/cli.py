@@ -1118,6 +1118,182 @@ def study_cycle(cfg, rounds):
         click.echo("Every agent has absorbed its whole curriculum. Nothing to study.")
 
 
+@cli.group()
+def order():
+    """The execution bridge — turn a committee decision into a broker order.
+
+    A decision becomes a PROPOSED order (sized against your risk limits, nothing
+    sent). You approve it deliberately; only then is it placed — paper money
+    only, behind the kill switch and position caps. Nothing here auto-trades.
+    """
+
+
+def _price_for(broker, symbol: str) -> float:
+    bars = broker.get_daily_bars([symbol])
+    series = bars.get(symbol) or bars.get(symbol.upper()) or []
+    if not series:
+        raise click.ClickException(
+            f"No price available for {symbol} — check the symbol and your data source."
+        )
+    return series[-1].c
+
+
+@order.command("propose")
+@click.option("--symbol", required=True)
+@click.option("--side", type=click.Choice(["buy", "sell"], case_sensitive=False), required=True)
+@click.option("--pct", "position_pct", type=float, default=None,
+              help="Target size as % of equity (BUY). Omit for the small default.")
+@click.option("--stop", "stop_price", type=float, default=None)
+@click.option("--target", "take_profit", type=float, default=None)
+@click.option("--decision", "decision_id", type=int, default=None,
+              help="Journal decision id this order executes, if any.")
+@click.option("--rationale", default=None)
+@click.pass_obj
+def order_propose(cfg, symbol, side, position_pct, stop_price, take_profit, decision_id, rationale):
+    """Size and record a PROPOSED order. Does not place anything."""
+    from hf_trading_bot.execution import ExecutionError, build_proposal
+
+    storage = _load_storage(cfg)
+    broker = _build_broker(cfg)
+    settings = storage.get_settings()
+    try:
+        price = _price_for(broker, symbol.upper())
+        acct = broker.get_account()
+        held_qty = held_value = 0.0
+        for p in broker.get_positions():
+            if p.symbol.upper() == symbol.upper():
+                held_qty, held_value = p.qty, p.market_value
+        proposal = build_proposal(
+            symbol=symbol, side=side, price=price, equity=acct.equity,
+            buying_power=acct.buying_power, max_position_pct=settings["max_position_pct"],
+            position_pct=position_pct, held_qty=held_qty, held_value=held_value,
+            stop_price=stop_price, take_profit=take_profit,
+            decision_id=decision_id, rationale=rationale or "",
+        )
+    except ExecutionError as e:
+        storage.close()
+        raise click.ClickException(str(e)) from e
+
+    pid = storage.record_order_proposal(
+        symbol=proposal.symbol, side=proposal.side, qty=proposal.qty,
+        est_price=proposal.est_price, est_notional=proposal.est_notional,
+        stop_price=proposal.stop_price, take_profit=proposal.take_profit,
+        rationale=proposal.rationale, broker=cfg.broker, decision_id=decision_id,
+    )
+    click.echo(f"Proposed order #{pid}: {proposal.summary()}")
+    click.echo(f"Approve it with:  hf-bot order approve {pid}   (or reject {pid})")
+    storage.close()
+
+
+@order.command("list")
+@click.option("--limit", default=15)
+@click.pass_obj
+def order_list(cfg, limit):
+    """Recent order proposals and their status."""
+    storage = _load_storage(cfg)
+    rows = storage.recent_order_proposals(limit=limit)
+    storage.close()
+    if not rows:
+        click.echo("No order proposals yet.")
+        return
+    for r in rows:
+        click.echo(f"  #{r['id']:<4} {r['status']:<9} {r['side'].upper():<4} "
+                   f"{r['qty']:.4f} {r['symbol']:<6} ~${r['est_notional']:,.2f}"
+                   + (f"  [{r['broker_order_id']}]" if r['broker_order_id'] else "")
+                   + (f"  {r['detail']}" if r['detail'] and r['status'] in ('failed', 'rejected') else ""))
+
+
+@order.command("show")
+@click.argument("proposal_id", type=int)
+@click.pass_obj
+def order_show(cfg, proposal_id):
+    """Full detail of one proposal."""
+    storage = _load_storage(cfg)
+    r = storage.get_order_proposal(proposal_id)
+    storage.close()
+    if not r:
+        raise click.ClickException(f"No proposal #{proposal_id}.")
+    for k, v in r.items():
+        click.echo(f"  {k:<16} {v}")
+
+
+@order.command("approve")
+@click.argument("proposal_id", type=int)
+@click.pass_obj
+def order_approve(cfg, proposal_id):
+    """Validate and PLACE a proposed order (paper only, behind every guard)."""
+    from hf_trading_bot.execution import ProposedOrder, place, validate
+
+    storage = _load_storage(cfg)
+    r = storage.get_order_proposal(proposal_id)
+    if not r:
+        storage.close()
+        raise click.ClickException(f"No proposal #{proposal_id}.")
+    if r["status"] != "proposed":
+        storage.close()
+        raise click.ClickException(
+            f"Proposal #{proposal_id} is '{r['status']}', not 'proposed' — nothing to approve."
+        )
+
+    broker = _build_broker(cfg)
+    settings = storage.get_settings()
+    proposal = ProposedOrder(
+        symbol=r["symbol"], side=r["side"], qty=r["qty"], est_price=r["est_price"],
+        est_notional=r["est_notional"], stop_price=r["stop_price"],
+        take_profit=r["take_profit"], decision_id=r["decision_id"],
+    )
+    # Re-check against live state at approval time — the account and the kill
+    # switch may have changed since the proposal was written.
+    try:
+        _price_for(broker, proposal.symbol)   # ensure the broker has a price
+        acct = broker.get_account()
+    except click.ClickException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        storage.close()
+        raise click.ClickException(f"Could not read the broker: {e}") from e
+
+    ok, reasons = validate(
+        proposal, broker_name=cfg.broker,
+        kill_switch=bool(settings["kill_switch_active"]),
+        buying_power=acct.buying_power,
+    )
+    if not ok:
+        storage.update_order_proposal(proposal_id, status="rejected",
+                                      detail="; ".join(reasons))
+        storage.close()
+        raise click.ClickException("Refused:\n  - " + "\n  - ".join(reasons))
+
+    try:
+        placed = place(broker, proposal)
+    except Exception as e:  # noqa: BLE001
+        storage.update_order_proposal(proposal_id, status="failed", detail=str(e))
+        storage.close()
+        raise click.ClickException(f"Order placement failed: {e}") from e
+
+    storage.update_order_proposal(
+        proposal_id, status=placed.status or "placed",
+        detail=f"placed via {cfg.broker}", broker_order_id=placed.id,
+    )
+    click.echo(f"PLACED #{proposal_id}: {proposal.summary()}  →  order {placed.id} ({placed.status})")
+    storage.close()
+
+
+@order.command("reject")
+@click.argument("proposal_id", type=int)
+@click.pass_obj
+def order_reject(cfg, proposal_id):
+    """Reject a proposed order so it never gets placed."""
+    storage = _load_storage(cfg)
+    r = storage.get_order_proposal(proposal_id)
+    if not r:
+        storage.close()
+        raise click.ClickException(f"No proposal #{proposal_id}.")
+    storage.update_order_proposal(proposal_id, status="rejected", detail="rejected by principal")
+    click.echo(f"Rejected proposal #{proposal_id}.")
+    storage.close()
+
+
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Bind address for the local server.")
 @click.option("--port", default=8420, type=int, help="Port for the local server.")
