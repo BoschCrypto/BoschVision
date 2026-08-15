@@ -241,6 +241,12 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
   text-transform: uppercase; }
 .readout .big { font-size: 22px; font-variant-numeric: tabular-nums; }
 .spark { width: 100%; height: 46px; display: block; margin: 8px 0 2px; }
+.price { margin: 8px 0; border-top: 1px solid var(--border); padding-top: 6px; }
+.price:first-of-type { border-top: none; padding-top: 0; }
+.price .pl { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; }
+.price .psym { letter-spacing: 1px; color: var(--text); }
+.price .pval { font-variant-numeric: tabular-nums; }
+.price .spark { height: 30px; margin: 4px 0 0; }
 .readout .sub { font-size: 11px; color: var(--dim); }
 .readout .pos { color: var(--live); } .readout .neg { color: #f87171; }
 .readout .line { font-size: 11px; padding: 3px 0; border-top: 1px solid var(--border);
@@ -715,9 +721,8 @@ _APP_JS = r"""
     return h + '</div>';
   }
 
-  function sparkline(hist, w, hgt) {
-    if (!hist || hist.length < 2) return "";
-    var vals = hist.map(function (p) { return p.equity; });
+  function sparkline(vals, w, hgt) {
+    if (!vals || vals.length < 2) return "";
     var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
     var span = (hi - lo) || 1, n = vals.length;
     var pts = vals.map(function (v, i) {
@@ -747,15 +752,36 @@ _APP_JS = r"""
     h += '<div class="big">$' + Number(a.equity).toLocaleString(undefined,{maximumFractionDigits:2}) + '</div>';
     h += '<div class="sub">equity &middot; <span class="' + cls + '">' + fmtPct(a.change_pct) +
          '</span> over ' + (a.history ? a.history.length : 0) + ' snapshots</div>';
-    h += sparkline(a.history, 300, 46);
+    h += sparkline((a.history || []).map(function (p) { return p.equity; }), 300, 46);
     h += '<div class="line" style="margin-top:6px"><span class="muted">cash</span><span>$' +
          Number(a.cash).toLocaleString(undefined,{maximumFractionDigits:2}) + '</span></div>';
     h += '<div class="line"><span class="muted">as of</span><span>' + (a.as_of||'').slice(0,16).replace('T',' ') + '</span></div>';
     return h + '</div>';
   }
 
+  function pricesPanel(d) {
+    var prices = d.prices;
+    var h = '<div class="readout"><h4>Prices &middot; live</h4>';
+    if (!prices || !Object.keys(prices).length) {
+      return h + '<div class="muted">Live prices load from Alpaca a moment after ' +
+             'the server starts (watchlist + positions). Add symbols with ' +
+             '<code>hf-bot watchlist</code>.</div></div>';
+    }
+    var syms = Object.keys(prices).sort();
+    for (var i = 0; i < syms.length; i++) {
+      var s = syms[i], p = prices[s];
+      var cls = p.change_pct >= 0 ? "pos" : "neg";
+      h += '<div class="price"><div class="pl">' +
+           '<span class="psym">' + s + '</span>' +
+           '<span class="pval">$' + Number(p.last).toLocaleString(undefined,{maximumFractionDigits:2}) +
+           ' <span class="' + cls + '">' + fmtPct(p.change_pct) + '</span></span></div>' +
+           sparkline(p.closes, 300, 30) + '</div>';
+    }
+    return h + '</div>';
+  }
+
   function readouts(d) {
-    var h = accountPanel(d) + apexConsolePanel(d) + ordersPanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
+    var h = accountPanel(d) + pricesPanel(d) + apexConsolePanel(d) + ordersPanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
     // portfolio vs SPY
     h += '<div class="readout"><h4>Portfolio vs SPY</h4>';
     if (d.portfolio) {

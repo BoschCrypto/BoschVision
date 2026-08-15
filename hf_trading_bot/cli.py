@@ -1455,6 +1455,46 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     refresh_ms = max(2000, refresh * 1000)
     claude_bin = shutil.which("claude") if enable_agent_runner else None
 
+    # Live price cache for the watchlist + positions, refreshed on a slow timer
+    # in the background (market data, not per-poll) so the dashboard can chart
+    # prices without hammering the data source on every request.
+    import time as _time
+    price_cache: dict = {}
+
+    def _refresh_prices():
+        try:
+            s = Storage(db_path)
+            try:
+                syms = {w["symbol"].upper() for w in s.get_watchlist()}
+            finally:
+                s.close()
+            try:
+                for p in _build_broker(cfg).get_positions():
+                    syms.add(p.symbol.upper())
+            except Exception:  # noqa: BLE001
+                pass
+            syms = sorted(syms)[:24]
+            if not syms:
+                return
+            bars = _build_provider(cfg).daily_bars(syms, lookback_days=60)
+            fresh = {}
+            for sym, series in (bars or {}).items():
+                closes = [b.c for b in series]
+                if len(closes) < 2:
+                    continue
+                fresh[sym] = {"last": closes[-1],
+                              "change_pct": (closes[-1] / closes[-2] - 1) * 100,
+                              "closes": closes[-48:]}
+            price_cache.clear()
+            price_cache.update(fresh)
+        except Exception:  # noqa: BLE001 — a failed refresh just keeps the last cache
+            pass
+
+    def _price_loop():
+        while True:
+            _refresh_prices()
+            _time.sleep(300)   # 5 min — market data doesn't need per-poll pulls
+
     # Access token: required before exposing the dashboard past this machine.
     # A tunnel ALWAYS forces auth — never expose the committee without a lock.
     if (auth or tunnel) and not token:
@@ -1623,6 +1663,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                         "enabled": bool(enable_agent_runner),
                         "claude_available": bool(claude_bin),
                     }
+                    payload["prices"] = dict(price_cache)
                     self._send(200, json.dumps(payload).encode(), "application/json")
                     return
                 html = render_html(snap, mode="live").replace(
@@ -1735,6 +1776,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         import webbrowser
         threading.Timer(0.8, lambda: webbrowser.open(local_url)).start()
 
+    threading.Thread(target=_price_loop, daemon=True).start()  # live price cache
     tunnel_proc = _start_tunnel(port, token) if tunnel else None
     try:
         server.serve_forever()
