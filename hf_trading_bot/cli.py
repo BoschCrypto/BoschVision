@@ -1476,11 +1476,16 @@ def order_reject(cfg, proposal_id):
                    "TTY to answer them). Set to 'default' to keep prompts, or another mode "
                    "your Claude version supports.")
 @click.option("--runner-cmd", default=None,
-              help="Use a CUSTOM command as the agent executor instead of `claude` — the "
-                   "prompt is piped to its stdin and stdout is captured as APEX's reply. "
-                   "e.g. 'ollama run nemotron'. NOTE: a plain local model can write a reply "
-                   "but cannot run committee tools (events, orders) — use `claude` for the "
-                   "full tool-driven committee.")
+              help="Use a CUSTOM command as the primary agent executor instead of `claude` "
+                   "— the prompt is piped to its stdin and stdout is captured as APEX's "
+                   "reply. e.g. 'ollama run nemotron'. NOTE: a plain local model can write a "
+                   "reply but cannot run committee tools (events, orders) — use `claude` for "
+                   "the full tool-driven committee.")
+@click.option("--fallback-cmd", default=None,
+              help="If the primary executor (claude) fails — including when your Anthropic "
+                   "usage/quota is exhausted — automatically retry the command with this one "
+                   "(prompt piped to stdin). e.g. 'ollama run nemotron'. Keeps the committee "
+                   "answering after tokens run out.")
 @click.option("--open", "open_browser", is_flag=True,
               help="Open the dashboard in your default browser once the server is up.")
 @click.option("--token", default=None,
@@ -1496,7 +1501,8 @@ def order_reject(cfg, proposal_id):
 def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               publish_path: Optional[str], enable_agent_runner: bool,
               runner_permission_mode: str, runner_cmd: Optional[str],
-              open_browser: bool, token: Optional[str], auth: bool, tunnel: bool):
+              fallback_cmd: Optional[str], open_browser: bool,
+              token: Optional[str], auth: bool, tunnel: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
 
     Each agent's firing-rate number is real logged data (journal, sweeps,
@@ -1549,7 +1555,10 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     storage.close()
     refresh_ms = max(2000, refresh * 1000)
     claude_bin = shutil.which("claude") if (enable_agent_runner and not runner_cmd) else None
-    have_executor = enable_agent_runner and bool(claude_bin or runner_cmd)
+    have_executor = enable_agent_runner and bool(claude_bin or runner_cmd or fallback_cmd)
+    # Markers that mean "the primary model is out of budget", so we fail over.
+    _QUOTA_MARKERS = ("usage limit", "rate limit", "quota", "credit", "429",
+                      "limit reached", "insufficient", "billing", "exceeded")
 
     # Live price cache for the watchlist + positions, refreshed on a slow timer
     # in the background (market data, not per-poll) so the dashboard can chart
@@ -1612,50 +1621,77 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
             "only you — holding the link and key — can then command a spend."
         )
 
+    def _exec_primary(prompt: str):
+        """Run the primary executor: a custom --runner-cmd (prompt on stdin) or
+        `claude -p` (full tool-driven committee). Returns (returncode, out, err)."""
+        import shlex
+        if runner_cmd:
+            p = subprocess.run(shlex.split(runner_cmd), input=prompt, cwd=".",
+                               capture_output=True, text=True, timeout=1800)
+        else:
+            cmd = [claude_bin, "-p"]
+            if runner_permission_mode and runner_permission_mode != "default":
+                cmd += ["--permission-mode", runner_permission_mode]
+            cmd.append(prompt)
+            p = subprocess.run(cmd, cwd=".", capture_output=True, text=True, timeout=1800)
+        return p.returncode, (p.stdout or "").strip(), (p.stderr or "")
+
+    def _exec_fallback(prompt: str):
+        import shlex
+        p = subprocess.run(shlex.split(fallback_cmd), input=prompt, cwd=".",
+                           capture_output=True, text=True, timeout=1800)
+        return p.returncode, (p.stdout or "").strip(), (p.stderr or "")
+
     def _run_console(command_id: int, prompt: str, label: str):
-        """Spawn APEX via the local `claude` CLI to act on a console command.
-        Runs in a background thread; APEX emits its own committee events (so the
-        cortex reflects the run) and returns a reply, captured here. The prompt
-        is passed as a single argument — never through a shell."""
+        """Run APEX on a console command in a background thread. Tries the
+        primary executor (claude) first; if it fails — including when Anthropic
+        usage is exhausted — automatically fails over to --fallback-cmd (e.g. a
+        local Ollama model), so the committee keeps answering after tokens run
+        out. The prompt is passed as an argument / on stdin, never via a shell."""
         s = Storage(db_path)
         try:
-            s.update_command(command_id, status="running",
-                             detail=f"APEX working on: {label}")
+            s.update_command(command_id, status="running", detail=f"APEX working on: {label}")
         finally:
             s.close()
+
+        reply, ok, detail = "", False, ""
+        primary_available = bool(claude_bin or runner_cmd)
         try:
-            if runner_cmd:
-                import shlex
-                # custom executor: pipe the prompt to its stdin, capture stdout
-                proc = subprocess.run(
-                    shlex.split(runner_cmd), input=prompt, cwd=".",
-                    capture_output=True, text=True, timeout=1800,
-                )
-            else:
-                cmd = [claude_bin, "-p"]
-                if runner_permission_mode and runner_permission_mode != "default":
-                    cmd += ["--permission-mode", runner_permission_mode]
-                cmd.append(prompt)
-                proc = subprocess.run(
-                    cmd, cwd=".", capture_output=True, text=True, timeout=1800,
-                )
-            ok = proc.returncode == 0
-            reply = (proc.stdout or "").strip()
-            detail = (reply or proc.stderr or "").strip().replace("\n", " ")[-300:]
+            if primary_available:
+                rc, out, err = _exec_primary(prompt)
+                reply, ok = out, (rc == 0 and bool(out))
+                if not ok:
+                    blob = (out + " " + err).lower()
+                    quota = any(m in blob for m in _QUOTA_MARKERS)
+                    if fallback_cmd:
+                        frc, fout, ferr = _exec_fallback(prompt)
+                        if frc == 0 and fout:
+                            reply, ok = fout, True
+                            detail = (("Anthropic usage exhausted — " if quota
+                                       else "primary executor failed — ")
+                                      + f"switched to `{fallback_cmd}`")
+                        else:
+                            detail = f"primary failed and fallback failed: {(ferr or fout)[:160]}"
+                    else:
+                        detail = (err or out or "primary executor failed").strip()[:200]
+            elif fallback_cmd:
+                frc, fout, ferr = _exec_fallback(prompt)
+                reply, ok = fout, (frc == 0 and bool(fout))
+                detail = "via fallback executor" if ok else (ferr or "fallback failed")[:200]
+
+            if not detail:
+                detail = "completed" if ok else "no executor produced a reply"
             s = Storage(db_path)
             try:
-                s.update_command(
-                    command_id, status="done" if ok else "failed",
-                    detail=detail or ("completed" if ok else "claude exited non-zero"),
-                    reply=reply or (None if ok else "APEX run failed — see detail."),
-                )
+                s.update_command(command_id, status="done" if ok else "failed",
+                                 detail=detail.replace("\n", " ")[-300:],
+                                 reply=reply or (None if ok else "APEX run failed — see detail."))
             finally:
                 s.close()
         except Exception as e:  # noqa: BLE001
             s = Storage(db_path)
             try:
-                s.update_command(command_id, status="failed",
-                                 detail=f"{type(e).__name__}: {e}")
+                s.update_command(command_id, status="failed", detail=f"{type(e).__name__}: {e}")
             finally:
                 s.close()
 
@@ -1858,9 +1894,13 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     elif claude_bin:
         runner_note = ("  agent-runner ON — commands spawn `claude` "
                        f"(permission-mode: {runner_permission_mode})")
+    elif fallback_cmd:
+        runner_note = f"  agent-runner ON — no `claude`; using fallback `{fallback_cmd}`"
     else:
         runner_note = ("  agent-runner ON — [!] no `claude` on PATH and no --runner-cmd; "
                        "commands will queue")
+    if fallback_cmd and (claude_bin or runner_cmd):
+        runner_note += f"  · fallback → `{fallback_cmd}` when the primary fails/runs out"
     # The address to actually type in a browser: when bound to all interfaces,
     # localhost still works here, and other devices use this machine's LAN IP.
     local_url = f"http://127.0.0.1:{port}" if host in ("0.0.0.0", "127.0.0.1", "localhost") \
