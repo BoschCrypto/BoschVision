@@ -80,6 +80,58 @@ def extract_symbol(text: str) -> Optional[str]:
         return None
 
 
+def study_prompt(agent_key: str) -> str:
+    """Frame a 'study your next topic' dispatch for one specialist agent.
+
+    Written for headless execution: the agent researches its next uncovered
+    curriculum topic with its web/news tools, distils a durable sourced note,
+    and records it — it must ACT, not ask for clarification."""
+    codename = CODENAMES.get(agent_key, agent_key.upper())
+    return (
+        f"Act as {codename}, the committee's `{agent_key}` specialist. Your "
+        "principal has asked you, through the dashboard, to become a sharper "
+        "operator of your realm by studying your next curriculum topic.\n\n"
+        "Follow the shared study protocol in "
+        "`.claude/agents/_study-protocol.md` exactly:\n"
+        f"1. Run `hf-bot study next --agent {agent_key}` to get your next "
+        "uncovered topic and its research brief.\n"
+        "2. Research that topic with your web/news tools — the concepts, "
+        "frameworks, and DOCUMENTED history about it. Never reproduce "
+        "copyrighted text; distil durable, sourced lessons.\n"
+        f"3. Write the note to `knowledge/{agent_key}/<slug>.md` in the house "
+        "format: key principle, concrete cases, what it changes about how you "
+        "operate, and public sources.\n"
+        "4. Persist the lesson with `hf-bot memory persist` (kind lesson, "
+        f"tagged {agent_key}) so you recall it at task time.\n"
+        f"5. Run `hf-bot study record --agent {agent_key} --topic <topic> "
+        "--slug <slug> --sources <n>` so the dashboard's Knowledge panel ticks "
+        "up, then commit the new file.\n\n"
+        "You are running HEADLESS: there is no one to answer follow-up "
+        "questions, so do NOT ask for clarification — pick the next topic and "
+        "study it. Finish with a two-line report: what you studied and the one "
+        "thing it changes about how you work."
+    )
+
+
+def study_cycle_prompt(rounds: int = 1) -> str:
+    """Frame a full-committee study cycle for APEX to orchestrate — the
+    'trickle' that rotates agents and studies each one's next topic."""
+    return (
+        "Act as APEX, the Chief Investment Officer. Your principal has asked "
+        "the whole committee, through the dashboard, to keep getting sharper by "
+        "running a study cycle.\n\n"
+        f"Run `hf-bot study status` to see coverage, then for {rounds} "
+        "round(s) rotate through the agents whose libraries are least covered "
+        "and dispatch each to study its next curriculum topic following "
+        "`.claude/agents/_study-protocol.md` (research with web/news tools, "
+        "write `knowledge/<agent>/<slug>.md`, persist the lesson, run "
+        "`hf-bot study record`, and commit). Never reproduce copyrighted text — "
+        "distil sourced lessons.\n\n"
+        "You are running HEADLESS: do NOT ask for clarification. Finish with a "
+        "concise report of which agents studied what, in your voice as APEX."
+    )
+
+
 def apex_prompt(message: str) -> str:
     """Frame a principal's console message as an instruction to APEX (the cio
     agent), who orchestrates the committee and reports back in one voice.

@@ -227,6 +227,12 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
 .order-btn.no { color: var(--dim); border: 1px solid var(--border); }
 .order-btn.no:hover { background: rgba(255,107,107,0.12); color: var(--danger); border-color: rgba(255,107,107,0.4); }
 .order-btn:disabled { opacity: 0.5; cursor: default; }
+.study-btn { font-family: inherit; font-size: 9px; letter-spacing: 1.5px; margin-left: 8px;
+  padding: 2px 7px; border-radius: 3px; cursor: pointer; background: transparent;
+  color: var(--live); border: 1px solid rgba(70,230,200,0.45); vertical-align: middle; }
+.study-btn:hover { background: rgba(70,230,200,0.15); }
+.study-btn.cycle { float: right; }
+.study-btn:disabled { opacity: 0.4; cursor: default; border-color: var(--border); color: var(--dim); }
 .rrow { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 0; }
 .rrow .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .rrow .rcn { flex: 1 1 auto; letter-spacing: 1px; }
@@ -674,12 +680,15 @@ _APP_JS = r"""
   function knowledgePanel(d) {
     var k = d.knowledge || {};
     var pa = k.per_agent || {};
-    var h = '<div class="readout"><h4>Knowledge / curriculum</h4>';
+    var live = !!window.__CORTEX_LIVE__;
+    var h = '<div class="readout"><h4>Knowledge / curriculum' +
+      (live ? '<button class="study-btn cycle" data-cycle="1" title="Send the whole committee to study their next topics">STUDY CYCLE</button>' : '') +
+      '</h4>';
     var total = k.absorbed_total || 0, cap = k.topic_total || 0;
     if (!cap) { return h + '<div class="muted">No curriculum loaded.</div></div>'; }
     h += '<div class="line"><span class="muted">library absorbed</span><span>' +
          total + ' / ' + cap + ' topics</span></div>';
-    // per-agent coverage bars, in committee order
+    // per-agent coverage bars, in committee order — each with a Study button
     for (var key in d.agents) {
       var c = pa[key]; if (!c) continue;
       var a = c.absorbed, t = c.total, col = d.agents[key].color;
@@ -687,17 +696,25 @@ _APP_JS = r"""
       for (var i = 0; i < t; i++) {
         bar += '<span style="color:' + (i < a ? col : '#2a3a4a') + '">&#9632;</span>';
       }
+      var done = a >= t;
+      var btn = live
+        ? '<button class="study-btn" data-agent="' + key + '"' +
+          (done ? ' disabled title="Curriculum complete"' : ' title="Research the next topic and add it to the library"') +
+          '>' + (done ? 'DONE' : 'STUDY') + '</button>'
+        : '';
       h += '<div class="ev"><span class="evk">' + codenameOf(key) + '</span>' +
-           '<span class="evt" style="letter-spacing:1px">' + bar + '</span></div>';
+           '<span class="evt" style="letter-spacing:1px">' + bar + '</span>' + btn + '</div>';
     }
     var rec = k.recent || [];
     if (rec.length) {
       h += '<div class="muted" style="margin-top:6px;font-size:10px">latest: ' +
            codenameOf(rec[0].agent) + ' &middot; ' + rec[0].topic + '</div>';
     }
-    h += '<div class="muted" style="margin-top:4px;font-size:10px">Each agent ' +
-         'recalls its library at task time. A growing store of studied concepts ' +
-         'and cases — not a retrained model.</div>';
+    h += '<div id="studymsg" class="muted" style="margin-top:4px;font-size:10px;min-height:12px"></div>';
+    h += '<div class="muted" style="margin-top:2px;font-size:10px">Each agent ' +
+         'recalls its library at task time. STUDY sends it to research its next ' +
+         'topic with its own tools (spends tokens) — a growing store of concepts ' +
+         'and cases, not a retrained model.</div>';
     return h + '</div>';
   }
 
@@ -870,6 +887,38 @@ _CMD_JS = r"""
         if (window.__CORTEX_REFRESH__) window.__CORTEX_REFRESH__();
       })
       .catch(function () { row.innerHTML = '<span class="muted">no server</span>'; });
+  });
+
+  // Study buttons — dispatch an agent (or the whole committee) to study its
+  // next curriculum topic. A real agent run, so it goes through the executor.
+  document.addEventListener("click", function (ev) {
+    var btn = ev.target.closest ? ev.target.closest(".study-btn") : null;
+    if (!btn || btn.disabled) return;
+    var msg = document.getElementById("studymsg");
+    var body = btn.getAttribute("data-cycle")
+      ? {cycle: true}
+      : {agent: btn.getAttribute("data-agent")};
+    var who = body.cycle ? "the committee" : btn.getAttribute("data-agent");
+    if (!window.confirm("Send " + who + " to study now? This runs an agent and spends tokens.")) return;
+    if (msg) { msg.className = "show"; msg.textContent = "dispatching " + who + "…"; }
+    btn.disabled = true;
+    fetch("/api/study", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+      .then(function (res) {
+        if (msg) {
+          msg.className = res.ok ? "show" : "show err";
+          msg.textContent = res.ok ? (res.j.message || "dispatched") : (res.j.error || "rejected");
+        }
+        if (res.ok && window.__CORTEX_REFRESH__) window.__CORTEX_REFRESH__();
+        setTimeout(function () { btn.disabled = false; }, 3000);
+      })
+      .catch(function () {
+        if (msg) { msg.className = "show err"; msg.textContent = "no live server — run `hf-bot dashboard`"; }
+        btn.disabled = false;
+      });
+    setTimeout(function () { if (msg) msg.className = ""; }, 8000);
   });
 
   var cmdbar = document.getElementById("cmdbar");

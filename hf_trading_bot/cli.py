@@ -1545,7 +1545,10 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         apex_prompt,
         extract_symbol,
         parse_console_message,
+        study_cycle_prompt,
+        study_prompt,
     )
+    from hf_trading_bot.curriculum import agent_keys
 
     # Seeding/migration is done; the startup connection can't be shared across
     # request threads (SQLite forbids it), so close it and give each request
@@ -1752,6 +1755,33 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         finally:
             s.close()
 
+    def _dispatch_run(kind: str, prompt: str, label: str, symbol=None, message=None):
+        """Enqueue a run and start it on the executor if one is available;
+        otherwise leave it queued for a Claude session. Shared by the APEX
+        console and the study buttons so both honor --enable-agent-runner and
+        the primary→fallback failover identically."""
+        s = Storage(db_path)
+        try:
+            cid = s.enqueue_command(kind, prompt, symbol=symbol, message=message)
+        finally:
+            s.close()
+        if have_executor:
+            threading.Thread(target=_run_console, args=(cid, prompt, label),
+                             daemon=True).start()
+            ack = "Dispatched — watch the cortex; the reply lands in the console."
+            status = "running"
+        elif enable_agent_runner:
+            ack = ("Queued, but no executor was found — install/authenticate the "
+                   "`claude` CLI, or pass --runner-cmd, or run it from a Claude "
+                   "session (`hf-bot committee queue --run`).")
+            status = "pending"
+        else:
+            ack = ("Queued. Run it from a Claude session "
+                   "(`hf-bot committee queue --run`), or start the dashboard with "
+                   "--enable-agent-runner so it runs the moment you click.")
+            status = "pending"
+        return {"id": cid, "symbol": symbol, "status": status, "message": ack}
+
     class Handler(BaseHTTPRequestHandler):
         def _send(self, code: int, body: bytes, content_type: str, set_cookie: bool = False):
             self.send_response(code)
@@ -1837,6 +1867,30 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     code = 200 if out.get("ok") else 400
                     self._send(code, json.dumps(out).encode(), "application/json")
                     return
+                # Study dispatch — send an agent (or the whole committee) to
+                # study its next curriculum topic. A real agent run: spends
+                # tokens, so it goes through the same executor as the console.
+                if self.path.startswith("/api/study"):
+                    length = int(self.headers.get("Content-Length", 0))
+                    raw = self.rfile.read(length) if length else b"{}"
+                    payload = json.loads(raw or b"{}")
+                    if payload.get("cycle"):
+                        prompt = study_cycle_prompt(int(payload.get("rounds") or 1))
+                        label = "study cycle — whole committee"
+                        symbol = None
+                    else:
+                        agent = (payload.get("agent") or "").strip()
+                        if agent not in agent_keys():
+                            self._send(400, json.dumps(
+                                {"error": f"unknown agent {agent!r}"}).encode(),
+                                "application/json")
+                            return
+                        prompt = study_prompt(agent)
+                        label = f"study next — {agent}"
+                        symbol = None
+                    out = _dispatch_run("study", prompt, label, symbol)
+                    self._send(200, json.dumps(out).encode(), "application/json")
+                    return
                 if not self.path.startswith("/api/command"):
                     self._send(404, b'{"error":"not found"}', "application/json")
                     return
@@ -1853,31 +1907,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     return
                 symbol = extract_symbol(message)   # best-effort, for display only
                 prompt = apex_prompt(message)
-                s = Storage(db_path)
-                try:
-                    cid = s.enqueue_command("console", prompt, symbol=symbol, message=message)
-                finally:
-                    s.close()
-
                 label = message if len(message) <= 60 else message[:57] + "…"
-                if have_executor:
-                    threading.Thread(target=_run_console, args=(cid, prompt, label),
-                                     daemon=True).start()
-                    ack = "APEX is on it — watch the cortex; the reply lands in the console."
-                    status = "running"
-                elif enable_agent_runner:
-                    ack = ("Queued, but no executor was found — install/authenticate the "
-                           "`claude` CLI, or pass --runner-cmd, or run it from a Claude "
-                           "session (`hf-bot committee queue --run`).")
-                    status = "pending"
-                else:
-                    ack = ("Queued for APEX. Run it from a Claude session "
-                           "(`hf-bot committee queue --run`), or start the dashboard with "
-                           "--enable-agent-runner so APEX runs the moment you command.")
-                    status = "pending"
-                self._send(200, json.dumps(
-                    {"id": cid, "symbol": symbol, "status": status, "message": ack}
-                ).encode(), "application/json")
+                out = _dispatch_run("console", prompt, label, symbol=symbol, message=message)
+                if out["status"] == "running":
+                    out["message"] = ("APEX is on it — watch the cortex; the reply "
+                                      "lands in the console.")
+                self._send(200, json.dumps(out).encode(), "application/json")
             except Exception:
                 tb = traceback.format_exc()
                 self._send(500, json.dumps({"error": tb}).encode(), "application/json")

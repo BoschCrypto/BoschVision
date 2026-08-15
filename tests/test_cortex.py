@@ -476,6 +476,41 @@ def test_apex_prompt_frames_message_and_asks_for_events():
     assert "single voice" in p         # APEX reports back as one voice
 
 
+def test_study_prompt_targets_the_agent_and_the_protocol():
+    from hf_trading_bot.cortex import study_prompt
+    p = study_prompt("equity-analyst")
+    assert "LEDGER" in p                       # addresses the agent by codename
+    assert "equity-analyst" in p               # names the agent key for the CLI
+    assert "study next --agent equity-analyst" in p
+    assert "study record" in p                 # closes the loop / updates the panel
+    assert "_study-protocol.md" in p           # follows the shared protocol
+    assert "copyrighted" in p                  # honesty guardrail
+
+
+def test_study_cycle_prompt_is_apex_and_honest():
+    from hf_trading_bot.cortex import study_cycle_prompt
+    p = study_cycle_prompt(2)
+    assert "APEX" in p
+    assert "study status" in p and "study record" in p
+    assert "copyrighted" in p
+
+
+def test_render_live_knowledge_panel_wires_study_buttons(storage):
+    storage.record_study("red-team", "famous-blowups", "famous-blowups")
+    html = render_html(build_snapshot(storage), mode="live")
+    assert "study-btn" in html                 # the button-rendering JS is present
+    assert "/api/study" in html                 # and it POSTs to the endpoint
+    assert "data-agent" in html and "data-cycle" in html
+
+
+def test_render_static_has_no_study_dispatch(storage):
+    storage.record_study("red-team", "famous-blowups", "famous-blowups")
+    html = render_html(build_snapshot(storage), mode="static")
+    # A static export carries no live action: the /api/study fetch (in the
+    # live-only command JS) must be absent, so it stays self-contained.
+    assert "/api/study" not in html
+
+
 def test_render_shows_apex_reply_and_working_state(storage):
     done = storage.enqueue_command("console", "p", message="review ASTS")
     storage.update_command(done, status="done", reply="APEX: BUY, 4%.")
