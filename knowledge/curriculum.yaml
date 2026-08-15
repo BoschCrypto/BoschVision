@@ -167,3 +167,23 @@ cio:                       # APEX — synthesis and judgment
   - topic: synthesis-under-disagreement
     why: The CIO's job is integrating conflicting expert views into one sized decision, not averaging them.
     seeds: ["dialectical bookkeeping", "steelmanning dissent", "weighting by track record"]
+
+sniper:                    # SNIPER — timing, structure, and the tape
+  - topic: trend-structure-and-market-phases
+    why: Trading with the higher-timeframe trend is the single biggest edge; fighting it is how timers bleed out.
+    seeds: ["Dow theory", "higher highs/lows", "accumulation/distribution (Wyckoff)"]
+  - topic: support-resistance-and-trendlines
+    why: The few levels that have actually been defended are where risk is defined and reward:risk is set.
+    seeds: ["swing pivots", "polarity (S/R flip)", "anchored VWAP", "trendline validity"]
+  - topic: price-action-and-candles
+    why: The character of the tape at a level separates a real break from a trap far better than the pattern alone.
+    seeds: ["rejection wicks", "absorption", "breakout vs fakeout", "momentum vs exhaustion"]
+  - topic: chart-patterns-base-rates
+    why: Patterns are only useful with their real historical hit/failure rates, not as astrology.
+    seeds: ["flags/wedges/ranges", "head-and-shoulders", "double top/bottom base rates (Bulkowski)"]
+  - topic: volume-and-volume-profile
+    why: Moves unbacked by volume tend to fail; volume-at-price shows where control actually sits.
+    seeds: ["volume confirmation", "volume profile / value area", "VWAP", "climax volume"]
+  - topic: order-book-microstructure
+    why: Depth, imbalance, and where stops cluster explain short-term moves and fakeouts.
+    seeds: ["level-2 depth", "spoofing vs real liquidity", "stop clusters", "order-flow imbalance"]

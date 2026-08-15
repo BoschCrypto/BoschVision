@@ -15,7 +15,7 @@ from hf_trading_bot.storage import Storage
 EXPECTED_AGENTS = {
     "cio", "portfolio-manager", "risk-manager", "behavioral-coach", "equity-analyst",
     "quant-analyst", "macro-strategist", "special-situations", "setup-scanner",
-    "valuation-analyst", "red-team",
+    "valuation-analyst", "red-team", "sniper",
 }
 
 

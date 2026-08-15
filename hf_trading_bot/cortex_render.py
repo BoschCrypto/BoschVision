@@ -269,8 +269,8 @@ _APP_JS = r"""
   var ANGLES = {
     "cio": 0,
     "portfolio-manager": 90, "risk-manager": 210, "behavioral-coach": 330,
-    "equity-analyst": 18, "quant-analyst": 90, "macro-strategist": 162,
-    "special-situations": 234, "setup-scanner": 306,
+    "equity-analyst": 30, "quant-analyst": 90, "macro-strategist": 150,
+    "special-situations": 210, "setup-scanner": 270, "sniper": 330,
     "valuation-analyst": 250, "red-team": 290
   };
   // Firing-rate normalization per agent key -> 0..1 for core particle density.

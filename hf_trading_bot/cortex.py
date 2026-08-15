@@ -131,6 +131,7 @@ AGENT_COLORS: dict[str, str] = {
     "setup-scanner": "#22d3ee",
     "valuation-analyst": "#c084fc",
     "red-team": "#f472b6",
+    "sniper": "#ef4444",
 }
 
 CODENAMES: dict[str, str] = {
@@ -145,6 +146,7 @@ CODENAMES: dict[str, str] = {
     "setup-scanner": "RADAR",
     "valuation-analyst": "COMPASS",
     "red-team": "TALON",
+    "sniper": "SNIPER",
 }
 
 ROLES: dict[str, str] = {
@@ -159,6 +161,7 @@ ROLES: dict[str, str] = {
     "setup-scanner": "screening",
     "valuation-analyst": "valuation",
     "red-team": "adversary",
+    "sniper": "charting",
 }
 
 # Rendering layout: ring assignment for the 11-node radial layout.
@@ -166,7 +169,7 @@ RING: dict[str, str] = {
     "cio": "center",
     "portfolio-manager": "inner", "risk-manager": "inner", "behavioral-coach": "inner",
     "equity-analyst": "middle", "quant-analyst": "middle", "macro-strategist": "middle",
-    "special-situations": "middle", "setup-scanner": "middle",
+    "special-situations": "middle", "setup-scanner": "middle", "sniper": "middle",
     "valuation-analyst": "outer", "red-team": "outer",
 }
 
@@ -291,6 +294,13 @@ def _horizon() -> AgentReading:
                      "would require an explicit network call this dashboard "
                      "doesn't make silently — see data/provider.py's "
                      "loud-not-silent fallback convention.")
+
+
+def _sniper() -> AgentReading:
+    return _reading("sniper", "chart read", None, "NO SIGNAL", "no_data", "none",
+                     "Charting/timing has no logged offline metric yet — SNIPER reads "
+                     "live price action on demand. Shown honestly as NO SIGNAL rather "
+                     "than a fabricated number.")
 
 
 def _ember(buy_sell: list[dict]) -> AgentReading:
@@ -498,6 +508,7 @@ def build_snapshot(storage: Storage) -> CortexSnapshot:
         "setup-scanner": _radar(watchlist),
         "valuation-analyst": _compass(all_decisions),
         "red-team": _talon(buy_sell),
+        "sniper": _sniper(),
     }
 
     return CortexSnapshot(

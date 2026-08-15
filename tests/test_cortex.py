@@ -17,7 +17,7 @@ from hf_trading_bot.storage import Storage
 ALL_KEYS = [
     "cio", "portfolio-manager", "risk-manager", "behavioral-coach", "equity-analyst",
     "quant-analyst", "macro-strategist", "special-situations", "setup-scanner",
-    "valuation-analyst", "red-team",
+    "valuation-analyst", "red-team", "sniper",
 ]
 
 
@@ -383,7 +383,7 @@ def test_dashboard_server_serves_across_threads(tmp_path):
         r = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/snapshot.json", timeout=5)
         assert r.status == 200
         data = json.loads(r.read())
-        assert data["agents"] == 11
+        assert data["agents"] == 12
         assert data["committee"] == "active"
     finally:
         server.shutdown()
