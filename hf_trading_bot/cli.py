@@ -1475,6 +1475,12 @@ def order_reject(cfg, proposal_id):
                    "so APEX can run committee tools without interactive prompts (there's no "
                    "TTY to answer them). Set to 'default' to keep prompts, or another mode "
                    "your Claude version supports.")
+@click.option("--runner-cmd", default=None,
+              help="Use a CUSTOM command as the agent executor instead of `claude` — the "
+                   "prompt is piped to its stdin and stdout is captured as APEX's reply. "
+                   "e.g. 'ollama run nemotron'. NOTE: a plain local model can write a reply "
+                   "but cannot run committee tools (events, orders) — use `claude` for the "
+                   "full tool-driven committee.")
 @click.option("--open", "open_browser", is_flag=True,
               help="Open the dashboard in your default browser once the server is up.")
 @click.option("--token", default=None,
@@ -1489,8 +1495,8 @@ def order_reject(cfg, proposal_id):
 @click.pass_obj
 def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               publish_path: Optional[str], enable_agent_runner: bool,
-              runner_permission_mode: str, open_browser: bool,
-              token: Optional[str], auth: bool, tunnel: bool):
+              runner_permission_mode: str, runner_cmd: Optional[str],
+              open_browser: bool, token: Optional[str], auth: bool, tunnel: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
 
     Each agent's firing-rate number is real logged data (journal, sweeps,
@@ -1542,7 +1548,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     db_path = cfg.db_path
     storage.close()
     refresh_ms = max(2000, refresh * 1000)
-    claude_bin = shutil.which("claude") if enable_agent_runner else None
+    claude_bin = shutil.which("claude") if (enable_agent_runner and not runner_cmd) else None
+    have_executor = enable_agent_runner and bool(claude_bin or runner_cmd)
 
     # Live price cache for the watchlist + positions, refreshed on a slow timer
     # in the background (market data, not per-poll) so the dashboard can chart
@@ -1617,13 +1624,21 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         finally:
             s.close()
         try:
-            cmd = [claude_bin, "-p"]
-            if runner_permission_mode and runner_permission_mode != "default":
-                cmd += ["--permission-mode", runner_permission_mode]
-            cmd.append(prompt)
-            proc = subprocess.run(
-                cmd, cwd=".", capture_output=True, text=True, timeout=1800,
-            )
+            if runner_cmd:
+                import shlex
+                # custom executor: pipe the prompt to its stdin, capture stdout
+                proc = subprocess.run(
+                    shlex.split(runner_cmd), input=prompt, cwd=".",
+                    capture_output=True, text=True, timeout=1800,
+                )
+            else:
+                cmd = [claude_bin, "-p"]
+                if runner_permission_mode and runner_permission_mode != "default":
+                    cmd += ["--permission-mode", runner_permission_mode]
+                cmd.append(prompt)
+                proc = subprocess.run(
+                    cmd, cwd=".", capture_output=True, text=True, timeout=1800,
+                )
             ok = proc.returncode == 0
             reply = (proc.stdout or "").strip()
             detail = (reply or proc.stderr or "").strip().replace("\n", " ")[-300:]
@@ -1809,15 +1824,15 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     s.close()
 
                 label = message if len(message) <= 60 else message[:57] + "…"
-                if claude_bin:
+                if have_executor:
                     threading.Thread(target=_run_console, args=(cid, prompt, label),
                                      daemon=True).start()
                     ack = "APEX is on it — watch the cortex; the reply lands in the console."
                     status = "running"
                 elif enable_agent_runner:
-                    ack = ("Queued, but the `claude` CLI wasn't found on PATH. Install/"
-                           "authenticate Claude Code so APEX can run, or execute it from a "
-                           "Claude session (`hf-bot committee queue --run`).")
+                    ack = ("Queued, but no executor was found — install/authenticate the "
+                           "`claude` CLI, or pass --runner-cmd, or run it from a Claude "
+                           "session (`hf-bot committee queue --run`).")
                     status = "pending"
                 else:
                     ack = ("Queued for APEX. Run it from a Claude session "
@@ -1835,13 +1850,17 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
             pass  # silence default stderr access logging
 
     server = ThreadingHTTPServer((host, port), Handler)
-    runner_note = (
-        "  agent-runner ON — commands spawn `claude` "
-        f"(permission-mode: {runner_permission_mode})"
-        + ("" if claude_bin else "  [!] `claude` NOT found on PATH — commands will queue")
-        if enable_agent_runner else
-        "  agent-runner off — commands queue for a Claude session to run"
-    )
+    if not enable_agent_runner:
+        runner_note = "  agent-runner off — commands queue for a Claude session to run"
+    elif runner_cmd:
+        runner_note = (f"  agent-runner ON — executor: `{runner_cmd}` (custom/local model; "
+                       "no committee tools)")
+    elif claude_bin:
+        runner_note = ("  agent-runner ON — commands spawn `claude` "
+                       f"(permission-mode: {runner_permission_mode})")
+    else:
+        runner_note = ("  agent-runner ON — [!] no `claude` on PATH and no --runner-cmd; "
+                       "commands will queue")
     # The address to actually type in a browser: when bound to all interfaces,
     # localhost still works here, and other devices use this machine's LAN IP.
     local_url = f"http://127.0.0.1:{port}" if host in ("0.0.0.0", "127.0.0.1", "localhost") \
