@@ -181,3 +181,37 @@ def test_render_shows_orders_panel_and_proposal(storage):
     html = render_html(build_snapshot(storage), mode="static")
     assert "Orders" in html
     assert "AAPL" in html
+
+
+# --- decision auto-fill (CLI) ----------------------------------------------
+
+def test_propose_autofills_from_journal_decision(storage, tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from hf_trading_bot.data.bars import Bar
+    from hf_trading_bot.journal import Decision, Journal
+    import hf_trading_bot.cli as climod
+
+    j = Journal(storage._conn)
+    did = j.record(Decision(symbol="AAPL", decision="BUY", conviction="high",
+                            thesis="x" * 40, falsification="y" * 40,
+                            entry_price=200, stop_price=180, target_price=260, position_pct=4))
+    cfg = tmp_path / "s.yaml"
+    cfg.write_text(f"db_path: {storage.path}\nbroker: paper\n")
+
+    class Stub:
+        def get_daily_bars(self, symbols, lookback_days=220):
+            return {s: [Bar("2026-08-15", 190, 205, 189, 200.0, 1e6)] for s in symbols}
+        def get_account(self):
+            from hf_trading_bot.broker.base import Account
+            return Account(equity=10_000, last_equity=10_000, cash=10_000, buying_power=10_000)
+        def get_positions(self):
+            return []
+    monkeypatch.setattr(climod, "_build_broker", lambda c: Stub())
+
+    r = CliRunner().invoke(climod.cli, ["--config", str(cfg), "order", "propose",
+                                        "--decision", str(did)])
+    assert r.exit_code == 0, r.output
+    row = storage.pending_order_proposals()[0]
+    assert row["symbol"] == "AAPL" and row["side"] == "buy"
+    assert row["stop_price"] == 180 and row["decision_id"] == did
+    assert row["est_notional"] == pytest.approx(400)   # 4% of 10k

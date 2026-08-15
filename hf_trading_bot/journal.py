@@ -124,6 +124,12 @@ class Journal:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def get(self, decision_id: int) -> Optional[dict[str, Any]]:
+        row = self._conn.execute(
+            "SELECT * FROM decisions WHERE id = ?", (decision_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
     def all_decisions(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT * FROM decisions ORDER BY decided_at DESC LIMIT ?", (limit,)

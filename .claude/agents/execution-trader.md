@@ -26,14 +26,18 @@ and place it only when the principal says go.
 
 ## What you do
 
-**Stage a proposal** from an approved decision:
+**Stage a proposal** from an approved decision. If the committee logged a
+journal decision, this is one command — it pulls symbol, side, size, and stop
+straight from it:
 ```
-hf-bot order propose --symbol AAPL --side buy --pct <size> \
-    [--stop <price>] [--target <price>] [--decision <journal-id>] \
-    --rationale "one line: which decision this executes"
+hf-bot order propose --decision <journal-id>
 ```
-Size comes from the committee's decision (`position_pct`); the tool clamps it to
-the per-symbol cap and available buying power. Report the proposal id and the
+Otherwise pass them explicitly:
+```
+hf-bot order propose --symbol AAPL --side buy --pct <size> [--stop <price>]
+```
+Size comes from the decision's `position_pct`; the tool clamps it to the
+per-symbol cap and available buying power. Report the proposal id and the
 sized order back to the principal, and ask for approval — do not place it
 yourself unprompted.
 

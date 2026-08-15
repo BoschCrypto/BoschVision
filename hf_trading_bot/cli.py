@@ -1139,21 +1139,42 @@ def _price_for(broker, symbol: str) -> float:
 
 
 @order.command("propose")
-@click.option("--symbol", required=True)
-@click.option("--side", type=click.Choice(["buy", "sell"], case_sensitive=False), required=True)
+@click.option("--symbol", default=None)
+@click.option("--side", type=click.Choice(["buy", "sell"], case_sensitive=False), default=None)
 @click.option("--pct", "position_pct", type=float, default=None,
               help="Target size as % of equity (BUY). Omit for the small default.")
 @click.option("--stop", "stop_price", type=float, default=None)
 @click.option("--target", "take_profit", type=float, default=None)
 @click.option("--decision", "decision_id", type=int, default=None,
-              help="Journal decision id this order executes, if any.")
+              help="Journal decision id — auto-fills symbol/side/size/stop from the decision.")
 @click.option("--rationale", default=None)
 @click.pass_obj
 def order_propose(cfg, symbol, side, position_pct, stop_price, take_profit, decision_id, rationale):
-    """Size and record a PROPOSED order. Does not place anything."""
+    """Size and record a PROPOSED order. Does not place anything.
+
+    Give --decision <id> to pull symbol, side, size, and stop straight from a
+    committee journal decision (explicit flags still override)."""
     from hf_trading_bot.execution import ExecutionError, build_proposal
+    from hf_trading_bot.journal import Journal
 
     storage = _load_storage(cfg)
+    if decision_id is not None:
+        d = Journal(storage._conn).get(decision_id)
+        if not d:
+            storage.close()
+            raise click.ClickException(f"No journal decision #{decision_id}.")
+        symbol = symbol or d["symbol"]
+        side = side or {"BUY": "buy", "SELL": "sell"}.get((d["decision"] or "").upper())
+        position_pct = position_pct if position_pct is not None else d["position_pct"]
+        stop_price = stop_price if stop_price is not None else d["stop_price"]
+        take_profit = take_profit if take_profit is not None else d["target_price"]
+        rationale = rationale or f"decision #{decision_id}: {d['decision']} {d['symbol']}"
+    if not symbol or not side:
+        storage.close()
+        raise click.ClickException(
+            "Need --symbol and --side (or a --decision that supplies them)."
+        )
+
     broker = _build_broker(cfg)
     settings = storage.get_settings()
     try:
