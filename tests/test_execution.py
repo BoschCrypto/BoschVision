@@ -215,3 +215,27 @@ def test_propose_autofills_from_journal_decision(storage, tmp_path, monkeypatch)
     assert row["symbol"] == "AAPL" and row["side"] == "buy"
     assert row["stop_price"] == 180 and row["decision_id"] == did
     assert row["est_notional"] == pytest.approx(400)   # 4% of 10k
+
+
+# --- chart command (Alpaca market data) -------------------------------------
+
+def test_chart_command_renders_price_and_sparkline(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from hf_trading_bot.data.bars import Bar
+    import hf_trading_bot.cli as climod
+    import hf_trading_bot.data.provider as prov
+
+    bars = [Bar(f"2026-06-{(i % 27) + 1:02d}", 100 + i, 106 + i, 98 + i, 100 + i * 0.5, 1e6)
+            for i in range(40)]
+
+    class P:
+        def daily_bars(self, syms, lookback_days=60):
+            return {s: bars for s in syms}
+
+    monkeypatch.setattr(climod, "_build_provider", lambda c: P())
+    monkeypatch.setattr(prov, "source_of", lambda p: "alpaca")
+    cfg = tmp_path / "s.yaml"
+    cfg.write_text(f"db_path: {tmp_path/'c.db'}\nbroker: paper\n")
+    r = CliRunner().invoke(climod.cli, ["--config", str(cfg), "chart", "NVDA"])
+    assert r.exit_code == 0
+    assert "NVDA" in r.output and "source: alpaca" in r.output

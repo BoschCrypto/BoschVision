@@ -1118,6 +1118,41 @@ def study_cycle(cfg, rounds):
         click.echo("Every agent has absorbed its whole curriculum. Nothing to study.")
 
 
+_SPARK = "▁▂▃▄▅▆▇█"
+
+
+@cli.command("chart")
+@click.argument("symbol")
+@click.option("--days", default=60, help="Lookback in daily bars.")
+@click.pass_obj
+def chart_cmd(cfg, symbol, days):
+    """Price + a terminal chart from Alpaca market data (yfinance fallback).
+
+    Quick read for SNIPER or you: last price, change, range, and a sparkline
+    of recent closes."""
+    symbol = symbol.upper()
+    provider = _build_provider(cfg)
+    try:
+        bars = (provider.daily_bars([symbol], lookback_days=days) or {}).get(symbol) or []
+    except Exception as e:  # noqa: BLE001
+        raise click.ClickException(f"Could not fetch {symbol} bars: {e}") from e
+    if len(bars) < 2:
+        raise click.ClickException(f"No usable price history for {symbol}.")
+
+    closes = [b.c for b in bars]
+    last, prev = closes[-1], closes[-2]
+    chg = (last / prev - 1) * 100
+    hi, lo = max(b.h for b in bars), min(b.l for b in bars)
+    span = (hi - lo) or 1
+    spark = "".join(_SPARK[min(7, int((c - lo) / span * 7.999))] for c in closes[-48:])
+
+    from hf_trading_bot.data.provider import source_of
+    click.echo(f"\n  {symbol}   ${last:,.2f}   {chg:+.2f}% (1d)      source: {source_of(provider)}")
+    click.echo(f"  {days}-day range  ${lo:,.2f} — ${hi:,.2f}")
+    click.echo(f"  {spark}")
+    click.echo(f"  {bars[0].t[:10]} → {bars[-1].t[:10]}\n")
+
+
 @cli.command("account")
 @click.pass_obj
 def account_cmd(cfg):

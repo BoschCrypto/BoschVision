@@ -22,10 +22,11 @@ shot beats ten rushed ones.
 
 ## Get the data (use the tools you have)
 
-- **Equities:** Robinhood MCP — `get_equity_historicals` (OHLC across
-  timeframes), `get_equity_technical_indicators`, `get_equity_price_book`
-  (level-2 / order book), `get_equity_quotes`. Also `hf-bot`'s own bars via the
-  data provider for a quick daily series.
+- **Equities (primary):** `hf-bot chart <SYMBOL> [--days N]` — daily OHLC from
+  **Alpaca market data** (keyed to the account, yfinance fallback): last price,
+  change, range, and a recent-closes sparkline. For finer reads, Robinhood MCP —
+  `get_equity_historicals` (intraday timeframes), `get_equity_technical_indicators`,
+  `get_equity_price_book` (level-2 / order book), `get_equity_quotes`.
 - **Crypto:** Crypto.com MCP — `get_candlestick` (OHLCV), `get_book` (order
   book depth), `get_trades` (tape), `get_ticker`.
 - **Context:** web search for the catalyst/news behind an unusual move.
