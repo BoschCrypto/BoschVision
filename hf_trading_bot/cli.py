@@ -1118,6 +1118,153 @@ def study_cycle(cfg, rounds):
         click.echo("Every agent has absorbed its whole curriculum. Nothing to study.")
 
 
+@cli.group()
+def models():
+    """Tiered model routing — run cheap work on cheap models, save Claude for
+    the hard calls.
+
+    Configure providers in .env (git-ignored):
+        NVIDIA_API_KEY / NVIDIA_BASE_URL / NVIDIA_MODEL   -> cheap (research)
+        OLLAMA_API_KEY / OLLAMA_BASE_URL / OLLAMA_MODEL   -> mid (screening)
+    'top' is Claude and is served by the committee itself.
+    """
+
+
+@models.command("check")
+@click.option("--ping/--no-ping", default=True,
+              help="Actually call each configured tier to confirm it answers.")
+def models_check(ping):
+    """Show which tiers are configured, and (default) ping them."""
+    from hf_trading_bot import model_router
+
+    avail = model_router.available()
+    providers = model_router.load_providers()
+    any_ok = False
+    for tier in ("cheap", "mid"):
+        p = providers[tier]
+        if not avail[tier]:
+            click.echo(f"  {tier:5} [{p.name}]  not configured "
+                       f"(set its *_API_KEY/*_MODEL in .env)")
+            continue
+        any_ok = True
+        line = f"  {tier:5} [{p.name}]  {p.model}  @ {p.base_url}"
+        if ping:
+            try:
+                reply = model_router.ping(tier)
+                line += f"  -> OK ({reply[:20]!r})"
+            except model_router.RouterError as e:
+                line += f"  -> FAILED: {str(e)[:120]}"
+        click.echo(line)
+    click.echo("  top   [claude]  served by the committee (the `claude` executor)")
+    if not any_ok:
+        click.echo("\nNo cheap/mid tiers configured yet — add keys to .env. "
+                   "See .env.example.")
+
+
+@models.command("route")
+@click.argument("text")
+@click.option("--kind", default="console",
+              help="Work kind: console (default) or study.")
+def models_route(text, kind):
+    """Show which tier a piece of work would route to, and why."""
+    from hf_trading_bot import model_router
+
+    tier = model_router.classify(kind, text)
+    where = {"cheap": "NVIDIA (research model)", "mid": "Ollama (screening model)",
+             "top": "Claude (the full committee)"}[tier]
+    click.echo(f"kind={kind!r}  ->  tier={tier!r}  ->  {where}")
+
+
+@models.command("study")
+@click.option("--agent", "agent_key", default=None,
+              help="Which agent studies. Omit to pick the least-covered agent.")
+@click.option("--tier", default="cheap", type=click.Choice(["cheap", "mid"]),
+              help="Which non-Claude tier writes the note.")
+@click.pass_obj
+def models_study(cfg, agent_key, tier):
+    """Study a topic on a cheap model and PERSIST it — grows the library with
+    no Claude tokens. Writes knowledge/<agent>/<slug>.md and records it."""
+    from hf_trading_bot import model_router, study_runner
+    from hf_trading_bot.curriculum import agent_keys, coverage, next_topic
+
+    storage = _load_storage(cfg)
+    keys = agent_keys()
+    if not keys:
+        storage.close()
+        raise click.ClickException("No curriculum found (knowledge/curriculum.yaml).")
+    if not model_router.available().get(tier):
+        storage.close()
+        raise click.ClickException(
+            f"Tier {tier!r} isn't configured. Add its keys to .env "
+            f"(see `hf-bot models check`).")
+    if agent_key is None:
+        def behind(k):
+            a, t = coverage(k, storage.studied_topics(k))
+            return (a / t if t else 1.0, a)
+        agent_key = min((k for k in keys
+                         if next_topic(k, storage.studied_topics(k))),
+                        key=behind, default=None)
+        if agent_key is None:
+            storage.close()
+            click.echo("Every agent has absorbed its whole curriculum. Nothing to study.")
+            return
+    try:
+        result = study_runner.study_one(agent_key, storage, tier=tier)
+    except model_router.RouterError as e:
+        storage.close()
+        raise click.ClickException(f"Study failed on tier {tier!r}: {e}")
+    storage.close()
+    if not result.get("studied"):
+        click.echo(f"{agent_key}: {result.get('reason', 'nothing to study')}.")
+        return
+    click.echo(f"Studied: {result['agent']} — '{result['topic']}' "
+               f"via {result['provider']} ({result['chars']} chars)\n"
+               f"  wrote {result['path']} and recorded it. Library +1.")
+
+
+@models.command("study-cycle")
+@click.option("--rounds", default=3, help="How many agents to study this cycle.")
+@click.option("--tier", default="cheap", type=click.Choice(["cheap", "mid"]))
+@click.pass_obj
+def models_study_cycle(cfg, rounds, tier):
+    """Study the next topic for the N least-covered agents on a cheap model,
+    persisting each. The free 'trickle' — no Claude tokens."""
+    from hf_trading_bot import model_router, study_runner
+    from hf_trading_bot.curriculum import agent_keys, coverage, next_topic
+
+    storage = _load_storage(cfg)
+    keys = agent_keys()
+    if not keys:
+        storage.close()
+        raise click.ClickException("No curriculum found (knowledge/curriculum.yaml).")
+    if not model_router.available().get(tier):
+        storage.close()
+        raise click.ClickException(
+            f"Tier {tier!r} isn't configured. Add its keys to .env.")
+
+    def behind(k):
+        a, t = coverage(k, storage.studied_topics(k))
+        return (a / t if t else 1.0, a)
+
+    ordered = [k for k in sorted(keys, key=behind)
+               if next_topic(k, storage.studied_topics(k))]
+    done = 0
+    for k in ordered:
+        if done >= rounds:
+            break
+        try:
+            result = study_runner.study_one(k, storage, tier=tier)
+        except model_router.RouterError as e:
+            click.echo(f"  {k}: FAILED ({str(e)[:100]}) — stopping cycle.")
+            break
+        if result.get("studied"):
+            click.echo(f"  {k}: studied '{result['topic']}' (+1)")
+            done += 1
+    storage.close()
+    click.echo(f"\nStudy cycle done — {done} topic(s) added via tier {tier!r}, "
+               f"0 Claude tokens.")
+
+
 _SPARK = "▁▂▃▄▅▆▇█"
 
 
@@ -1486,6 +1633,13 @@ def order_reject(cfg, proposal_id):
                    "usage/quota is exhausted — automatically retry the command with this one "
                    "(prompt piped to stdin). e.g. 'ollama run nemotron'. Keeps the committee "
                    "answering after tokens run out.")
+@click.option("--tiered", is_flag=True,
+              help="Route easy work to cheap models and keep Claude for the hard calls. "
+                   "STUDY buttons then research on a cheap model (NVIDIA/Ollama) and save "
+                   "the note directly — no Claude tokens; plainly informational console "
+                   "questions answer on a cheap model too. Anything decision-shaped "
+                   "(buy/sell/valuation/committee) still routes to Claude. Configure "
+                   "providers in .env — see `hf-bot models check`.")
 @click.option("--open", "open_browser", is_flag=True,
               help="Open the dashboard in your default browser once the server is up.")
 @click.option("--token", default=None,
@@ -1501,7 +1655,7 @@ def order_reject(cfg, proposal_id):
 def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               publish_path: Optional[str], enable_agent_runner: bool,
               runner_permission_mode: str, runner_cmd: Optional[str],
-              fallback_cmd: Optional[str], open_browser: bool,
+              fallback_cmd: Optional[str], tiered: bool, open_browser: bool,
               token: Optional[str], auth: bool, tunnel: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
 
@@ -1558,7 +1712,14 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     storage.close()
     refresh_ms = max(2000, refresh * 1000)
     claude_bin = shutil.which("claude") if (enable_agent_runner and not runner_cmd) else None
-    have_executor = enable_agent_runner and bool(claude_bin or runner_cmd or fallback_cmd)
+    # Tiered routing: which cheap/mid model tiers actually have credentials.
+    from hf_trading_bot import model_router
+    router_avail = model_router.available() if tiered else {}
+    tiered_on = tiered and any(router_avail.values())
+    # A cheap tier can run study/console work on its own, so it counts as an
+    # executor even when `claude` isn't installed.
+    have_executor = enable_agent_runner and bool(
+        claude_bin or runner_cmd or fallback_cmd or tiered_on)
     # Markers that mean "the primary model is out of budget", so we fail over.
     _QUOTA_MARKERS = ("usage limit", "rate limit", "quota", "credit", "429",
                       "limit reached", "insufficient", "billing", "exceeded")
@@ -1755,16 +1916,128 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         finally:
             s.close()
 
-    def _dispatch_run(kind: str, prompt: str, label: str, symbol=None, message=None):
+    _CHEAP_CONSOLE_SYS = (
+        "You are APEX, a disciplined investment committee's analyst, answering a "
+        "principal's informational question on a fast model. Give a clear, concrete, "
+        "professional answer. You have NO live data and NO trading tools, so do not "
+        "claim to place orders or quote live prices — reason from general knowledge "
+        "and say so. Do not ask questions; answer directly.")
+
+    def _run_study_cheap(command_id: int, agent: str, tier, claude_prompt: str,
+                         label: str):
+        """Study one agent's next topic on a cheap model and persist it. If the
+        cheap tier errors and `claude` is available, fall back to the full
+        tool-driven claude study path so a click never silently no-ops."""
+        from hf_trading_bot import model_router, study_runner
+        s = Storage(db_path)
+        try:
+            s.update_command(command_id, status="running",
+                             detail=f"studying {agent} on {tier} model")
+            res = study_runner.study_one(agent, s, tier=tier)
+            if not res.get("studied"):
+                s.update_command(command_id, status="done",
+                                 detail=res.get("reason", "nothing to study"),
+                                 reply=f"{agent}: {res.get('reason', 'nothing to study')}.")
+            else:
+                s.update_command(
+                    command_id, status="done",
+                    detail=f"studied via {res['provider']} (+1, no Claude tokens)",
+                    reply=(f"{res['agent']} studied '{res['topic']}' on "
+                           f"{res['provider']} — wrote {res['path']} and recorded "
+                           f"it. Library +1."))
+            s.close()
+            return
+        except model_router.RouterError as e:
+            s.close()
+            if claude_bin or runner_cmd:
+                # cheap tier failed — do it properly on claude instead.
+                _run_console(command_id, claude_prompt, label)
+            else:
+                s2 = Storage(db_path)
+                try:
+                    s2.update_command(command_id, status="failed",
+                                      detail=f"cheap study failed: {str(e)[:180]}")
+                finally:
+                    s2.close()
+        except Exception as e:  # noqa: BLE001
+            s3 = Storage(db_path)
+            try:
+                s3.update_command(command_id, status="failed",
+                                  detail=f"{type(e).__name__}: {e}")
+            finally:
+                s3.close()
+
+    def _run_console_cheap(command_id: int, message: str, tier, claude_prompt: str,
+                           label: str):
+        """Answer an informational console question on a cheap model. On tier
+        error, fall back to the claude executor when it's available."""
+        from hf_trading_bot import model_router
+        s = Storage(db_path)
+        try:
+            s.update_command(command_id, status="running",
+                             detail=f"answering on {tier} model")
+        finally:
+            s.close()
+        try:
+            reply = model_router.complete(tier, _CHEAP_CONSOLE_SYS, message)
+            ok = bool(reply.strip())
+            s = Storage(db_path)
+            try:
+                s.update_command(
+                    command_id, status="done" if ok else "failed",
+                    detail=(f"answered on {tier} model (no committee tools)" if ok
+                            else "cheap model returned nothing"),
+                    reply=reply or None)
+            finally:
+                s.close()
+        except model_router.RouterError as e:
+            if claude_bin or runner_cmd:
+                _run_console(command_id, claude_prompt, label)
+            else:
+                s = Storage(db_path)
+                try:
+                    s.update_command(command_id, status="failed",
+                                     detail=f"cheap tier failed: {str(e)[:180]}")
+                finally:
+                    s.close()
+
+    def _dispatch_run(kind: str, prompt: str, label: str, symbol=None, message=None,
+                      study_agent=None):
         """Enqueue a run and start it on the executor if one is available;
         otherwise leave it queued for a Claude session. Shared by the APEX
         console and the study buttons so both honor --enable-agent-runner and
-        the primary→fallback failover identically."""
+        the primary→fallback failover identically.
+
+        With --tiered, easy work is steered to a cheap model first: a per-agent
+        STUDY writes its note on the cheap tier (no Claude tokens), and a
+        plainly informational console question is answered on the cheap tier.
+        Decision-shaped work (buy/sell/valuation/committee) always routes to
+        Claude via the normal path."""
         s = Storage(db_path)
         try:
             cid = s.enqueue_command(kind, prompt, symbol=symbol, message=message)
         finally:
             s.close()
+
+        # Tiered steering — only for work that is safe and cheap to offload.
+        if have_executor and tiered_on:
+            if kind == "study" and study_agent and router_avail.get("cheap"):
+                threading.Thread(target=_run_study_cheap,
+                                 args=(cid, study_agent, "cheap", prompt, label),
+                                 daemon=True).start()
+                return {"id": cid, "symbol": symbol, "status": "running",
+                        "message": "Studying on a cheap model — no Claude tokens. "
+                                   "Watch the Knowledge panel tick up."}
+            if kind == "console":
+                tier = model_router.classify("console", message or "")
+                if tier in ("cheap", "mid") and router_avail.get(tier):
+                    threading.Thread(target=_run_console_cheap,
+                                     args=(cid, message or "", tier, prompt, label),
+                                     daemon=True).start()
+                    return {"id": cid, "symbol": symbol, "status": "running",
+                            "message": f"Answering on the {tier} model (saving "
+                                       "Claude for the hard calls)."}
+
         if have_executor:
             threading.Thread(target=_run_console, args=(cid, prompt, label),
                              daemon=True).start()
@@ -1874,6 +2147,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     length = int(self.headers.get("Content-Length", 0))
                     raw = self.rfile.read(length) if length else b"{}"
                     payload = json.loads(raw or b"{}")
+                    study_agent = None
                     if payload.get("cycle"):
                         prompt = study_cycle_prompt(int(payload.get("rounds") or 1))
                         label = "study cycle — whole committee"
@@ -1888,7 +2162,9 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                         prompt = study_prompt(agent)
                         label = f"study next — {agent}"
                         symbol = None
-                    out = _dispatch_run("study", prompt, label, symbol)
+                        study_agent = agent
+                    out = _dispatch_run("study", prompt, label, symbol,
+                                        study_agent=study_agent)
                     self._send(200, json.dumps(out).encode(), "application/json")
                     return
                 if not self.path.startswith("/api/command"):
@@ -1936,6 +2212,14 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                        "commands will queue")
     if fallback_cmd and (claude_bin or runner_cmd):
         runner_note += f"  · fallback → `{fallback_cmd}` when the primary fails/runs out"
+    if tiered:
+        if tiered_on:
+            live = ", ".join(t for t in ("cheap", "mid") if router_avail.get(t))
+            runner_note += (f"  · tiered ON — study & easy asks → {live} model(s), "
+                            "hard calls → Claude")
+        else:
+            runner_note += ("  · [!] --tiered set but no cheap/mid tier configured "
+                            "(add keys to .env; see `hf-bot models check`)")
     # The address to actually type in a browser: when bound to all interfaces,
     # localhost still works here, and other devices use this machine's LAN IP.
     local_url = f"http://127.0.0.1:{port}" if host in ("0.0.0.0", "127.0.0.1", "localhost") \

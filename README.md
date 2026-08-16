@@ -493,6 +493,44 @@ it deliberately (a `create_trigger` firing `Use the cio agent to run a study
 cycle --rounds 2` in this repo's environment), and disable it any time. Nothing
 runs autonomously unless you turn it on.
 
+### Tiered models — cheap for research, Claude for the hard calls (`hf-bot models`)
+
+The committee is expensive because one question fans out into many tool-driven
+Claude calls. But a lot of the work — researching a curriculum topic, a plain
+"what is X" — doesn't need Claude. Point a cheap model at that work and save the
+Claude budget for the calls that actually decide capital.
+
+Configure providers in `.env` (see `.env.example`):
+
+```
+NVIDIA_API_KEY=…   NVIDIA_MODEL=nvidia/nemotron-…    # cheap tier — research/study
+OLLAMA_API_KEY=…   OLLAMA_MODEL=qwen2.5-coder        # mid tier — screening
+# (or OLLAMA_BASE_URL=http://localhost:11434/v1 for a local Ollama, no key)
+```
+
+```bash
+hf-bot models check                       # which tiers are live; pings them
+hf-bot models route "should I buy NVDA"   # show where a question would route
+hf-bot models study --agent equity-analyst   # study on the cheap tier — writes
+                                             # the note and records it. 0 Claude tokens.
+hf-bot models study-cycle --rounds 3      # the free trickle across least-covered agents
+```
+
+Unlike a plain Ollama fallback (which can only *talk*), `models study` has the
+**harness** do the tool work — it picks the next topic, asks the cheap model for
+the note body, then writes `knowledge/<agent>/<slug>.md` and records it. So a
+non-tool model genuinely **grows the library** (the Knowledge panel ticks up).
+Each such note carries a header stating which model wrote it and that it's a
+distillation, not live-researched or committee-reviewed.
+
+**In the dashboard:** add `--tiered` to `hf-bot dashboard`. STUDY buttons then
+research on the cheap tier (no Claude tokens), and plainly informational console
+questions answer on the cheap tier too. Anything decision-shaped — buy/sell,
+valuation, "best stock", committee — still routes to Claude. Routing is
+safety-first: when a console question is ambiguous, it goes *up* to Claude, never
+down. If a cheap tier errors, it falls back to the `claude` executor when one is
+available, so a click never silently no-ops.
+
 ### Shared memory that persists across sessions
 
 Beyond the counts, the committee keeps a **durable, recallable memory** — the
