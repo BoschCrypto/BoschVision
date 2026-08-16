@@ -177,6 +177,37 @@ def complete(tier: Tier, system: str, user: str, *,
     return _chat(provider, system, user, **kw)
 
 
+def list_models(tier: Tier, env: Optional[dict] = None, timeout: int = 30) -> list[str]:
+    """GET the provider's OpenAI-compatible /models list — the authoritative
+    set of model ids this key can actually call. Used by `models list` so you
+    never have to guess a NVIDIA_MODEL / OLLAMA_MODEL name."""
+    if tier == "top":
+        raise RouterError("tier 'top' is Claude, not the router")
+    provider = load_providers(env)[tier]
+    if not provider.base_url:
+        raise RouterError(f"tier {tier!r} has no base_url")
+    url = provider.base_url.rstrip("/") + "/models"
+    headers = {}
+    if provider.api_key:
+        headers["Authorization"] = f"Bearer {provider.api_key}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as ex:
+        detail = ex.read().decode(errors="replace")[:300]
+        raise RouterError(f"{provider.name} HTTP {ex.code}: {detail}") from ex
+    except urllib.error.URLError as ex:
+        raise RouterError(f"{provider.name} unreachable: {ex.reason}") from ex
+    rows = data.get("data", data) if isinstance(data, dict) else data
+    ids = []
+    for r in rows or []:
+        mid = r.get("id") if isinstance(r, dict) else str(r)
+        if mid:
+            ids.append(mid)
+    return sorted(ids)
+
+
 def ping(tier: Tier, env: Optional[dict] = None) -> str:
     """A tiny liveness check for `models check`: returns the model's reply to a
     one-word prompt, or raises RouterError."""

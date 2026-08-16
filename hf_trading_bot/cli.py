@@ -1161,6 +1161,32 @@ def models_check(ping):
                    "See .env.example.")
 
 
+@models.command("list")
+@click.option("--tier", default="cheap", type=click.Choice(["cheap", "mid"]),
+              help="Which provider to list models for.")
+@click.option("--filter", "needle", default=None,
+              help="Only show model ids containing this substring (e.g. 'nemotron').")
+def models_list(tier, needle):
+    """List the model ids your key can actually call — copy one into
+    NVIDIA_MODEL / OLLAMA_MODEL to fix a 404 'model not found'."""
+    from hf_trading_bot import model_router
+
+    try:
+        ids = model_router.list_models(tier)
+    except model_router.RouterError as e:
+        raise click.ClickException(f"Could not list models for {tier!r}: {e}")
+    if needle:
+        ids = [m for m in ids if needle.lower() in m.lower()]
+    if not ids:
+        click.echo("No models returned"
+                   + (f" matching {needle!r}." if needle else "."))
+        return
+    click.echo(f"{len(ids)} model(s) your key can call"
+               + (f" matching {needle!r}" if needle else "") + ":")
+    for m in ids:
+        click.echo(f"  {m}")
+
+
 @models.command("route")
 @click.argument("text")
 @click.option("--kind", default="console",
