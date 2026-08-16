@@ -1993,6 +1993,48 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
             finally:
                 s3.close()
 
+    def _run_study_cycle_cheap(command_id: int, rounds: int, tier, claude_prompt: str):
+        """Study the next topic for the N least-covered agents on a cheap model,
+        persisting each — the STUDY CYCLE button with no Claude tokens. Falls
+        back to the claude cycle path if nothing could be studied cheaply."""
+        from hf_trading_bot import model_router, study_runner
+        from hf_trading_bot.curriculum import agent_keys as _akeys, coverage, next_topic
+
+        s = Storage(db_path)
+        try:
+            s.update_command(command_id, status="running",
+                             detail=f"study cycle on {tier} model ({rounds} round(s))")
+            def behind(k):
+                a, t = coverage(k, s.studied_topics(k))
+                return (a / t if t else 1.0, a)
+            ordered = [k for k in sorted(_akeys(), key=behind)
+                       if next_topic(k, s.studied_topics(k))]
+            done, lines, err = 0, [], None
+            for k in ordered:
+                if done >= rounds:
+                    break
+                try:
+                    res = study_runner.study_one(k, s, tier=tier)
+                except model_router.RouterError as e:
+                    err = e
+                    break
+                if res.get("studied"):
+                    lines.append(f"{k}: '{res['topic']}'")
+                    done += 1
+            if done == 0 and err is not None and (claude_bin or runner_cmd):
+                s.close()
+                _run_console(command_id, claude_prompt, "study cycle — whole committee")
+                return
+            report = ("Studied on cheap model — " + "; ".join(lines)) if lines \
+                else "Nothing left to study."
+            if err is not None:
+                report += f" (stopped early: {str(err)[:80]})"
+            s.update_command(command_id, status="done",
+                             detail=f"cycle +{done} via {tier} (0 Claude tokens)",
+                             reply=report)
+        finally:
+            s.close()
+
     def _run_console_cheap(command_id: int, message: str, tier, claude_prompt: str,
                            label: str):
         """Answer an informational console question on a cheap model. On tier
@@ -2028,7 +2070,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     s.close()
 
     def _dispatch_run(kind: str, prompt: str, label: str, symbol=None, message=None,
-                      study_agent=None):
+                      study_agent=None, study_cycle_rounds=None):
         """Enqueue a run and start it on the executor if one is available;
         otherwise leave it queued for a Claude session. Shared by the APEX
         console and the study buttons so both honor --enable-agent-runner and
@@ -2054,6 +2096,14 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                 return {"id": cid, "symbol": symbol, "status": "running",
                         "message": "Studying on a cheap model — no Claude tokens. "
                                    "Watch the Knowledge panel tick up."}
+            if kind == "study" and study_cycle_rounds and router_avail.get("cheap"):
+                threading.Thread(target=_run_study_cycle_cheap,
+                                 args=(cid, int(study_cycle_rounds), "cheap", prompt),
+                                 daemon=True).start()
+                return {"id": cid, "symbol": symbol, "status": "running",
+                        "message": f"Study cycle on a cheap model ({study_cycle_rounds} "
+                                   "round(s)) — no Claude tokens. Watch the Knowledge "
+                                   "panel."}
             if kind == "console":
                 tier = model_router.classify("console", message or "")
                 if tier in ("cheap", "mid") and router_avail.get(tier):
@@ -2174,8 +2224,10 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     raw = self.rfile.read(length) if length else b"{}"
                     payload = json.loads(raw or b"{}")
                     study_agent = None
+                    cycle_rounds = None
                     if payload.get("cycle"):
-                        prompt = study_cycle_prompt(int(payload.get("rounds") or 1))
+                        cycle_rounds = int(payload.get("rounds") or 1)
+                        prompt = study_cycle_prompt(cycle_rounds)
                         label = "study cycle — whole committee"
                         symbol = None
                     else:
@@ -2190,7 +2242,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                         symbol = None
                         study_agent = agent
                     out = _dispatch_run("study", prompt, label, symbol,
-                                        study_agent=study_agent)
+                                        study_agent=study_agent,
+                                        study_cycle_rounds=cycle_rounds)
                     self._send(200, json.dumps(out).encode(), "application/json")
                     return
                 if not self.path.startswith("/api/command"):
