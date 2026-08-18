@@ -648,7 +648,11 @@ _APP_JS = r"""
 
   function apexConsolePanel(d) {
     var cmds = (d.commands || []).slice();   // newest-first from the server
-    var h = '<div class="readout"><h4>APEX console</h4>';
+    var live = !!window.__CORTEX_LIVE__;
+    var archiveBtn = live
+      ? '<button class="study-btn cycle" data-archive="1" title="Move older responses to research/committee/ files and keep the console clean">ARCHIVE</button>'
+      : '';
+    var h = '<div class="readout"><h4>APEX console' + archiveBtn + '</h4>';
     if (!cmds.length) {
       h += '<div class="muted">Speak to APEX from the bar below the cortex. He ' +
            'runs the committee and reports back here.</div>';
@@ -894,6 +898,18 @@ _CMD_JS = r"""
   document.addEventListener("click", function (ev) {
     var btn = ev.target.closest ? ev.target.closest(".study-btn") : null;
     if (!btn || btn.disabled) return;
+    // Archive button — clean the console, no tokens, no confirm needed.
+    if (btn.getAttribute("data-archive")) {
+      btn.disabled = true;
+      fetch("/api/archive", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (window.__CORTEX_REFRESH__) window.__CORTEX_REFRESH__();
+          setTimeout(function () { btn.disabled = false; }, 1500);
+        })
+        .catch(function () { btn.disabled = false; });
+      return;
+    }
     var msg = document.getElementById("studymsg");
     var body = btn.getAttribute("data-cycle")
       ? {cycle: true}

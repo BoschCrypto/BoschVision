@@ -666,7 +666,9 @@ def build_snapshot(storage: Storage) -> CortexSnapshot:
             {"id": c["id"], "symbol": c["symbol"], "status": c["status"],
              "detail": c["detail"], "created_at": c["created_at"],
              "message": c.get("message"), "reply": c.get("reply")}
-            for c in storage.recent_commands(limit=8)
+            # Only the recent, un-archived exchanges — old responses are moved to
+            # research/committee/ so the console stays clean.
+            for c in storage.recent_commands(limit=4, include_archived=False)
         ],
         knowledge=_knowledge(storage),
         orders=[

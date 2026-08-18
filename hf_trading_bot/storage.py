@@ -219,7 +219,7 @@ class Storage:
         live here (idempotent)."""
         cols = {r["name"] for r in
                 self._conn.execute("PRAGMA table_info(command_queue)").fetchall()}
-        for name in ("message", "reply"):
+        for name in ("message", "reply", "archived_at"):
             if name not in cols:
                 self._conn.execute(f"ALTER TABLE command_queue ADD COLUMN {name} TEXT")
         self._conn.commit()
@@ -562,11 +562,35 @@ class Storage:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def recent_commands(self, limit: int = 10) -> list[dict[str, Any]]:
+    def recent_commands(self, limit: int = 10,
+                        include_archived: bool = True) -> list[dict[str, Any]]:
+        where = "" if include_archived else "WHERE archived_at IS NULL"
         rows = self._conn.execute(
-            "SELECT * FROM command_queue ORDER BY id DESC LIMIT ?", (limit,)
+            f"SELECT * FROM command_queue {where} ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def archivable_commands(self, keep: int = 0) -> list[dict[str, Any]]:
+        """Finished (done/failed), not-yet-archived commands eligible to move to
+        the archive folder — all but the newest `keep`, oldest first (so files
+        are written in chronological order)."""
+        rows = self._conn.execute(
+            "SELECT * FROM command_queue "
+            "WHERE archived_at IS NULL AND status IN ('done','failed') "
+            "ORDER BY id DESC"
+        ).fetchall()
+        keepable = rows[:keep] if keep > 0 else []
+        keep_ids = {r["id"] for r in keepable}
+        older = [dict(r) for r in rows if r["id"] not in keep_ids]
+        older.reverse()   # oldest first
+        return older
+
+    def mark_command_archived(self, command_id: int) -> None:
+        self._conn.execute(
+            "UPDATE command_queue SET archived_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), command_id),
+        )
+        self._conn.commit()
 
     def get_command(self, command_id: int) -> Optional[dict[str, Any]]:
         row = self._conn.execute(

@@ -9,3 +9,7 @@ dist/
 config/settings.yaml
 .env
 .pytest_cache/
+
+# Personal committee outputs — archived console responses live here,
+# local to your machine (they can contain your own decisions/positions).
+research/committee/

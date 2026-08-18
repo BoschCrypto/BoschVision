@@ -794,6 +794,31 @@ def committee_enqueue(cfg, text):
     storage.close()
 
 
+@committee.command("archive")
+@click.option("--keep", default=3, type=int,
+              help="How many of the newest responses to leave in the console.")
+@click.pass_obj
+def committee_archive(cfg, keep):
+    """Move old committee responses out of the dashboard into clean Markdown
+    files under research/committee/ (all but the newest --keep). The dashboard
+    then shows only recent exchanges; nothing is lost."""
+    from hf_trading_bot import committee_archive as arch
+
+    storage = _load_storage(cfg)
+    try:
+        written = arch.archive_commands(storage, keep=keep)
+    finally:
+        storage.close()
+    if not written:
+        click.echo("Nothing to archive — the console is already clean.")
+        return
+    click.echo(f"Archived {len(written)} response(s) to {arch.ARCHIVE_DIR}/ :")
+    for p in written[-10:]:
+        click.echo(f"  {p}")
+    if len(written) > 10:
+        click.echo(f"  … and {len(written) - 10} more.")
+
+
 @committee.command("queue")
 @click.option("--run", "run_next", is_flag=True,
               help="Print the next pending command's prompt for an executor to run.")
@@ -1752,6 +1777,21 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     _QUOTA_MARKERS = ("usage limit", "rate limit", "quota", "credit", "429",
                       "limit reached", "insufficient", "billing", "exceeded")
 
+    # Keep the console lean: after any command finishes, move all but the newest
+    # few finished responses to research/committee/ .md files.
+    KEEP_CONSOLE = 4
+
+    def _archive_overflow():
+        try:
+            from hf_trading_bot import committee_archive
+            s = Storage(db_path)
+            try:
+                committee_archive.archive_commands(s, keep=KEEP_CONSOLE)
+            finally:
+                s.close()
+        except Exception:  # archiving is best-effort, never break a run
+            pass
+
     # Live price cache for the watchlist + positions, refreshed on a slow timer
     # in the background (market data, not per-poll) so the dashboard can chart
     # prices without hammering the data source on every request.
@@ -1880,6 +1920,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                                  reply=reply or (None if ok else "APEX run failed — see detail."))
             finally:
                 s.close()
+            _archive_overflow()
         except Exception as e:  # noqa: BLE001
             s = Storage(db_path)
             try:
@@ -1974,6 +2015,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                            f"{res['provider']} — wrote {res['path']} and recorded "
                            f"it. Library +1."))
             s.close()
+            _archive_overflow()
             return
         except model_router.RouterError as e:
             s.close()
@@ -2036,6 +2078,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                              reply=report)
         finally:
             s.close()
+        _archive_overflow()
 
     def _run_console_cheap(command_id: int, message: str, tier, claude_prompt: str,
                            label: str):
@@ -2060,6 +2103,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     reply=reply or None)
             finally:
                 s.close()
+            _archive_overflow()
         except model_router.RouterError as e:
             if claude_bin or runner_cmd:
                 _run_console(command_id, claude_prompt, label)
@@ -2227,6 +2271,22 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     out = _handle_order_action(payload.get("action"), payload.get("id"))
                     code = 200 if out.get("ok") else 400
                     self._send(code, json.dumps(out).encode(), "application/json")
+                    return
+                # Archive the console — move old responses to research/committee/
+                # .md files so the dashboard stays clean. A direct, token-free
+                # action.
+                if self.path.startswith("/api/archive"):
+                    from hf_trading_bot import committee_archive
+                    s = Storage(db_path)
+                    try:
+                        written = committee_archive.archive_commands(s, keep=KEEP_CONSOLE)
+                    finally:
+                        s.close()
+                    out = {"ok": True, "archived": len(written),
+                           "message": (f"Archived {len(written)} response(s) to "
+                                       f"{committee_archive.ARCHIVE_DIR}/."
+                                       if written else "Console already clean.")}
+                    self._send(200, json.dumps(out).encode(), "application/json")
                     return
                 # Study dispatch — send an agent (or the whole committee) to
                 # study its next curriculum topic. A real agent run: spends
