@@ -151,13 +151,19 @@ class AlpacaBroker(Broker):
         if side not in ("buy", "sell"):
             raise ValueError(f"Unknown side: {side}")
 
+        from hf_trading_bot.symbols import is_crypto, normalize_symbol
+        symbol = normalize_symbol(symbol)
+        crypto = is_crypto(symbol)
+
         fractional = abs(qty - round(qty)) > 1e-9
         body: dict[str, Any] = {
             "symbol": symbol,
             "qty": f"{qty:.6f}".rstrip("0").rstrip("."),
             "side": side,
             "type": order_type,
-            "time_in_force": "day",
+            # Crypto trades 24/7 and Alpaca rejects time_in_force=day for it;
+            # gtc is the correct choice. Equities keep day orders.
+            "time_in_force": "gtc" if crypto else "day",
         }
         if fractional:
             # Alpaca only accepts fractional quantities as market/day orders.

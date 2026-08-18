@@ -336,8 +336,39 @@ hf-bot dashboard --port 9000 --refresh 30
 hf-bot dashboard --publish cortex.html # one self-contained static file
 ```
 
-On Windows, double-click **`run-dashboard.bat`** — it activates the venv,
-starts the server, and opens your browser.
+On Windows, double-click **`run-dashboard.bat`** (token-free HUD) or
+**`run-agents.bat`** (full agent mode + tiered models) — it starts the server
+and opens your browser.
+
+### Two ways the desk acts: investment review vs. tactical trade
+
+The committee runs **two distinct processes** — don't confuse them:
+
+- **Investment review** — type a ticker or "should I buy X" in the console.
+  The full long-horizon pipeline runs: regime → research → valuation → red-team
+  → risk → behavioural. The index is the hurdle and **PASS is a good outcome**;
+  most ideas are passed on. This machine is *designed* to be cautious.
+- **Tactical trade — SNIPER-led** — type **`trade BTC`**, **`snipe AAPL`**, or
+  **`tactical TSLA`**. SNIPER reads the tape and *leads*: it delivers
+  entry/stop/target, the risk-manager sizes from the stop, the red-team runs a
+  fast veto, and VECTOR **stages a paper order** in the Orders panel for your
+  approval. This path does **not** run valuation/opportunity-cost and does
+  **not** default to PASS — the desk acts when the tape supports a clean setup.
+  Works for **equities and crypto** alike.
+
+Nothing is ever placed automatically: a tactical trade *stages* a proposal that
+you approve or reject in the Orders panel — paper money only, behind the kill
+switch.
+
+### Crypto
+
+Alpaca trades crypto and equities through the same account. Write a pair as
+`BTC/USD` (or a bare base like `BTC` — it's expanded to `BTC/USD`). Crypto is
+handled end-to-end: its own market-data endpoint, `time_in_force=gtc` orders
+(Alpaca rejects `day` for crypto), it's **PDT-exempt** (not a security) and
+trades 24/7. Put pairs in your `watchlist` (see `config/settings.example.yaml`),
+chart them with `hf-bot chart BTC/USD`, or trade one with `trade BTC` in the
+console.
 
 ### Reaching it from anywhere (secure tunnel)
 

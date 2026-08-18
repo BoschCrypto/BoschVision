@@ -1725,8 +1725,10 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         apex_prompt,
         extract_symbol,
         parse_console_message,
+        parse_tactical_command,
         study_cycle_prompt,
         study_prompt,
+        tactical_trade_prompt,
     )
     from hf_trading_bot.curriculum import agent_keys
 
@@ -2087,6 +2089,16 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         finally:
             s.close()
 
+        # A tactical trade stages a real order via committee tools, which only
+        # the tool-capable executor (claude / --runner-cmd) can run — never a
+        # cheap chat model. Say so clearly rather than failing opaquely.
+        if kind == "tactical" and not (claude_bin or runner_cmd):
+            return {"id": cid, "symbol": symbol, "status": "pending",
+                    "message": "A tactical trade needs the full committee (the "
+                               "`claude` executor) to stage the order — a cheap "
+                               "model can't. Launch with --enable-agent-runner and "
+                               "`claude` on PATH."}
+
         # Tiered steering — only for work that is safe and cheap to offload.
         if have_executor and tiered_on:
             if kind == "study" and study_agent and router_avail.get("cheap"):
@@ -2259,6 +2271,20 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     message = parse_console_message(text)
                 except CommandError as e:
                     self._send(400, json.dumps({"error": str(e)}).encode(), "application/json")
+                    return
+                # Tactical trade — 'trade BTC', 'snipe AAPL'. SNIPER-led, stages
+                # a paper order proposal. Always runs the full committee executor
+                # (Claude), never a cheap model, because it stages an order.
+                tactical = parse_tactical_command(message)
+                if tactical is not None:
+                    prompt = tactical_trade_prompt(tactical)
+                    label = f"tactical trade — {tactical}"
+                    out = _dispatch_run("tactical", prompt, label, symbol=tactical,
+                                        message=message)
+                    if out["status"] == "running":
+                        out["message"] = (f"SNIPER is reading {tactical} — a staged "
+                                          "order will appear in Orders for approval.")
+                    self._send(200, json.dumps(out).encode(), "application/json")
                     return
                 symbol = extract_symbol(message)   # best-effort, for display only
                 prompt = apex_prompt(message)

@@ -72,39 +72,19 @@ def _start_for_lookback(lookback_days: int) -> str:
     return (datetime.now(timezone.utc).date() - timedelta(days=calendar_days)).isoformat()
 
 
-def _fetch_bars(
-    symbols: list[str], start: str, end: Optional[str] = None
-) -> dict[str, list[Bar]]:
-    """Raw paginated fetch across all `symbols` for the [start, end] window."""
-    if not symbols:
-        return {}
-    headers = _headers()
-    feed = _feed()
+def _paginate(url: str, base_params: dict, symbols: list[str],
+              headers: dict) -> dict[str, list[Bar]]:
+    """Paginated bar fetch for one endpoint (stocks OR crypto). Both expose the
+    same {"bars": {symbol: [rows]}} shape and next_page_token contract."""
     out: dict[str, list[Bar]] = {}
-
     for i in range(0, len(symbols), CHUNK):
         chunk = symbols[i : i + CHUNK]
         page_token: Optional[str] = None
         for _ in range(_PAGE_GUARD):
-            params = {
-                "symbols": ",".join(chunk),
-                "timeframe": "1Day",
-                "start": start,
-                "limit": "10000",
-                "adjustment": "split",
-                "feed": feed,
-            }
-            if end:
-                params["end"] = end
+            params = dict(base_params, symbols=",".join(chunk), limit="10000")
             if page_token:
                 params["page_token"] = page_token
-
-            resp = requests.get(
-                f"{DATA_BASE}/v2/stocks/bars",
-                params=params,
-                headers=headers,
-                timeout=_TIMEOUT,
-            )
+            resp = requests.get(url, params=params, headers=headers, timeout=_TIMEOUT)
             if resp.status_code != 200:
                 raise RuntimeError(
                     f"Alpaca data API {resp.status_code}: {resp.text[:300]}"
@@ -112,10 +92,43 @@ def _fetch_bars(
             payload = resp.json()
             for symbol, rows in (payload.get("bars") or {}).items():
                 out.setdefault(symbol, []).extend(_row_to_bar(r) for r in rows)
-
             page_token = payload.get("next_page_token")
             if not page_token:
                 break
+    return out
+
+
+def _fetch_bars(
+    symbols: list[str], start: str, end: Optional[str] = None
+) -> dict[str, list[Bar]]:
+    """Raw paginated fetch across all `symbols` for the [start, end] window.
+
+    Equities and crypto are split to their respective Alpaca endpoints — the
+    stock tape (/v2/stocks/bars, feed-gated) and the crypto tape
+    (/v1beta3/crypto/us/bars, free, no feed/adjustment) — then merged. Callers
+    stay symbol-type-agnostic; a mixed watchlist just works."""
+    if not symbols:
+        return {}
+    from hf_trading_bot.symbols import split_symbols
+
+    headers = _headers()
+    equities, crypto = split_symbols(symbols)
+    out: dict[str, list[Bar]] = {}
+
+    if equities:
+        stock_params = {"timeframe": "1Day", "start": start,
+                        "adjustment": "split", "feed": _feed()}
+        if end:
+            stock_params["end"] = end
+        out.update(_paginate(f"{DATA_BASE}/v2/stocks/bars", stock_params,
+                             equities, headers))
+    if crypto:
+        # Crypto data is public/free — no feed or split-adjustment applies.
+        crypto_params = {"timeframe": "1Day", "start": start}
+        if end:
+            crypto_params["end"] = end
+        out.update(_paginate(f"{DATA_BASE}/v1beta3/crypto/us/bars", crypto_params,
+                             crypto, headers))
 
     # Alpaca returns bars oldest-first per page; guarantee ordering anyway
     # since chunk/page interleaving isn't contractually sorted.

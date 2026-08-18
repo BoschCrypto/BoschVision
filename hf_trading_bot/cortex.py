@@ -78,6 +78,85 @@ def extract_symbol(text: str) -> Optional[str]:
         return parse_review_command(text)
     except CommandError:
         return None
+    except Exception:  # crypto pairs etc. — display-only, never fatal
+        return None
+
+
+# Verbs that mean "take a tactical trade now", SNIPER-led — distinct from the
+# long-horizon "review"/committee flow. Deliberately explicit so a plain
+# question never trips it.
+_TACTICAL_VERBS = ("trade", "snipe", "tactical", "scalp", "swing")
+
+
+def parse_tactical_command(text: str) -> Optional[str]:
+    """If `text` is a tactical-trade command ('trade BTC', 'snipe AAPL',
+    'tactical TSLA'), return the normalised symbol; otherwise None.
+
+    Accepts equities (AAPL) and crypto (BTC, BTC/USD). The returned symbol is
+    validated to a safe shape before it can reach any executor."""
+    from hf_trading_bot.symbols import is_crypto, normalize_symbol
+
+    if not text or not text.strip():
+        return None
+    tokens = [t for t in re.split(r"[\s,]+", text.strip()) if t]
+    if len(tokens) < 2 or tokens[0].lower() not in _TACTICAL_VERBS:
+        return None
+    for raw in tokens[1:]:
+        cand = raw.strip(".,!?").upper()
+        norm = normalize_symbol(cand)
+        # equity ticker, or a crypto pair/base
+        if is_crypto(norm) or _TICKER_RE.match(cand):
+            return norm
+    return None
+
+
+def tactical_trade_prompt(symbol: str) -> str:
+    """A SNIPER-led tactical trade — the chartist reads the tape and the rest of
+    the desk acts on it, staging a paper order proposal for the principal to
+    approve. This is the fast path: it does NOT run the full long-horizon
+    PASS-machine (valuation, opportunity cost, index-hurdle); it is a
+    disciplined tactical trade gated only by risk and a quick red-team veto.
+
+    Works for equities and crypto. Nothing is placed — a proposal is staged and
+    the principal approves it in the Orders panel. Paper money only."""
+    from hf_trading_bot.symbols import is_crypto
+
+    asset = "crypto pair" if is_crypto(symbol) else "equity"
+    run_id = f"TRADE-{symbol.replace('/', '')}"
+    return (
+        f"Act as APEX coordinating a TACTICAL TRADE on {symbol} (a {asset}), "
+        "SNIPER-led. This is the desk's fast path, NOT a long-horizon investment "
+        "review — do not run valuation, opportunity-cost, or index-hurdle "
+        "stages, and do not default to PASS. The principal wants a disciplined "
+        "tactical decision they can act on now.\n\n"
+        f"Pick RUN_ID `{run_id}` and emit `hf-bot committee log-event` events as "
+        "you go so the cortex shows the run.\n\n"
+        "1. SNIPER LEADS. Use the sniper agent to read the chart with real data "
+        f"(`hf-bot chart {symbol}` for equities; for crypto use the Crypto.com "
+        "MCP candles/order-book tools). SNIPER delivers: trend/bias, key "
+        "support/resistance, the setup, and a concrete ENTRY, STOP (invalidation "
+        "level), and TARGET with a reward:risk ratio. If SNIPER has no clean "
+        "setup, say so plainly and stage nothing — an honest 'no trade' is a "
+        "valid outcome, but the default here is to ACT when the tape supports it.\n"
+        "2. RISK GATE. Use the risk-manager agent to size the position from "
+        "SNIPER's stop (distance to invalidation) and set the max loss. It may "
+        "cut size but should not veto a well-structured trade outright.\n"
+        "3. QUICK RED-TEAM. Use the red-team agent for a FAST veto check only — "
+        "an obvious trap, news risk into the trade, or a stop that makes no "
+        "sense. Not a full teardown.\n"
+        "4. STAGE THE ORDER. If SNIPER has a setup and risk approves, STAGE it "
+        "(do not place it):\n"
+        f"   `hf-bot order propose --symbol {symbol} --side buy --stop <SNIPER "
+        "stop> --target <SNIPER target> --pct <risk-manager size> --rationale "
+        "\"SNIPER: <one-line setup>\"`\n"
+        "   A proposal then appears in the principal's Orders panel to approve or "
+        "reject. Never approve or place it yourself — placement is the "
+        "principal's explicit action, paper money only, behind the kill switch.\n\n"
+        "You are HEADLESS: do not ask for clarification. Finish with a short "
+        "report in APEX's voice: SNIPER's read, the entry/stop/target, the size, "
+        "the red-team note, and the staged proposal id (or why you staged "
+        "nothing)."
+    )
 
 
 def study_prompt(agent_key: str) -> str:

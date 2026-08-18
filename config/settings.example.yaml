@@ -33,6 +33,12 @@ watchlist:
     strategy_key: rsi_mean_reversion
   - symbol: NKE
     strategy_key: sma_crossover
+  # Crypto works too — write the pair as BASE/USD (or a bare base like BTC).
+  # Crypto is PDT-exempt and trades 24/7. Uncomment to include:
+  # - symbol: BTC/USD
+  #   strategy_key: momentum_90d
+  # - symbol: ETH/USD
+  #   strategy_key: momentum_90d
 
 # Risk settings. Applied to the database on every run, so this file is the
 # source of truth for them. Omit the block entirely to keep existing values.

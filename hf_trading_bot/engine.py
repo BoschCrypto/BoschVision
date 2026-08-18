@@ -256,7 +256,11 @@ def run_strategy_cycle(
             push_signal(e["symbol"], e["strategy_key"], "exit", f"{detail} | would SELL — exits disabled", True)
             log.append(f"{e['symbol']}: would SELL — blocked, exits disabled")
             continue
-        opened_today = opened_at_by_symbol.get(e["symbol"], "")[:10] == today_str
+        from hf_trading_bot.symbols import is_crypto
+        # Crypto is not a security — the PDT rule does not apply to it, so a
+        # same-day crypto round-trip never consumes the day-trade budget.
+        opened_today = (opened_at_by_symbol.get(e["symbol"], "")[:10] == today_str
+                        and not is_crypto(e["symbol"]))
         if opened_today and day_trades_used >= max_day_trades and not dry_run:
             push_signal(
                 e["symbol"], e["strategy_key"], "exit",
