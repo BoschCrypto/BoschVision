@@ -353,6 +353,7 @@ class CortexSnapshot:
     knowledge: dict[str, Any] = field(default_factory=dict)        # per-agent library growth
     orders: list[dict[str, Any]] = field(default_factory=list)     # execution-bridge proposals
     account: Optional[dict[str, Any]] = None                        # balance + equity history
+    system: dict[str, Any] = field(default_factory=dict)           # kill switch + broker state
 
 
 def _reading(
@@ -678,7 +679,13 @@ def build_snapshot(storage: Storage) -> CortexSnapshot:
             for o in storage.recent_order_proposals(limit=8)
         ],
         account=_account(storage),
+        system=_system(storage),
     )
+
+
+def _system(storage: Storage) -> dict[str, Any]:
+    s = storage.get_settings()
+    return {"kill_switch": bool(s["kill_switch_active"])}
 
 
 def _account(storage: Storage) -> Optional[dict[str, Any]]:

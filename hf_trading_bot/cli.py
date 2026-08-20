@@ -2272,6 +2272,23 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     code = 200 if out.get("ok") else 400
                     self._send(code, json.dumps(out).encode(), "application/json")
                     return
+                # Kill switch — halt/enable order placement. Direct, token-free,
+                # writes the same setting as `hf-bot kill-switch`.
+                if self.path.startswith("/api/kill-switch"):
+                    length = int(self.headers.get("Content-Length", 0))
+                    raw = self.rfile.read(length) if length else b"{}"
+                    payload = json.loads(raw or b"{}")
+                    active = bool(payload.get("active"))
+                    s = Storage(db_path)
+                    try:
+                        s.set_kill_switch(active)
+                    finally:
+                        s.close()
+                    out = {"ok": True, "kill_switch": active,
+                           "message": ("Kill switch ON — trading halted." if active
+                                       else "Kill switch OFF — trading enabled.")}
+                    self._send(200, json.dumps(out).encode(), "application/json")
+                    return
                 # Archive the console — move old responses to research/committee/
                 # .md files so the dashboard stays clean. A direct, token-free
                 # action.

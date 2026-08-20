@@ -236,6 +236,12 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
 .study-btn:hover { background: rgba(53,210,154,0.18); }
 .study-btn.cycle { float: right; }
 .study-btn:disabled { opacity: 0.4; cursor: default; border-color: var(--border); color: var(--dim); background: none; }
+.study-btn.kill { color: var(--danger); border-color: rgba(240,104,125,0.5); background: rgba(240,104,125,0.08); }
+.study-btn.kill:hover { background: rgba(240,104,125,0.18); }
+.killrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.killstate { font-size: 11px; letter-spacing: 0.5px; font-weight: 600; }
+.killstate.armed { color: var(--live); }
+.killstate.halted { color: var(--danger); }
 .rrow { display: flex; align-items: center; gap: 9px; font-size: 12px; padding: 6px 0; }
 .rrow .dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; box-shadow: 0 0 8px currentColor; }
 .rrow .rcn { flex: 1 1 auto; letter-spacing: 0.5px; }
@@ -775,6 +781,25 @@ _APP_JS = r"""
            '</svg>';
   }
 
+  function systemPanel(d) {
+    var sys = d.system || {};
+    var live = !!window.__CORTEX_LIVE__;
+    var on = !!sys.kill_switch;   // on == trading halted
+    var h = '<div class="readout"><h4>System</h4>';
+    h += '<div class="killrow">';
+    h += '<span class="killstate ' + (on ? 'halted' : 'armed') + '">' +
+         (on ? '● KILL SWITCH ON — halted' : '● TRADING ENABLED') + '</span>';
+    if (live) {
+      h += '<button class="study-btn' + (on ? '' : ' kill') + '" data-kill="' +
+           (on ? 'off' : 'on') + '">' + (on ? 'ENABLE TRADING' : 'HALT') + '</button>';
+    }
+    h += '</div>';
+    h += '<div class="muted" style="margin-top:6px">' +
+         (on ? 'Order placement is blocked. Enable to approve staged orders (paper money).'
+             : 'Staged orders can be approved — paper money only.') + '</div>';
+    return h + '</div>';
+  }
+
   function accountPanel(d) {
     var a = d.account;
     var h = '<div class="readout"><h4>Account &middot; paper</h4>';
@@ -815,7 +840,7 @@ _APP_JS = r"""
   }
 
   function readouts(d) {
-    var h = accountPanel(d) + pricesPanel(d) + apexConsolePanel(d) + ordersPanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
+    var h = systemPanel(d) + accountPanel(d) + pricesPanel(d) + apexConsolePanel(d) + ordersPanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
     // portfolio vs SPY
     h += '<div class="readout"><h4>Portfolio vs SPY</h4>';
     if (d.portfolio) {
@@ -901,6 +926,21 @@ _CMD_JS = r"""
   document.addEventListener("click", function (ev) {
     var btn = ev.target.closest ? ev.target.closest(".study-btn") : null;
     if (!btn || btn.disabled) return;
+    // Kill switch toggle — halt/enable order placement.
+    if (btn.getAttribute("data-kill")) {
+      var wantOn = btn.getAttribute("data-kill") === "on";
+      if (wantOn && !window.confirm("Turn the KILL SWITCH ON? This halts all order placement.")) return;
+      btn.disabled = true;
+      fetch("/api/kill-switch", {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({active: wantOn})})
+        .then(function (r) { return r.json(); })
+        .then(function () {
+          if (window.__CORTEX_REFRESH__) window.__CORTEX_REFRESH__();
+          setTimeout(function () { btn.disabled = false; }, 1200);
+        })
+        .catch(function () { btn.disabled = false; });
+      return;
+    }
     // Archive button — clean the console, no tokens, no confirm needed.
     if (btn.getAttribute("data-archive")) {
       btn.disabled = true;
