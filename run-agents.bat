@@ -16,5 +16,5 @@ echo   - Study buttons / easy questions  -> cheap model, no Claude tokens
 echo   - Buy/sell/valuation/committee     -> Claude
 echo Your browser will open at http://127.0.0.1:8420
 echo Keep this window open. Press Ctrl+C to stop.
-hf-bot dashboard --open --enable-agent-runner --tiered
+hf-bot dashboard --open --enable-agent-runner --tiered --committee-model sonnet
 pause

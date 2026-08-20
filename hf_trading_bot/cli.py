@@ -1684,6 +1684,11 @@ def order_reject(cfg, proposal_id):
                    "usage/quota is exhausted — automatically retry the command with this one "
                    "(prompt piped to stdin). e.g. 'ollama run nemotron'. Keeps the committee "
                    "answering after tokens run out.")
+@click.option("--committee-model", default=None,
+              help="Run the `claude` committee on this model (e.g. 'sonnet' or 'haiku') "
+                   "instead of your Claude Code default. Sonnet costs a fraction of Opus "
+                   "with near-equal quality on most reviews — the biggest token saver. "
+                   "Pair with --tiered so easy asks skip Claude entirely.")
 @click.option("--tiered", is_flag=True,
               help="Route easy work to cheap models and keep Claude for the hard calls. "
                    "STUDY buttons then research on a cheap model (NVIDIA/Ollama) and save "
@@ -1706,7 +1711,8 @@ def order_reject(cfg, proposal_id):
 def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               publish_path: Optional[str], enable_agent_runner: bool,
               runner_permission_mode: str, runner_cmd: Optional[str],
-              fallback_cmd: Optional[str], tiered: bool, open_browser: bool,
+              fallback_cmd: Optional[str], committee_model: Optional[str],
+              tiered: bool, open_browser: bool,
               token: Optional[str], auth: bool, tunnel: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
 
@@ -1862,6 +1868,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                                capture_output=True, text=True, timeout=1800)
         else:
             cmd = [claude_bin, "-p"]
+            if committee_model:
+                cmd += ["--model", committee_model]
             if runner_permission_mode and runner_permission_mode != "default":
                 cmd += ["--permission-mode", runner_permission_mode]
             cmd.append(prompt)
