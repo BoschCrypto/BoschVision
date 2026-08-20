@@ -1859,17 +1859,19 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
             "only you — holding the link and key — can then command a spend."
         )
 
-    def _exec_primary(prompt: str):
+    def _exec_primary(prompt: str, model: Optional[str] = None):
         """Run the primary executor: a custom --runner-cmd (prompt on stdin) or
-        `claude -p` (full tool-driven committee). Returns (returncode, out, err)."""
+        `claude -p` (full tool-driven committee). `model` overrides the launch
+        --committee-model for this one run. Returns (returncode, out, err)."""
         import shlex
         if runner_cmd:
             p = subprocess.run(shlex.split(runner_cmd), input=prompt, cwd=".",
                                capture_output=True, text=True, timeout=1800)
         else:
             cmd = [claude_bin, "-p"]
-            if committee_model:
-                cmd += ["--model", committee_model]
+            use_model = model or committee_model
+            if use_model:
+                cmd += ["--model", use_model]
             if runner_permission_mode and runner_permission_mode != "default":
                 cmd += ["--permission-mode", runner_permission_mode]
             cmd.append(prompt)
@@ -1882,12 +1884,14 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                            capture_output=True, text=True, timeout=1800)
         return p.returncode, (p.stdout or "").strip(), (p.stderr or "")
 
-    def _run_console(command_id: int, prompt: str, label: str):
+    def _run_console(command_id: int, prompt: str, label: str,
+                     model: Optional[str] = None):
         """Run APEX on a console command in a background thread. Tries the
         primary executor (claude) first; if it fails — including when Anthropic
         usage is exhausted — automatically fails over to --fallback-cmd (e.g. a
         local Ollama model), so the committee keeps answering after tokens run
-        out. The prompt is passed as an argument / on stdin, never via a shell."""
+        out. `model` overrides the committee model for this run. The prompt is
+        passed as an argument / on stdin, never via a shell."""
         s = Storage(db_path)
         try:
             s.update_command(command_id, status="running", detail=f"APEX working on: {label}")
@@ -1898,7 +1902,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         primary_available = bool(claude_bin or runner_cmd)
         try:
             if primary_available:
-                rc, out, err = _exec_primary(prompt)
+                rc, out, err = _exec_primary(prompt, model)
                 reply, ok = out, (rc == 0 and bool(out))
                 if not ok:
                     blob = (out + " " + err).lower()
@@ -2124,7 +2128,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     s.close()
 
     def _dispatch_run(kind: str, prompt: str, label: str, symbol=None, message=None,
-                      study_agent=None, study_cycle_rounds=None):
+                      study_agent=None, study_cycle_rounds=None, model=None):
         """Enqueue a run and start it on the executor if one is available;
         otherwise leave it queued for a Claude session. Shared by the APEX
         console and the study buttons so both honor --enable-agent-runner and
@@ -2168,7 +2172,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                         "message": f"Study cycle on a cheap model ({study_cycle_rounds} "
                                    "round(s)) — no Claude tokens. Watch the Knowledge "
                                    "panel."}
-            if kind == "console":
+            if kind == "console" and model is None:
                 tier = model_router.classify("console", message or "")
                 if tier in ("cheap", "mid") and router_avail.get(tier):
                     threading.Thread(target=_run_console_cheap,
@@ -2179,7 +2183,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                                        "Claude for the hard calls)."}
 
         if have_executor:
-            threading.Thread(target=_run_console, args=(cid, prompt, label),
+            threading.Thread(target=_run_console, args=(cid, prompt, label, model),
                              daemon=True).start()
             ack = "Dispatched — watch the cortex; the reply lands in the console."
             status = "running"
@@ -2348,7 +2352,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     return
                 length = int(self.headers.get("Content-Length", 0))
                 raw = self.rfile.read(length) if length else b"{}"
-                text = (json.loads(raw or b"{}").get("text") or "").strip()
+                _payload = json.loads(raw or b"{}")
+                text = (_payload.get("text") or "").strip()
+                # Model picker: allowlisted so only a known alias reaches the
+                # executor; empty means "use the launch --committee-model default".
+                pick = (_payload.get("model") or "").strip().lower()
+                run_model = pick if pick in ("sonnet", "opus", "haiku") else None
                 # Free-form message to APEX. It's passed to the executor as a
                 # single subprocess argument (never a shell), so arbitrary text
                 # is safe; we only trim/cap it.
@@ -2365,7 +2374,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     prompt = tactical_trade_prompt(tactical)
                     label = f"tactical trade — {tactical}"
                     out = _dispatch_run("tactical", prompt, label, symbol=tactical,
-                                        message=message)
+                                        message=message, model=run_model)
                     if out["status"] == "running":
                         out["message"] = (f"SNIPER is reading {tactical} — a staged "
                                           "order will appear in Orders for approval.")
@@ -2374,7 +2383,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                 symbol = extract_symbol(message)   # best-effort, for display only
                 prompt = apex_prompt(message)
                 label = message if len(message) <= 60 else message[:57] + "…"
-                out = _dispatch_run("console", prompt, label, symbol=symbol, message=message)
+                out = _dispatch_run("console", prompt, label, symbol=symbol,
+                                    message=message, model=run_model)
                 if out["status"] == "running":
                     out["message"] = ("APEX is on it — watch the cortex; the reply "
                                       "lands in the console.")

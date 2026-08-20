@@ -43,6 +43,12 @@ def render_html(snap: CortexSnapshot, *, mode: Mode = "static") -> str:
             '<input id="cmdinput" type="text" '
             'placeholder="command your committee — e.g.  review ASTS   ·   '
             'how are we tracking vs SPY?   (Enter to send)" />'
+            '<select id="modelpick" title="Which model runs the committee for this question">'
+            '<option value="">Auto</option>'
+            '<option value="sonnet">Sonnet</option>'
+            '<option value="opus">Opus</option>'
+            '<option value="haiku">Haiku</option>'
+            '</select>'
             '<button type="submit" id="cmdsend">SEND</button>'
             '<span id="cmdmsg"></span></form>'
         )
@@ -161,6 +167,10 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
 #cmdinput { flex: 1 1 auto; background: transparent; border: none; outline: none;
   color: var(--text); font-family: inherit; font-size: 13px; letter-spacing: 0.3px; }
 #cmdinput::placeholder { color: var(--faint); }
+#modelpick { flex: 0 0 auto; background: rgba(20,28,42,0.9); color: var(--dim);
+  border: 1px solid var(--border-hi); border-radius: 999px; font-family: inherit;
+  font-size: 10px; letter-spacing: 0.5px; padding: 6px 8px; cursor: pointer; outline: none; }
+#modelpick:hover { color: var(--text); border-color: var(--cyan-dim); }
 #cmdsend { flex: 0 0 auto; background: var(--cyan); color: #05161c;
   border: none; border-radius: 999px; cursor: pointer; font-weight: 700;
   font-family: inherit; font-size: 10px; letter-spacing: 1.5px; padding: 7px 15px; transition: filter .15s; }
@@ -988,10 +998,12 @@ _CMD_JS = r"""
     var msg = document.getElementById("cmdmsg");
     var text = (input.value || "").trim();
     if (!text) return;
+    var pick = document.getElementById("modelpick");
+    var model = pick ? pick.value : "";
     msg.className = "show"; msg.textContent = "dispatching…";
     fetch("/api/command", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({text: text})
+      body: JSON.stringify({text: text, model: model})
     }).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
       .then(function (res) {
         if (!res.ok) { msg.className = "show err"; msg.textContent = res.j.error || "command rejected"; return; }
