@@ -140,6 +140,40 @@ def validate(
     return (len(reasons) == 0, reasons)
 
 
+def auto_execute_blockers(
+    proposal: ProposedOrder,
+    *,
+    broker_name: str,
+    max_notional: float,
+) -> list[str]:
+    """Extra reasons an order must NOT be placed *without a human approving it*.
+
+    Auto-execution removes the one gate that catches a bad agent call before it
+    reaches the broker, so it carries two limits that manual approval does not:
+
+    * **Paper only, always.** Unlike `validate`, there is no allow_live escape
+      hatch — a self-firing loop with real money is categorically different from
+      a human clicking approve on each order, so live accounts are refused here
+      no matter what the environment says.
+    * **A per-order notional ceiling**, so a sizing bug or a runaway agent can
+      only ever spend a bounded amount per trade.
+
+    These stack on top of `validate` — callers must pass both.
+    """
+    reasons: list[str] = []
+    if not is_paper(broker_name):
+        reasons.append(
+            f"auto-execute refuses broker '{broker_name}' — unattended placement is "
+            f"paper-only, with no live override"
+        )
+    if proposal.est_notional > max_notional + 1e-6:
+        reasons.append(
+            f"order notional ${proposal.est_notional:,.2f} exceeds the auto-execute "
+            f"ceiling of ${max_notional:,.2f} — approve it manually instead"
+        )
+    return reasons
+
+
 def place(broker: Broker, proposal: ProposedOrder) -> Order:
     """Send an already-validated proposal to the broker. Market order; any
     protective stop rides along where the broker supports it."""

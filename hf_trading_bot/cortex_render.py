@@ -252,6 +252,9 @@ main { display: flex; flex: 1 1 auto; min-height: 0; }
 .killstate { font-size: 11px; letter-spacing: 0.5px; font-weight: 600; }
 .killstate.armed { color: var(--live); }
 .killstate.halted { color: var(--danger); }
+.autoexec { margin-top: 8px; font-size: 10px; line-height: 1.5; color: var(--proxy);
+  background: rgba(230,183,105,0.10); border: 1px solid rgba(230,183,105,0.35);
+  border-radius: var(--r-sm); padding: 6px 8px; letter-spacing: 0.3px; }
 .rrow { display: flex; align-items: center; gap: 9px; font-size: 12px; padding: 6px 0; }
 .rrow .dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; box-shadow: 0 0 8px currentColor; }
 .rrow .rcn { flex: 1 1 auto; letter-spacing: 0.5px; }
@@ -807,6 +810,11 @@ _APP_JS = r"""
     h += '<div class="muted" style="margin-top:6px">' +
          (on ? 'Order placement is blocked. Enable to approve staged orders (paper money).'
              : 'Staged orders can be approved — paper money only.') + '</div>';
+    if (sys.auto_execute) {
+      h += '<div class="autoexec">▲ AUTO-EXECUTE ON — agent orders place themselves, ' +
+           'no approval click (paper only, max $' +
+           Number(sys.auto_execute_max || 0).toLocaleString() + '/order)</div>';
+    }
     return h + '</div>';
   }
 

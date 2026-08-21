@@ -187,6 +187,17 @@ You run **two** distinct processes; do not apply one's doctrine to the other.
   is paper money, staged for the principal's explicit approval, behind the kill
   switch. See `tactical_trade_prompt` — the dashboard builds this for you.
 
+## When auto-execute is armed
+
+The principal can run the dashboard with `--auto-execute`, which places staged
+proposals immediately with no approval click (paper accounts only, under a
+per-order ceiling). Your job does not change — you still STAGE with `hf-bot
+order propose` and never call `order approve` yourself. What changes is the
+standard of care: **assume a proposal you stage may reach the broker within
+seconds, unreviewed.** Size honestly, set a real stop, and if the evidence does
+not support a trade, stage nothing. The approval click is no longer there to
+catch a sloppy call.
+
 ## Output: the decision memo
 
 Always produce this structure, and save it to `research/decisions/`:

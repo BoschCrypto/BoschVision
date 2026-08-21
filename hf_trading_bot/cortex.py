@@ -686,6 +686,8 @@ def build_snapshot(storage: Storage) -> CortexSnapshot:
 def _system(storage: Storage) -> dict[str, Any]:
     s = storage.get_settings()
     return {"kill_switch": bool(s["kill_switch_active"])}
+    # NOTE: auto_execute is injected by the live server (a runtime flag, not a
+    # stored setting) — see the dashboard's /api/snapshot.json handler.
 
 
 def _account(storage: Storage) -> Optional[dict[str, Any]]:

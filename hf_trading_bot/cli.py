@@ -1684,6 +1684,15 @@ def order_reject(cfg, proposal_id):
                    "usage/quota is exhausted — automatically retry the command with this one "
                    "(prompt piped to stdin). e.g. 'ollama run nemotron'. Keeps the committee "
                    "answering after tokens run out.")
+@click.option("--auto-execute", is_flag=True,
+              help="Place agent-proposed orders automatically, with no approval click. "
+                   "PAPER ACCOUNTS ONLY — there is no live override for unattended "
+                   "placement. Still obeys the kill switch, position caps, buying power "
+                   "and the PDT guard, plus a per-order ceiling (--auto-execute-max). "
+                   "Off by default: this is the gate that catches a bad agent call.")
+@click.option("--auto-execute-max", "auto_execute_max", default=500.0, type=float,
+              help="Per-order notional ceiling for --auto-execute (default $500). Anything "
+                   "larger stays staged for manual approval.")
 @click.option("--committee-model", default=None,
               help="Run the `claude` committee on this model (e.g. 'sonnet' or 'haiku') "
                    "instead of your Claude Code default. Sonnet costs a fraction of Opus "
@@ -1711,7 +1720,8 @@ def order_reject(cfg, proposal_id):
 def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               publish_path: Optional[str], enable_agent_runner: bool,
               runner_permission_mode: str, runner_cmd: Optional[str],
-              fallback_cmd: Optional[str], committee_model: Optional[str],
+              fallback_cmd: Optional[str], auto_execute: bool,
+              auto_execute_max: float, committee_model: Optional[str],
               tiered: bool, open_browser: bool,
               token: Optional[str], auth: bool, tunnel: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
@@ -1767,6 +1777,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     # request threads (SQLite forbids it), so close it and give each request
     # its own short-lived connection created in — and used only by — its own
     # thread. build_snapshot is read-only, so concurrent reads are safe.
+    from hf_trading_bot.execution import is_paper
     db_path = cfg.db_path
     storage.close()
     refresh_ms = max(2000, refresh * 1000)
@@ -1932,6 +1943,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                                  reply=reply or (None if ok else "APEX run failed — see detail."))
             finally:
                 s.close()
+            # An agent may have staged an order; place it if auto-execute is on.
+            _auto_execute_pending()
             _archive_overflow()
         except Exception as e:  # noqa: BLE001
             s = Storage(db_path)
@@ -1996,6 +2009,49 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     "order_id": placed.id, "summary": proposal.summary()}
         finally:
             s.close()
+
+    # Auto-execute is only ever armed against a paper broker. A self-firing loop
+    # on a real-money account is a different risk category from a human clicking
+    # approve, so this is checked once at startup and again per order.
+    auto_exec_on = auto_execute and is_paper(cfg.broker)
+
+    def _auto_execute_pending():
+        """Place any staged proposals without waiting for an approval click.
+
+        Runs after an agent finishes. Each order still passes `validate` (kill
+        switch, buying power, paper-only, min notional) AND the stricter
+        `auto_execute_blockers` (paper-only with no override, per-order ceiling).
+        Anything that trips a blocker is left staged for manual approval rather
+        than rejected — the principal can still approve it deliberately."""
+        if not auto_exec_on:
+            return
+        from hf_trading_bot.execution import ProposedOrder, auto_execute_blockers
+        s = Storage(db_path)
+        try:
+            pending = s.pending_order_proposals()
+        finally:
+            s.close()
+        for r in pending:
+            proposal = ProposedOrder(
+                symbol=r["symbol"], side=r["side"], qty=r["qty"],
+                est_price=r["est_price"], est_notional=r["est_notional"],
+                stop_price=r["stop_price"], take_profit=r["take_profit"],
+                decision_id=r["decision_id"],
+            )
+            blockers = auto_execute_blockers(
+                proposal, broker_name=cfg.broker, max_notional=auto_execute_max)
+            if blockers:
+                s = Storage(db_path)
+                try:
+                    s.update_order_proposal(
+                        r["id"], status="proposed",
+                        detail="held for manual approval — " + "; ".join(blockers))
+                finally:
+                    s.close()
+                continue
+            # Reuse the exact approval path the dashboard button uses, so
+            # auto-execution can never take a shortcut around its guards.
+            _handle_order_action("approve", r["id"])
 
     _CHEAP_CONSOLE_SYS = (
         "You are APEX, a disciplined investment committee's analyst, answering a "
@@ -2251,6 +2307,9 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                         "claude_available": bool(claude_bin),
                     }
                     payload["prices"] = dict(price_cache)
+                    payload.setdefault("system", {})
+                    payload["system"]["auto_execute"] = bool(auto_exec_on)
+                    payload["system"]["auto_execute_max"] = auto_execute_max
                     self._send(200, json.dumps(payload).encode(), "application/json")
                     return
                 html = render_html(snap, mode="live").replace(
@@ -2412,6 +2471,13 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                        "commands will queue")
     if fallback_cmd and (claude_bin or runner_cmd):
         runner_note += f"  · fallback → `{fallback_cmd}` when the primary fails/runs out"
+    if auto_execute and not auto_exec_on:
+        runner_note += (f"\n  [!] --auto-execute IGNORED — broker '{cfg.broker}' is not a "
+                        "paper account. Unattended placement is paper-only.")
+    elif auto_exec_on:
+        runner_note += (f"\n  [!] AUTO-EXECUTE ON — agent orders place themselves with no "
+                        f"approval click (paper, max ${auto_execute_max:,.0f}/order). "
+                        "Kill switch and caps still apply.")
     if tiered:
         if tiered_on:
             live = ", ".join(t for t in ("cheap", "mid") if router_avail.get(t))
