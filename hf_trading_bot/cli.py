@@ -1953,10 +1953,11 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
             finally:
                 s.close()
 
-    def _handle_order_action(action, proposal_id):
+    def _handle_order_action(action, proposal_id, auto=False):
         """Approve (place) or reject a proposed order from the dashboard. A
         direct action — no Claude, no tokens — behind the same guards as the
-        CLI. Places paper orders only."""
+        CLI. Places paper orders only. `auto` marks placements made by the
+        auto-execute sweep (no human click) for the notification wording."""
         from hf_trading_bot.execution import ProposedOrder, place, validate
 
         try:
@@ -2005,6 +2006,14 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                 return {"ok": False, "error": f"placement failed: {e}", "id": proposal_id}
             s.update_order_proposal(proposal_id, status=placed.status or "placed",
                                     detail=f"placed via {cfg.broker}", broker_order_id=placed.id)
+            proposal.rationale = r.get("rationale") or ""
+            try:
+                from hf_trading_bot import notify
+                title, body = notify.order_placed_message(
+                    proposal, order_id=placed.id or "?", broker=cfg.broker, auto=auto)
+                notify.notify(title, body)
+            except Exception:  # notification must never break a placed trade
+                pass
             return {"ok": True, "id": proposal_id, "status": placed.status or "placed",
                     "order_id": placed.id, "summary": proposal.summary()}
         finally:
@@ -2051,7 +2060,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                 continue
             # Reuse the exact approval path the dashboard button uses, so
             # auto-execution can never take a shortcut around its guards.
-            _handle_order_action("approve", r["id"])
+            _handle_order_action("approve", r["id"], auto=True)
 
     _CHEAP_CONSOLE_SYS = (
         "You are APEX, a disciplined investment committee's analyst, answering a "

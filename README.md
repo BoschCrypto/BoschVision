@@ -370,6 +370,16 @@ trades 24/7. Put pairs in your `watchlist` (see `config/settings.example.yaml`),
 chart them with `hf-bot chart BTC/USD`, or trade one with `trade BTC` in the
 console.
 
+### Trade notifications
+
+Every order that actually reaches the broker fires a notification — manual
+approvals and `--auto-execute` placements alike — so a fired trade is never
+silent. A **Windows desktop toast** fires with zero setup. For your phone too,
+set `VANTRIX_WEBHOOK_URL` in `.env` to a Discord/Slack incoming webhook or an
+[ntfy.sh](https://ntfy.sh) topic URL — one URL works for all three (see
+`.env.example`). Both channels are best-effort: a notification failure never
+blocks or undoes a trade that already placed.
+
 ### Reaching it from anywhere (secure tunnel)
 
 The dashboard can dispatch committee reviews, so **never expose it without a
