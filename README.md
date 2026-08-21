@@ -370,6 +370,69 @@ trades 24/7. Put pairs in your `watchlist` (see `config/settings.example.yaml`),
 chart them with `hf-bot chart BTC/USD`, or trade one with `trade BTC` in the
 console.
 
+### Memecoin trading (pump.fun / Solana)
+
+A separate, opt-in feature for trading Solana memecoins (pump.fun-style
+launches) via the Jupiter aggregator. **Read this whole section before using
+it — it is categorically different from everything else in this bot.**
+
+**Why it's different.** Alpaca is a regulated broker with a real paper-trading
+mode. Solana has no such thing: every trade is a **real, irreversible
+on-chain transaction** signed with a **real private key**, funded with **real
+money**. There is no kill switch for a transaction already broadcast. Most
+tokens on this market have no fundamentals and a large share are explicitly
+designed to be dumped on early buyers — treat any balance you put here as
+money you're comfortable losing entirely.
+
+**It is never automatic.** No agent, no `--auto-execute` sweep, no scheduled
+study or Routine can ever reach this code — every buy/sell is a command you
+typed yourself.
+
+**Setup:**
+```bash
+pip install -e ".[memecoin]"
+```
+Use a **wallet dedicated to this bot** — not your main Phantom wallet. In
+Phantom: add a new account, send it only the amount you're funding the bot
+with, then export *that* account's private key (Settings → the new account →
+Export Private Key) into `.env` as `SOLANA_PRIVATE_KEY`. That way this code
+never has custody of anything else you hold. See `.env.example` for every
+variable (`SOLANA_PRIVATE_KEY`, `SOLANA_RPC_URL`, `MEMECOIN_MAX_TRADE_USD`,
+`MEMECOIN_WALLET_BUDGET_USD`, `HF_BOT_I_UNDERSTAND_MEMECOIN_RISK`).
+
+**Guards, all of which must pass or the trade is refused before anything is
+signed:**
+- `HF_BOT_I_UNDERSTAND_MEMECOIN_RISK=true` — a deliberate, typo-proof opt-in.
+- The kill switch (the same one Alpaca trading respects).
+- A per-trade ceiling, `MEMECOIN_MAX_TRADE_USD`.
+- A cumulative wallet budget, `MEMECOIN_WALLET_BUDGET_USD` — net USD deployed
+  (buys minus sells) can never exceed it.
+
+**Be clear about what these do and don't protect:** they bound what *this
+code* will voluntarily spend. They do **not** limit what the raw private key
+is capable of if it's ever exposed — the key controls the whole wallet it's
+in, which is exactly why it should be a dedicated wallet with only your
+intended budget in it.
+
+```bash
+hf-bot memecoin wallet                          # address, SOL balance, budget used
+hf-bot memecoin scan                             # trending Solana tokens (data only)
+hf-bot memecoin scan --query BONK                # search for a specific token
+hf-bot memecoin quote --token <MINT> --usd 10    # preview a buy — spends nothing
+hf-bot memecoin buy --token <MINT> --usd 10 --dry-run   # full preview, still nothing sent
+hf-bot memecoin buy --token <MINT> --usd 10      # real trade
+hf-bot memecoin sell --token <MINT> --pct 100    # sell all of a held position
+hf-bot memecoin history                          # every trade this bot has made
+```
+
+**A note on testing:** the sign-and-submit path could not be exercised
+against the live Solana network while building this (this dev environment's
+proxy blocks those hosts) — the request/response shapes follow Jupiter's and
+Solana's documented, stable APIs, and every piece of logic around it (caps,
+routing, guards) is unit-tested offline. Before your first real trade: run
+`hf-bot memecoin wallet` to confirm the RPC connection and balance read work,
+then use `--dry-run` at least once.
+
 ### Trade notifications
 
 Every order that actually reaches the broker fires a notification — manual

@@ -1657,6 +1657,182 @@ def order_reject(cfg, proposal_id):
     storage.close()
 
 
+@cli.group()
+def memecoin():
+    """Solana / pump.fun-style memecoin trading — real money, no paper mode.
+
+    Separate from everything else in this bot: it is never reachable from the
+    committee, --auto-execute, or any scheduled job. Every trade here is a
+    direct command you typed, gated by HF_BOT_I_UNDERSTAND_MEMECOIN_RISK, the
+    kill switch, a per-trade ceiling, and a cumulative wallet budget. See the
+    README's "Memecoin trading" section before using this — most tokens on
+    this market are designed to be dumped on buyers, and there is no undo on
+    a broadcast transaction.
+    """
+
+
+@memecoin.command("wallet")
+@click.pass_obj
+def memecoin_wallet(cfg):
+    """Show the configured wallet's address, SOL balance, and budget used."""
+    from hf_trading_bot import memecoin, solana_wallet
+
+    storage = _load_storage(cfg)
+    try:
+        keypair = solana_wallet.load_keypair()
+        pub = solana_wallet.pubkey_str(keypair)
+        sol = solana_wallet.get_balance_sol(pub)
+        net = storage.memecoin_net_deployed_usd()
+        budget = memecoin.budget_usd()
+        click.echo(f"Wallet:  {pub}")
+        click.echo(f"Balance: {sol:.4f} SOL")
+        click.echo(f"Budget:  ${net:,.2f} / ${budget:,.2f} deployed "
+                   f"(${max(0.0, budget - net):,.2f} remaining)")
+        click.echo(f"Confirm flag: {'set' if memecoin.is_confirmed() else 'NOT SET — trades will be refused'}")
+    except (solana_wallet.WalletError, memecoin.MemecoinError) as e:
+        raise click.ClickException(str(e))
+    finally:
+        storage.close()
+
+
+@memecoin.command("scan")
+@click.option("--query", default=None, help="Search by symbol/name/mint address instead of trending.")
+@click.option("--limit", default=15, type=int)
+def memecoin_scan(query, limit):
+    """List trending Solana tokens, or search for one. Data only — no wallet
+    touched, nothing spent. Attention is not a recommendation."""
+    from hf_trading_bot import memecoin_data
+
+    try:
+        rows = (memecoin_data.search(query)[:limit] if query
+               else memecoin_data.trending(limit=limit))
+    except memecoin_data.DexScreenerError as e:
+        raise click.ClickException(str(e))
+    if not rows:
+        click.echo("No results.")
+        return
+    for t in rows:
+        click.echo(f"{(t['symbol'] or '?'):<10} {t['address']}\n"
+                   f"  price ${t['price_usd']:.8f}  liq ${t['liquidity_usd']:,.0f}  "
+                   f"vol24h ${t['volume_24h_usd']:,.0f}"
+                   if t['price_usd'] is not None else
+                   f"{(t['symbol'] or '?'):<10} {t['address']}  (no price data)")
+
+
+@memecoin.command("quote")
+@click.option("--token", "token_address", required=True, help="Token mint address to buy.")
+@click.option("--usd", "usd_amount", required=True, type=float)
+def memecoin_quote_cmd(token_address, usd_amount):
+    """Preview a buy — expected tokens out and price impact. Spends nothing;
+    safe to run regardless of guards."""
+    from hf_trading_bot import memecoin
+
+    try:
+        p = memecoin.preview_buy(token_address, usd_amount)
+    except Exception as e:  # noqa: BLE001
+        raise click.ClickException(str(e))
+    click.echo(f"${usd_amount:,.2f}  ->  ~{p.sol_amount:.5f} SOL  ->  "
+              f"{int(p.quote.get('outAmount') or 0):,} raw units of {token_address}")
+    click.echo(f"Price impact: {p.price_impact_pct:.2f}%")
+
+
+@memecoin.command("buy")
+@click.option("--token", "token_address", required=True, help="Token mint address to buy.")
+@click.option("--usd", "usd_amount", required=True, type=float)
+@click.option("--slippage-bps", default=100, type=int, help="Max slippage, in basis points.")
+@click.option("--dry-run", is_flag=True, help="Preview only — sign and send nothing.")
+@click.pass_obj
+def memecoin_buy(cfg, token_address, usd_amount, slippage_bps, dry_run):
+    """Buy TOKEN with USD_AMOUNT worth of SOL. Real money — see `hf-bot
+    memecoin wallet` and the README before using this."""
+    from hf_trading_bot import memecoin
+
+    storage = _load_storage(cfg)
+    try:
+        settings = storage.get_settings()
+        result = memecoin.execute_buy(
+            token_address, usd_amount, storage,
+            kill_switch=bool(settings["kill_switch_active"]),
+            slippage_bps=slippage_bps, dry_run=dry_run)
+    except memecoin.MemecoinError as e:
+        storage.close()
+        raise click.ClickException(str(e))
+    finally:
+        storage.close()
+    if result.get("dry_run"):
+        click.echo(f"DRY RUN — would spend {result['sol_amount']:.5f} SOL (${usd_amount:,.2f}), "
+                   f"price impact {result['price_impact_pct']:.2f}%. Nothing signed or sent.")
+        return
+    click.echo(f"BUY submitted: {result['sol_amount']:.5f} SOL -> {token_address}")
+    click.echo(f"  tx {result['tx_signature']}  status: {result['status']}")
+    try:
+        from hf_trading_bot import notify
+        notify.notify(f"VANTRIX memecoin BUY — {token_address[:8]}…",
+                      f"${usd_amount:,.2f} -> {result['sol_amount']:.5f} SOL spent\n"
+                      f"tx {result['tx_signature']}  status {result['status']}")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@memecoin.command("sell")
+@click.option("--token", "token_address", required=True, help="Token mint address to sell.")
+@click.option("--pct", required=True, type=float, help="Percent of held balance to sell (0-100].")
+@click.option("--slippage-bps", default=150, type=int, help="Max slippage, in basis points.")
+@click.option("--dry-run", is_flag=True, help="Preview only — sign and send nothing.")
+@click.pass_obj
+def memecoin_sell(cfg, token_address, pct, slippage_bps, dry_run):
+    """Sell PCT% of the held balance of TOKEN back to SOL."""
+    from hf_trading_bot import memecoin
+
+    storage = _load_storage(cfg)
+    try:
+        settings = storage.get_settings()
+        result = memecoin.execute_sell(
+            token_address, pct, storage,
+            kill_switch=bool(settings["kill_switch_active"]),
+            slippage_bps=slippage_bps, dry_run=dry_run)
+    except memecoin.MemecoinError as e:
+        storage.close()
+        raise click.ClickException(str(e))
+    finally:
+        storage.close()
+    if result.get("dry_run"):
+        click.echo(f"DRY RUN — would receive ~{result['sol_amount']:.5f} SOL "
+                   f"(~${result['usd_amount']:,.2f}). Nothing signed or sent.")
+        return
+    click.echo(f"SELL submitted: {pct:.0f}% of {token_address} -> "
+              f"{result['sol_amount']:.5f} SOL (~${result['usd_amount']:,.2f})")
+    click.echo(f"  tx {result['tx_signature']}  status: {result['status']}")
+    try:
+        from hf_trading_bot import notify
+        notify.notify(f"VANTRIX memecoin SELL — {token_address[:8]}…",
+                      f"sold {pct:.0f}% -> {result['sol_amount']:.5f} SOL "
+                      f"(~${result['usd_amount']:,.2f})\n"
+                      f"tx {result['tx_signature']}  status {result['status']}")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@memecoin.command("history")
+@click.option("--limit", default=20, type=int)
+@click.pass_obj
+def memecoin_history(cfg, limit):
+    """Every memecoin trade this wallet has made through this bot."""
+    storage = _load_storage(cfg)
+    try:
+        rows = storage.recent_memecoin_trades(limit=limit)
+        net = storage.memecoin_net_deployed_usd()
+    finally:
+        storage.close()
+    if not rows:
+        click.echo("No memecoin trades recorded yet.")
+        return
+    for t in rows:
+        click.echo(f"#{t['id']:<4} {t['side'].upper():<4} {t['token_address'][:10]}…  "
+                   f"${t['usd_amount']:,.2f}  {t['status']:<10} {t['created_at'][:16]}")
+    click.echo(f"\nNet deployed: ${net:,.2f}")
+
+
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Bind address for the local server.")
 @click.option("--port", default=8420, type=int, help="Port for the local server.")

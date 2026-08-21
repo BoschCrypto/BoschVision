@@ -193,6 +193,20 @@ CREATE TABLE IF NOT EXISTS order_proposals (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS memecoin_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    side TEXT NOT NULL,                -- buy | sell
+    token_address TEXT NOT NULL,
+    token_symbol TEXT,
+    sol_amount REAL NOT NULL,
+    usd_amount REAL NOT NULL,          -- notional at time of trade, in USD
+    price_usd REAL,
+    tx_signature TEXT,
+    status TEXT NOT NULL,              -- submitted | confirmed | failed
+    detail TEXT,
+    created_at TEXT NOT NULL
+);
 """
 
 DEFAULT_WATCHLIST = [
@@ -683,6 +697,39 @@ class Storage:
     def recent_order_proposals(self, limit: int = 10) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT * FROM order_proposals ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def record_memecoin_trade(
+        self, *, side: str, token_address: str, token_symbol: Optional[str],
+        sol_amount: float, usd_amount: float, price_usd: Optional[float],
+        tx_signature: Optional[str], status: str, detail: Optional[str] = None,
+    ) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO memecoin_trades (side, token_address, token_symbol, sol_amount, "
+            "usd_amount, price_usd, tx_signature, status, detail, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (side, token_address, token_symbol, sol_amount, usd_amount, price_usd,
+             tx_signature, status, detail, datetime.now(timezone.utc).isoformat()),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def memecoin_net_deployed_usd(self) -> float:
+        """Cumulative USD still 'at risk' in the memecoin wallet: total bought
+        minus total sold, floored at 0. Only counts trades that actually
+        confirmed — a failed submission never consumed budget."""
+        row = self._conn.execute(
+            "SELECT "
+            " COALESCE(SUM(CASE WHEN side='buy'  THEN usd_amount ELSE 0 END), 0) AS bought,"
+            " COALESCE(SUM(CASE WHEN side='sell' THEN usd_amount ELSE 0 END), 0) AS sold "
+            "FROM memecoin_trades WHERE status != 'failed'"
+        ).fetchone()
+        return max(0.0, float(row["bought"]) - float(row["sold"]))
+
+    def recent_memecoin_trades(self, limit: int = 20) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM memecoin_trades ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
 
