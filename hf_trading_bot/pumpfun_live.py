@@ -44,6 +44,7 @@ PUMPFUN_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 _MAX_RECENT = 100
 _RECONNECT_BACKOFF_S = (2, 5, 10, 30, 60)
 DEFAULT_MIN_TX_INTERVAL_S = 0.35   # ~3/sec ceiling on getTransaction calls
+_PING_TIMEOUT_S = 60   # websockets' 20s default is too tight for this feed's traffic volume
 
 
 def min_tx_interval_s(env: Optional[dict] = None) -> float:
@@ -162,7 +163,14 @@ class LiveFeed:
         url = ws_url(self._env)
         program = Pubkey.from_string(PUMPFUN_PROGRAM_ID)
         loop = asyncio.get_running_loop()
-        async with connect(url) as ws:
+        # websockets' default ping_timeout is 20s — tight enough that an
+        # ordinary round-trip hiccup (not an event-loop stall; that's already
+        # fixed by run_in_executor above) can trip a client-initiated 1011
+        # close. pump.fun's program is mentioned in a high volume of
+        # transactions, so give the pong more room before giving up; the
+        # reconnect/backoff loop in _run_forever is the real safety net
+        # either way.
+        async with connect(url, ping_timeout=_PING_TIMEOUT_S) as ws:
             await ws.logs_subscribe(RpcTransactionLogsFilterMentions(program),
                                     commitment="confirmed")
             await ws.recv()   # the subscription-confirmation message

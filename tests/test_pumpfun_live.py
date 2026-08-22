@@ -3,7 +3,9 @@ the thread-safe recent()/status() read side. No real network/websocket
 connection — _subscribe_once is never exercised here, only what's testable
 without one.
 """
+import asyncio
 import time
+from contextlib import asynccontextmanager
 
 import pytest
 
@@ -172,6 +174,39 @@ def test_handle_signature_records_getTransaction_error(monkeypatch):
     f._handle_signature("sig1")
     assert "rate limited" in f.status()["last_error"]
     assert f.status()["detections"] == 0
+
+
+# --- _subscribe_once: connect() is called with a widened ping_timeout -----
+
+def test_subscribe_once_passes_widened_ping_timeout(monkeypatch):
+    """Real bug from live testing: repeated client-initiated 1011 keepalive
+    ping timeouts even after the event-loop-blocking fix. websockets'
+    20s default is tight for this feed's traffic volume; we widen it. This
+    verifies _subscribe_once actually asks for that, without a real socket."""
+    captured = {}
+
+    class FakeWS:
+        async def logs_subscribe(self, *a, **k):
+            return None
+
+        async def recv(self):
+            return None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    @asynccontextmanager
+    async def fake_connect(url, **kwargs):
+        captured["kwargs"] = kwargs
+        yield FakeWS()
+
+    monkeypatch.setattr("solana.rpc.websocket_api.connect", fake_connect)
+    f = pumpfun_live.LiveFeed()
+    asyncio.run(f._subscribe_once())
+    assert captured["kwargs"].get("ping_timeout") == pumpfun_live._PING_TIMEOUT_S
 
 
 def test_livefeed_normalized_coin_shape_matches_pumpfun_data():
