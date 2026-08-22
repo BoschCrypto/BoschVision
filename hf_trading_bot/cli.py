@@ -2243,7 +2243,17 @@ def memecoin_positions(cfg):
 @click.option("--memecoin-cycle-seconds", default=300, type=int,
               help="Seconds between autotrade cycles (default 300 = 5 min). Also the refresh "
                    "interval for the dashboard's memecoin wallet/positions view when "
-                   "SOLANA_PRIVATE_KEY is configured, even without --memecoin-autotrade.")
+                   "SOLANA_PRIVATE_KEY is configured, even without --memecoin-autotrade. This "
+                   "governs ENTRY scanning only — see --memecoin-exit-check-seconds for exits, "
+                   "which run on their own, much faster loop.")
+@click.option("--memecoin-exit-check-seconds", default=10, type=int,
+              help="Seconds between checks of currently-held positions against their exit "
+                   "rule (stop-loss/trim/trailing-stop) — independent of and much faster than "
+                   "--memecoin-cycle-seconds, which only governs entry scanning. Entry scanning "
+                   "has to stay slow to respect RugCheck/pump.fun's free-tier rate limits, but "
+                   "checking your own handful of held positions costs nothing on those limits, "
+                   "so there's no reason a stop-loss should wait a full entry cycle to fire. "
+                   "Only runs when --memecoin-autotrade is on.")
 @click.option("--memecoin-scalp", is_flag=True,
               help="Switch --memecoin-autotrade to the scalp profile: entries come from "
                    "pump.fun's own brand-new-coin feed (pumpfun_data — an UNOFFICIAL API, "
@@ -2281,6 +2291,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               fallback_cmd: Optional[str], auto_execute: bool,
               auto_execute_max: float, committee_model: Optional[str],
               tiered: bool, memecoin_autotrade: bool, memecoin_cycle_seconds: int,
+              memecoin_exit_check_seconds: int,
               memecoin_scalp: bool, memecoin_live: bool,
               open_browser: bool,
               token: Optional[str], auth: bool, tunnel: bool):
@@ -2417,7 +2428,9 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     memecoin_cache: dict = {"configured": False}
     memecoin_autotrade_status: dict = {"enabled": False, "last_run_at": None,
                                        "last_report": None, "cycle_seconds": memecoin_cycle_seconds,
-                                       "scalp": memecoin_scalp}
+                                       "scalp": memecoin_scalp,
+                                       "exit_check_seconds": memecoin_exit_check_seconds,
+                                       "last_exit_check_at": None}
     memecoin_activity: list = []   # recent actions for the panel, newest first
     MEMECOIN_ACTIVITY_CAP = 30
 
@@ -2499,6 +2512,36 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                 pass
         _refresh_memecoin_cache()
         return report
+
+    def _run_memecoin_fast_exit_check_once():
+        """The fast half of the split: only checks currently-held positions
+        against their exit rule, on --memecoin-exit-check-seconds (default
+        10s) instead of the much slower --memecoin-cycle-seconds entry-scan
+        cadence. Skips silently (no log spam) when there's nothing to
+        report — this runs far too often to log every empty pass."""
+        from hf_trading_bot import memecoin
+        s = Storage(db_path)
+        try:
+            report = memecoin.run_exit_check(s, scalp=memecoin_scalp)
+        finally:
+            s.close()
+        memecoin_autotrade_status["last_exit_check_at"] = (
+            _dt.datetime.now(_dt.timezone.utc).isoformat())
+        for e in report.get("exits", []):
+            _memecoin_log("auto-sell", f"{e.get('symbol') or e['token_address'][:8]} — "
+                          f"sold {e['sell_pct']:.0f}% — {e['reason']}")
+        for err in report.get("errors", []):
+            _memecoin_log("error", f"{err.get('stage')}: {err.get('error')}")
+        if report.get("exits"):
+            try:
+                from hf_trading_bot import notify
+                lines = [f"SOLD {e.get('symbol') or e['token_address'][:8]} "
+                        f"({e['sell_pct']:.0f}%) — {e['reason']}" for e in report.get("exits", [])]
+                notify.notify("VANTRIX memecoin exit", "\n".join(lines))
+            except Exception:  # noqa: BLE001
+                pass
+        if report.get("exits"):
+            _refresh_memecoin_cache()
 
     def _handle_memecoin_command(text: str) -> dict:
         """Parse and run one typed memecoin command from the dashboard's own
@@ -2695,6 +2738,14 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
             except Exception as e:  # noqa: BLE001 — the loop must never die
                 _memecoin_log("error", f"cycle crashed: {type(e).__name__}: {e}")
             _time.sleep(max(60, memecoin_cycle_seconds))
+
+    def _memecoin_fast_exit_loop():
+        while True:
+            try:
+                _run_memecoin_fast_exit_check_once()
+            except Exception as e:  # noqa: BLE001 — the loop must never die
+                _memecoin_log("error", f"exit check crashed: {type(e).__name__}: {e}")
+            _time.sleep(max(1, memecoin_exit_check_seconds))
 
     # Gate autotrade behind explicit, checkable preconditions — never start a
     # real-money loop silently degraded. A misconfigured key/flag disables the
@@ -3417,10 +3468,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                                           else "pump.fun new-coin feed, polled") + ", tight exits)"
         else:
             mode_note = "swing mode (DexScreener trending)"
-        runner_note += (f"\n  [!] MEMECOIN AUTOTRADE ON — {mode_note} — real money, entries "
-                        f"and exits fire with no approval click, every "
-                        f"{memecoin_cycle_seconds}s. Kill switch, per-trade ceiling and "
-                        "wallet budget still apply.")
+        runner_note += (f"\n  [!] MEMECOIN AUTOTRADE ON — {mode_note} — real money, no "
+                        f"approval click. New entries are scanned every "
+                        f"{memecoin_cycle_seconds}s; held positions are checked against "
+                        f"their exit rule separately, every {memecoin_exit_check_seconds}s "
+                        "(stop-loss doesn't wait on the slower entry-scan cadence). Kill "
+                        "switch, per-trade ceiling and wallet budget still apply.")
     if memecoin_live and not memecoin_live_on:
         runner_note += ("\n  [!] --memecoin-live had no effect — needs "
                         "--memecoin-autotrade and --memecoin-scalp both on too.")
@@ -3454,6 +3507,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     threading.Thread(target=_memecoin_refresh_loop, daemon=True).start()
     if memecoin_autotrade_on:
         threading.Thread(target=_memecoin_autotrade_loop, daemon=True).start()
+        threading.Thread(target=_memecoin_fast_exit_loop, daemon=True).start()
     if memecoin_live_feed is not None:
         memecoin_live_feed.start()   # persistent websocket subscription, its own thread
     if memecoin_pumpportal_feed is not None:

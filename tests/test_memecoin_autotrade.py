@@ -52,6 +52,48 @@ def test_cycle_positions_error_recorded_not_raised(storage, monkeypatch):
     assert "no key" in report["errors"][0]["error"]
 
 
+# --- run_exit_check: the fast, standalone half of the cycle -----------------
+
+def test_exit_check_skips_when_kill_switch_on(storage):
+    storage.set_kill_switch(True)
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    assert report["skipped"] == "kill switch is ON"
+    assert report["held_addresses"] is None
+
+
+def test_exit_check_skips_when_not_confirmed(storage):
+    storage.set_kill_switch(False)
+    report = memecoin.run_exit_check(storage, env={})
+    assert "HF_BOT_I_UNDERSTAND_MEMECOIN_RISK" in report["skipped"]
+
+
+def test_exit_check_held_addresses_none_on_positions_error(storage, monkeypatch):
+    storage.set_kill_switch(False)
+
+    def boom(s, env=None):
+        raise solana_wallet.WalletError("no key configured")
+    monkeypatch.setattr(memecoin, "list_positions", boom)
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    assert report["errors"][0]["stage"] == "positions"
+    assert report["held_addresses"] is None
+
+
+def test_exit_check_held_addresses_populated_on_success(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    monkeypatch.setattr(memecoin, "list_positions",
+                        lambda s, env=None: [_position("M1"), _position("M2")])
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    assert report["held_addresses"] == {"M1", "M2"}
+
+
+def test_exit_check_no_positions_still_returns_empty_set(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    assert report["held_addresses"] == set()
+    assert report["exits"] == []
+
+
 def _position(addr="M1", symbol="X", price=1.0):
     return memecoin.Position(token_address=addr, symbol=symbol, balance=10.0,
                              cost_basis_usd=10.0, current_price_usd=price,

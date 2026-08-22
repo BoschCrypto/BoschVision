@@ -443,47 +443,26 @@ def list_positions(storage, *, env: Optional[dict] = None) -> list[Position]:
 MAX_NEW_POSITIONS_PER_CYCLE = 2
 
 
-def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
-                        max_new_positions: int = MAX_NEW_POSITIONS_PER_CYCLE,
-                        scalp: bool = False,
-                        live_candidates: Optional[list] = None,
-                        pumpportal_feed=None) -> dict:
-    """One full autonomous pass: check exits on every held position FIRST (a
-    stop-loss always gets first claim on attention and budget), then look for
-    new entries with whatever budget remains. Returns a report of every
-    action taken, skipped, or errored — never raises for a single token's
-    failure, so one bad RPC call or a token that goes illiquid never stops
-    the rest of the pass or a later cycle.
+def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) -> dict:
+    """Check every held position against its exit rule and sell if
+    triggered. This is the risk-critical half of run_autotrade_cycle,
+    factored out so it can run on its own, much faster cadence than entry
+    scanning does — checking a handful of held positions costs nothing on
+    the free-tier rate limits (RugCheck, pump.fun) that force entry
+    scanning to stay slow, so there's no reason a stop-loss should have to
+    wait a full 60-120s entry cycle to fire. The dashboard runs this on a
+    short independent loop; run_autotrade_cycle calls it too, for its own
+    exits section, so there is exactly one implementation of this logic.
 
-    `scalp=True` switches BOTH halves together — exits use the tight
-    SCALP_* thresholds (memecoin_strategy.scalp_exit_signal), and new-entry
-    discovery reads pump.fun's own new-coin feed instead of DexScreener's
-    trending list, scored by pumpfun_entry_signal — the only universal
-    safety check on a coin this fresh is mint/freeze authority,
-
-    `live_candidates`, when scalp=True, is used as the entry-discovery list
-    INSTEAD of calling pumpfun_data.list_new_coins() — this is how the
-    dashboard passes real-time detections from pumpfun_live.LiveFeed
-    (a persistent WebSocket subscription) rather than REST-polling once per
-    cycle. Ignored when scalp=False. A caller not wired to a live feed
-    (the CLI, tests) simply omits it and gets the REST-polling behavior.
-
-    `pumpportal_feed`, when scalp=True, supplies buyer_stats (distinct
-    buyer count) per candidate to pumpfun_entry_signal — PumpPortal's free
-    WebSocket trade stream is the only source of that; without it, scoring
-    falls back to freshness + SOL-raised alone. Also ignored when
-    scalp=False; None is the correct default when no feed is running.
-    there is no liquidity figure yet the way DexScreener has one. That is a
-    real, deliberate increase in risk, not a smaller version of the normal
-    screen; it is what trading a coin this early means.
-
-    This is the function both the dashboard's background loop and a manual
-    'run once' trigger call — the loop is just this on a timer."""
-    import time as _time
-
+    Same never-raises-for-one-token contract as run_autotrade_cycle.
+    `held_addresses` in the report is the set of currently-held token
+    addresses on success, or None if the positions fetch itself failed
+    (already recorded in `errors`) — callers building an entry list from
+    this need to know the difference between "no positions" and "couldn't
+    find out."""
     from hf_trading_bot import memecoin_data, memecoin_strategy
 
-    report: dict = {"exits": [], "entries": [], "errors": [], "skipped": None}
+    report: dict = {"exits": [], "errors": [], "skipped": None, "held_addresses": None}
 
     kill_switch = bool(storage.get_settings()["kill_switch_active"])
     if kill_switch:
@@ -499,8 +478,7 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
         report["errors"].append({"stage": "positions", "error": str(e)})
         return report
 
-    # 1. Exits — protect capital and lock in gains before anything else.
-    held_addresses = {p.token_address for p in positions}
+    report["held_addresses"] = {p.token_address for p in positions}
     for p in positions:
         try:
             basis = storage.memecoin_position_basis(p.token_address)
@@ -544,6 +522,65 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
         except MemecoinError as e:
             report["errors"].append({"stage": "exit", "token_address": p.token_address,
                                      "error": str(e)})
+
+    return report
+
+
+def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
+                        max_new_positions: int = MAX_NEW_POSITIONS_PER_CYCLE,
+                        scalp: bool = False,
+                        live_candidates: Optional[list] = None,
+                        pumpportal_feed=None) -> dict:
+    """One full autonomous pass: check exits on every held position FIRST (a
+    stop-loss always gets first claim on attention and budget), then look for
+    new entries with whatever budget remains. Returns a report of every
+    action taken, skipped, or errored — never raises for a single token's
+    failure, so one bad RPC call or a token that goes illiquid never stops
+    the rest of the pass or a later cycle.
+
+    `scalp=True` switches BOTH halves together — exits use the tight
+    SCALP_* thresholds (memecoin_strategy.scalp_exit_signal), and new-entry
+    discovery reads pump.fun's own new-coin feed instead of DexScreener's
+    trending list, scored by pumpfun_entry_signal — the only universal
+    safety check on a coin this fresh is mint/freeze authority,
+
+    `live_candidates`, when scalp=True, is used as the entry-discovery list
+    INSTEAD of calling pumpfun_data.list_new_coins() — this is how the
+    dashboard passes real-time detections from pumpfun_live.LiveFeed
+    (a persistent WebSocket subscription) rather than REST-polling once per
+    cycle. Ignored when scalp=False. A caller not wired to a live feed
+    (the CLI, tests) simply omits it and gets the REST-polling behavior.
+
+    `pumpportal_feed`, when scalp=True, supplies buyer_stats (distinct
+    buyer count) per candidate to pumpfun_entry_signal — PumpPortal's free
+    WebSocket trade stream is the only source of that; without it, scoring
+    falls back to freshness + SOL-raised alone. Also ignored when
+    scalp=False; None is the correct default when no feed is running.
+    there is no liquidity figure yet the way DexScreener has one. That is a
+    real, deliberate increase in risk, not a smaller version of the normal
+    screen; it is what trading a coin this early means.
+
+    This is the function both the dashboard's background loop and a manual
+    'run once' trigger call — the loop is just this on a timer."""
+    import time as _time
+
+    from hf_trading_bot import memecoin_data, memecoin_strategy
+
+    report: dict = {"exits": [], "entries": [], "errors": [], "skipped": None}
+
+    exit_report = run_exit_check(storage, env=env, scalp=scalp)
+    report["exits"] = exit_report["exits"]
+    report["errors"].extend(exit_report["errors"])
+    if exit_report["skipped"] is not None:
+        report["skipped"] = exit_report["skipped"]
+        return report
+    if exit_report["held_addresses"] is None:
+        # The positions fetch itself failed (already recorded in errors
+        # above) -- nothing more can be evaluated this pass.
+        return report
+    held_addresses = exit_report["held_addresses"]
+
+    kill_switch = bool(storage.get_settings()["kill_switch_active"])
 
     # 2. New entries — only with whatever budget remains after exits above.
     net = storage.memecoin_net_deployed_usd()

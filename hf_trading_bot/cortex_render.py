@@ -847,8 +847,12 @@ _APP_JS = r"""
          '</span></div>';
     if (at.enabled) {
       var lastRun = at.last_run_at ? new Date(at.last_run_at).toLocaleTimeString() : 'not yet';
-      h += '<div class="line"><span class="muted">cycle</span><span>every ' +
+      h += '<div class="line"><span class="muted">entry cycle</span><span>every ' +
            at.cycle_seconds + 's &middot; last ' + lastRun + '</span></div>';
+      var lastExitCheck = at.last_exit_check_at
+          ? new Date(at.last_exit_check_at).toLocaleTimeString() : 'not yet';
+      h += '<div class="line"><span class="muted">exit check</span><span>every ' +
+           at.exit_check_seconds + 's &middot; last ' + lastExitCheck + '</span></div>';
       if (at.last_report) {
         var rep = at.last_report;
         h += '<div class="line"><span class="muted">last result</span><span>' +

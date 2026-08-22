@@ -384,10 +384,7 @@ sell <mint> <pct>         # a real sell, same as above
 ```
 
 **Fully autonomous mode** — launch with `--memecoin-autotrade` and the bot
-runs the whole playbook above with **no approval click**: every
-`--memecoin-cycle-seconds` (default 300 = 5 min) it checks every held
-position against the exit rules and executes any that trigger, then scans
-for new entries and buys up to 2 per cycle while budget remains. This is the
+runs the whole playbook above with **no approval click**. This is the
 biggest step in the whole feature — say so plainly: **real money moves
 without you watching.** It only starts if `HF_BOT_I_UNDERSTAND_MEMECOIN_RISK=true`
 and `SOLANA_PRIVATE_KEY` are both configured; otherwise the dashboard prints
@@ -395,9 +392,22 @@ a loud `BLOCKED` banner and runs everything else normally. The kill switch,
 per-trade ceiling, and wallet budget all still apply every cycle — nothing
 about autonomy raises those caps.
 
+Entries and exits run on **two independent loops, deliberately different
+speeds**:
+- **Exit checks** (`--memecoin-exit-check-seconds`, default 10s) — every
+  held position against its stop-loss/trim/trailing-stop rule. This only
+  touches your own handful of open positions, which costs nothing on any
+  rate limit, so there's no reason a stop-loss should wait on the slower
+  entry-scan cadence to fire.
+- **Entry scanning** (`--memecoin-cycle-seconds`, default 300 = 5 min) —
+  screening new candidates. This one genuinely has to stay slower: it calls
+  RugCheck and pump.fun's free-tier APIs per candidate, and scanning
+  dozens of coins every few seconds would blow through those limits fast.
+
 ```bash
-hf-bot dashboard --open --memecoin-autotrade                       # every 5 min
-hf-bot dashboard --open --memecoin-autotrade --memecoin-cycle-seconds 900  # every 15 min
+hf-bot dashboard --open --memecoin-autotrade                       # entries every 5 min, exits every 10s
+hf-bot dashboard --open --memecoin-autotrade --memecoin-cycle-seconds 900 \
+                  --memecoin-exit-check-seconds 5                  # slower entries, faster exits
 ```
 
 Without `--memecoin-autotrade`, the dashboard still shows the wallet and
