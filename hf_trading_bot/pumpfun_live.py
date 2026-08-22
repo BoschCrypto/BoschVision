@@ -30,6 +30,7 @@ Two things stated plainly rather than glossed over:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 import time
@@ -128,7 +129,6 @@ class LiveFeed:
             self._status["last_event_at"] = datetime.now(timezone.utc).isoformat()
 
     def _run_forever(self) -> None:
-        import asyncio
         attempt = 0
         while not self._stop.is_set():
             try:
