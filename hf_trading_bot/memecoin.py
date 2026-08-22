@@ -556,11 +556,17 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
     cycle. Ignored when scalp=False. A caller not wired to a live feed
     (the CLI, tests) simply omits it and gets the REST-polling behavior.
 
-    `pumpportal_feed`, when scalp=True, supplies buyer_stats (distinct
-    buyer count) per candidate to pumpfun_entry_signal — PumpPortal's free
-    WebSocket trade stream is the only source of that; without it, scoring
-    falls back to freshness + SOL-raised alone. Also ignored when
-    scalp=False; None is the correct default when no feed is running.
+    `pumpportal_feed`, when scalp=True, does two things: supplies
+    buyer_stats (distinct buyer count) per candidate to
+    pumpfun_entry_signal, and its recent_new_coins() are MERGED into the
+    candidate list (deduplicated by address, re-sorted newest-first) —
+    pumpfun_live.py's RPC-based feed can only afford a handful of
+    getTransaction calls/sec across ALL pump.fun activity, so it likely
+    misses most real new coins; PumpPortal's subscribeNewToken sees every
+    creation with no rate limit at all. Without pumpportal_feed, scoring
+    falls back to freshness + SOL-raised alone and candidates come only
+    from live_candidates/REST polling. Also ignored when scalp=False;
+    None is the correct default when no feed is running.
     there is no liquidity figure yet the way DexScreener has one. That is a
     real, deliberate increase in risk, not a smaller version of the normal
     screen; it is what trading a coin this early means.
@@ -598,13 +604,29 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
     if scalp:
         from hf_trading_bot import pumpfun_data
         if live_candidates is not None:
-            candidates = live_candidates
+            candidates = list(live_candidates)
         else:
             try:
                 candidates = pumpfun_data.list_new_coins(limit=30, env=env)
             except pumpfun_data.PumpFunError as e:
                 report["errors"].append({"stage": "scan", "error": str(e)})
                 return report
+        if pumpportal_feed is not None:
+            # pumpfun_live.py's RPC feed can only afford ~3 getTransaction
+            # calls/sec across ALL pump.fun activity (creates, buys, AND
+            # sells) to avoid tripping Helius's rate limit -- given real
+            # pump.fun volume, that budget is mostly consumed by unrelated
+            # buy/sell traffic, so it likely misses most actual new coins.
+            # PumpPortal's subscribeNewToken sees every creation event with
+            # no rate limit at all. Merging it in closes that detection gap
+            # rather than replacing either existing source (see
+            # pumpportal_live.py's module docstring for the full reasoning).
+            seen = {c["address"] for c in candidates}
+            for c in pumpportal_feed.recent_new_coins(30):
+                if c["address"] not in seen:
+                    candidates.append(c)
+                    seen.add(c["address"])
+            candidates.sort(key=lambda c: c.get("created_at_ms") or 0, reverse=True)
         picked = [c for c in candidates if c["address"] not in held_addresses][:30]
     else:
         try:

@@ -570,6 +570,43 @@ it exists. Free (same `get_coin()` fetch that already retrieves market
 cap), hard to fake, and deliberately small — a tie-breaker, not a driver
 of entries.
 
+### Why entries are rare, and the real detection-coverage fix
+
+After all the above landed, live testing still showed very few real
+candidates — sometimes 20+ "no" results in a row with nothing close to
+passing, while the same coins were findable by eye on Photon's Memescope
+within seconds. Two things turned out to be true at once:
+
+1. **Most pump.fun coins genuinely are worthless** — one widely-cited
+   estimate puts ~98% of pump.fun tokens as rug pulls, bundles, or
+   abandoned within minutes. Seeing mostly rejections is largely correct
+   behavior, not a bug.
+2. **But `pumpfun_live.py`'s RPC feed was also missing most real new
+   coins**, for a concrete reason: it subscribes to every transaction
+   mentioning the pump.fun program — creates, buys, AND sells — but can
+   only afford ~3 `getTransaction` calls/sec (`PUMPFUN_LIVE_MIN_TX_INTERVAL_S`)
+   to avoid tripping Helius's rate limit. Given pump.fun's real volume,
+   that budget is mostly consumed by unrelated buy/sell traffic, and
+   creates are a small fraction of even that — so the RPC feed likely
+   sees only a small, effectively random slice of actual new coins.
+
+PumpPortal's `subscribeNewToken` stream gets every creation event directly,
+with no rate limit and no follow-up RPC call needed (PumpPortal pushes it).
+`pumpportal_live.py`'s `recent_new_coins()` now feeds these into
+`run_autotrade_cycle` and the dashboard's `screen` command, **merged**
+alongside `pumpfun_live.py`'s detections (deduplicated by address,
+re-sorted newest-first) — not replacing that feed, since it's the one
+verified end-to-end against a real connection. This closes the coverage
+gap without discarding what's already proven to work. Symbol/name are
+captured directly from PumpPortal's create event; market cap/price/social
+links still come from the same `pumpfun_data.get_coin()` enrichment fetch
+already built, rather than guessing at PumpPortal's numeric field
+semantics on top of an already-unverified message schema.
+
+`hf-bot memecoin pp-watch` now shows both new-coin detections and
+buyer-diversity counts, so this is verifiable the same way as everything
+else here — with real output, before trusting it inside the autonomous loop.
+
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 
 Two commands turn "what to look out for" into concrete, checkable rules —

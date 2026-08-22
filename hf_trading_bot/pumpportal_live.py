@@ -2,19 +2,34 @@
 built on the same on-chain pump.fun program events pumpfun_live.py already
 watches via raw Solana RPC.
 
-This module does NOT replace pumpfun_live.py as the detection source —
-that feed is what was verified working end-to-end against a real Helius
-connection, and stays the primary mechanism the autotrade cycle actually
-acts on. What this module adds instead: BUYER DIVERSITY per candidate mint.
+This module does TWO jobs now, not one:
 
-Why this matters, concretely: the single most-cited real-scalper signal the
-strategy was missing is not "how much SOL has this token raised" (the
-existing signal) but "how many DISTINCT wallets are buying it." A coin that
-racks up SOL fast from ONE wallet (or a handful funded from the same source
-in the same block) is the textbook bundled/insider/sniper-launch pattern,
-not organic demand — and the old scoring had no way to tell the two apart.
-PumpPortal's subscribeTokenTrade stream gives per-trade buyer addresses in
-real time, which is exactly what's needed to count that.
+1. BUYER DIVERSITY per candidate mint (the original purpose). The single
+   most-cited real-scalper signal the strategy was missing is not "how much
+   SOL has this token raised" but "how many DISTINCT wallets are buying
+   it." A coin that racks up SOL fast from ONE wallet (or a handful funded
+   from the same source in the same block) is the textbook
+   bundled/insider/sniper-launch pattern, not organic demand — the old
+   scoring had no way to tell the two apart. PumpPortal's
+   subscribeTokenTrade stream gives per-trade buyer addresses in real
+   time, which is exactly what's needed to count that.
+
+2. NEW-COIN DETECTION (added after live testing exposed a real gap in
+   pumpfun_live.py). That RPC-based feed subscribes to every transaction
+   mentioning the pump.fun program — creates, buys, AND sells — but can
+   only afford ~3 getTransaction calls/sec (see PUMPFUN_LIVE_MIN_TX_INTERVAL_S
+   in pumpfun_live.py) to avoid tripping Helius's rate limit. Given
+   pump.fun's real volume, that 3/sec budget is mostly consumed by
+   unrelated buy/sell traffic, and creates are a small fraction of even
+   that — meaning the RPC feed likely misses the large majority of actual
+   new coins, especially during active periods. PumpPortal's
+   subscribeNewToken stream gets every creation event directly, with NO
+   rate limit and NO follow-up RPC call, because PumpPortal pushes the
+   event to every subscriber itself. recent_new_coins() exposes that as a
+   candidate source the autotrade cycle merges alongside
+   pumpfun_live.LiveFeed's detections — not a replacement, since that RPC
+   feed is what's actually been verified end-to-end; this fills its
+   detection gap rather than trusting an unverified feed alone.
 
 Honesty notes, stated plainly rather than glossed over:
 1. PumpPortal is an unofficial third-party service (not Solana Foundation,
@@ -53,6 +68,7 @@ import json
 import os
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -93,21 +109,23 @@ def watch_ttl_s(env: Optional[dict] = None) -> float:
 
 
 class PumpPortalFeed:
-    """Tracks per-mint buyer diversity via PumpPortal's free WebSocket feed.
-    Purely observational — never touches a private key, never places a
-    trade. buyer_stats()/status() are the non-blocking read side other code
-    polls; they never touch the network themselves."""
+    """Tracks per-mint buyer diversity AND new-coin creations via
+    PumpPortal's free WebSocket feed. Purely observational — never touches
+    a private key, never places a trade. buyer_stats()/recent_new_coins()/
+    status() are the non-blocking read side other code polls; they never
+    touch the network themselves."""
 
     def __init__(self, env: Optional[dict] = None):
         self._env = env
         self._lock = threading.Lock()
         self._watched: dict[str, dict] = {}   # mint -> {"buyers": set, "buy_count": int, "first_seen": float}
         self._status: dict = {"connected": False, "mints_tracked": 0, "trades_seen": 0,
-                              "last_error": None, "started_at": None}
+                              "creations_seen": 0, "last_error": None, "started_at": None}
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._max_watched_mints = max_watched_mints(env)
         self._watch_ttl_s = watch_ttl_s(env)
+        self._recent_creations: deque = deque(maxlen=self._max_watched_mints)
 
     def start(self) -> None:
         if self._thread is not None:
@@ -131,6 +149,28 @@ class PumpPortalFeed:
     def tracked_mints(self) -> list[str]:
         with self._lock:
             return list(self._watched.keys())
+
+    def _record_creation(self, mint: str, msg: dict) -> None:
+        """Record a brand-new mint as a scoring candidate. Deliberately
+        conservative about what's extracted from PumpPortal's create
+        message: symbol/name are low-risk (display only, never scored),
+        but market_cap_usd/price_usd/has_social_links are left None here
+        rather than guessing at PumpPortal's numeric field semantics —
+        run_autotrade_cycle's existing enrichment fetch
+        (pumpfun_data.get_coin(), already built and verified live) fills
+        those in from pump.fun's own API when scoring, the same as it
+        already does for pumpfun_live.py's bare-address detections."""
+        coin = {"address": mint, "symbol": msg.get("symbol"), "name": msg.get("name"),
+               "created_at_ms": int(time.time() * 1000), "market_cap_usd": None,
+               "price_usd": None, "has_social_links": None, "sol_raised": None,
+               "migrated": False, "source": "pumpportal"}
+        with self._lock:
+            self._recent_creations.append(coin)
+            self._status["creations_seen"] += 1
+
+    def recent_new_coins(self, limit: int = 30) -> list[dict]:
+        with self._lock:
+            return list(self._recent_creations)[-limit:][::-1]   # newest first
 
     def status(self) -> dict:
         with self._lock:
@@ -236,6 +276,7 @@ class PumpPortalFeed:
         tx_type = (msg.get("txType") or "").lower()
         if tx_type == "create":
             if self._track(mint):
+                self._record_creation(mint, msg)
                 # Resend the FULL current watch list, not just the new mint.
                 # PumpPortal's docs don't make it unambiguous whether repeated
                 # subscribeTokenTrade calls are additive or replace the prior

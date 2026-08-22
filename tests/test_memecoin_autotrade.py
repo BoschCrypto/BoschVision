@@ -386,6 +386,89 @@ def test_cycle_scalp_mode_uses_live_candidates_when_given(storage, monkeypatch):
     assert buy_calls == ["LIVE1"]
 
 
+class _FakePumpPortalFeed:
+    """Test double: only the two methods run_autotrade_cycle actually calls."""
+    def __init__(self, new_coins=None, buyer_stats_by_mint=None):
+        self._new_coins = new_coins or []
+        self._buyer_stats = buyer_stats_by_mint or {}
+
+    def recent_new_coins(self, limit=30):
+        return list(self._new_coins)[:limit]
+
+    def buyer_stats(self, mint):
+        return self._buyer_stats.get(mint)
+
+
+def test_cycle_merges_pumpportal_new_coins_into_live_candidates(storage, monkeypatch):
+    # The real fix for "hard to find a coin": pumpfun_live.py's RPC feed
+    # can only afford a handful of getTransaction calls/sec across ALL
+    # pump.fun activity, so it misses most real new coins. PumpPortal's
+    # subscribeNewToken sees every creation with no rate limit -- its
+    # detections must show up as real candidates, not just enrich existing
+    # ones.
+    storage.set_kill_switch(False)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+    monkeypatch.setattr(solana_wallet, "get_mint_info",
+                        lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
+    monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
+    buy_calls = []
+    monkeypatch.setattr(memecoin, "execute_buy",
+                        lambda token, usd, s, **k: buy_calls.append(token) or
+                        {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.1,
+                         "usd_amount": usd})
+
+    import time as _t
+    now_ms = int(_t.time() * 1000)
+    live_coin = {"address": "FROM_LIVE", "symbol": "L", "created_at_ms": now_ms - 60_000,
+                "sol_raised": 1.0, "market_cap_usd": None, "migrated": False,
+                "source": "pumpfun_live"}
+    pp_coin = {"address": "FROM_PUMPPORTAL", "symbol": "P", "name": "P Coin",
+              "created_at_ms": now_ms, "market_cap_usd": 10_000, "price_usd": None,
+              "has_social_links": None, "sol_raised": None, "migrated": False,
+              "source": "pumpportal"}
+    feed = _FakePumpPortalFeed(new_coins=[pp_coin])
+
+    report = memecoin.run_autotrade_cycle(
+        storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25",
+                          MEMECOIN_WALLET_BUDGET_USD="50"),
+        scalp=True, live_candidates=[live_coin], pumpportal_feed=feed)
+    # FROM_PUMPPORTAL clears the score threshold (market cap); FROM_LIVE
+    # (thin sol_raised, no market cap) doesn't -- proves the merged
+    # candidate was actually scored and bought, not just carried along.
+    assert buy_calls == ["FROM_PUMPPORTAL"]
+
+
+def test_cycle_pumpportal_candidates_deduplicated_by_address(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+    monkeypatch.setattr(solana_wallet, "get_mint_info",
+                        lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
+    monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
+    buy_calls = []
+    monkeypatch.setattr(memecoin, "execute_buy",
+                        lambda token, usd, s, **k: buy_calls.append(token) or
+                        {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.1,
+                         "usd_amount": usd})
+
+    import time as _t
+    now_ms = int(_t.time() * 1000)
+    # Same address from both sources -- the live-feed version (with market
+    # cap already set) must win, not be duplicated into two entries.
+    live_coin = {"address": "SAME", "symbol": "L", "created_at_ms": now_ms,
+                "sol_raised": 1.0, "market_cap_usd": 10_000, "migrated": False,
+                "source": "pumpfun_live"}
+    pp_dupe = {"address": "SAME", "symbol": "P", "name": None, "created_at_ms": now_ms,
+              "market_cap_usd": None, "price_usd": None, "has_social_links": None,
+              "sol_raised": None, "migrated": False, "source": "pumpportal"}
+    feed = _FakePumpPortalFeed(new_coins=[pp_dupe])
+
+    report = memecoin.run_autotrade_cycle(
+        storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25",
+                          MEMECOIN_WALLET_BUDGET_USD="50"),
+        scalp=True, live_candidates=[live_coin], pumpportal_feed=feed)
+    assert buy_calls == ["SAME"]   # bought exactly once, not twice
+
+
 def test_cycle_fetches_market_cap_when_live_candidate_lacks_one(storage, monkeypatch):
     # pumpfun_live.py's live feed never knows market cap (bare mint address
     # only) -- run_autotrade_cycle must fetch it live via pumpfun_data so

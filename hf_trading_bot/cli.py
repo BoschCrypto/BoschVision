@@ -1811,13 +1811,18 @@ def memecoin_watch(seconds):
 @memecoin.command("pp-watch")
 @click.option("--seconds", default=60, type=int, help="How long to watch before stopping.")
 def memecoin_pp_watch(seconds):
-    """Connect to PumpPortal's free WebSocket feed and print buyer-diversity
-    stats as they accumulate, for --seconds. Read-only, no wallet touched.
+    """Connect to PumpPortal's free WebSocket feed and print new-coin
+    detections and buyer-diversity stats as they accumulate, for --seconds.
+    Read-only, no wallet touched.
 
-    Run this BEFORE trusting the buyer-diversity signal inside the
+    Verifies BOTH things this feed now supplies to scoring: new-coin
+    detection (recent_new_coins — a real candidate source now, not just
+    enrichment; see pumpportal_live.py's module docstring for why
+    pumpfun_live.py's RPC feed alone misses most real new coins) and
+    buyer-diversity counts. Run this BEFORE trusting either inside the
     autonomous scalp loop — same reasoning as `memecoin watch` for the
     Helius-based feed: verify it actually works, with your eyes on the
-    output, before scoring depends on it. If you see zero mints tracked
+    output, before scoring depends on it. If you see zero coins detected
     after a minute or two, check the status line for a connection error."""
     from hf_trading_bot import pumpportal_live
 
@@ -1825,6 +1830,7 @@ def memecoin_pp_watch(seconds):
     feed.start()
     click.echo(f"Connecting to {pumpportal_live.ws_url()} … watching for {seconds}s "
               f"(Ctrl+C to stop early)")
+    seen_new: set = set()
     last_buy_count: dict[str, int] = {}
     import time as _t
     start = _t.time()
@@ -1833,16 +1839,17 @@ def memecoin_pp_watch(seconds):
         while _t.time() - start < seconds:
             _t.sleep(2)
             st = feed.status()
+            for c in feed.recent_new_coins(100):
+                if c["address"] not in seen_new:
+                    seen_new.add(c["address"])
+                    click.echo(f"  NEW  {c.get('symbol') or '?'}  {c['address']}")
             for mint in feed.tracked_mints():
                 stats = feed.buyer_stats(mint)
-                if not stats:
+                if not stats or stats["buy_count"] == last_buy_count.get(mint):
                     continue
-                if mint not in last_buy_count:
-                    click.echo(f"  NEW  {mint}  (tracking for buyer diversity)")
-                if stats["buy_count"] != last_buy_count.get(mint):
-                    last_buy_count[mint] = stats["buy_count"]
-                    click.echo(f"  {mint}  {stats['unique_buyers']} distinct buyer(s), "
-                              f"{stats['buy_count']} buy(s), {stats['age_s']:.0f}s old")
+                last_buy_count[mint] = stats["buy_count"]
+                click.echo(f"       {mint}  {stats['unique_buyers']} distinct buyer(s), "
+                          f"{stats['buy_count']} buy(s), {stats['age_s']:.0f}s old")
             if not st["connected"] and st["last_error"] and st["last_error"] != last_printed_error:
                 click.echo(f"  [!] {st['last_error']}")
                 last_printed_error = st["last_error"]
@@ -1852,7 +1859,7 @@ def memecoin_pp_watch(seconds):
         pass
     finally:
         feed.stop()
-    click.echo(f"\nDone. status: {feed.status()}")
+    click.echo(f"\nDone — {len(seen_new)} new coin(s) detected. status: {feed.status()}")
 
 
 @memecoin.command("check")
@@ -2575,13 +2582,25 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                 live_candidates = (memecoin_live_feed.recent(30)
                                   if memecoin_live_feed is not None else None)
                 if live_candidates is not None:
-                    candidates = live_candidates
+                    candidates = list(live_candidates)
                 else:
                     from hf_trading_bot import pumpfun_data
                     try:
                         candidates = pumpfun_data.list_new_coins(limit=20)
                     except pumpfun_data.PumpFunError as e:
                         return {"ok": False, "error": str(e)}
+                if memecoin_pumpportal_feed is not None:
+                    # Same merge run_autotrade_cycle does -- the live feed's
+                    # rate-limited RPC detection misses most real new coins;
+                    # PumpPortal's subscribeNewToken catches every creation
+                    # with no rate limit, so this command bar should show
+                    # what the autotrade loop actually sees, not less.
+                    seen_addrs = {c["address"] for c in candidates}
+                    for c in memecoin_pumpportal_feed.recent_new_coins(30):
+                        if c["address"] not in seen_addrs:
+                            candidates.append(c)
+                            seen_addrs.add(c["address"])
+                    candidates.sort(key=lambda c: c.get("created_at_ms") or 0, reverse=True)
                 for t in candidates:
                     try:
                         mint_info = _sw.get_mint_info(t["address"])

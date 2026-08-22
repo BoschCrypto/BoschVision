@@ -103,6 +103,62 @@ def test_status_reflects_tracked_mints():
     assert f.status()["mints_tracked"] == 2
 
 
+# --- _record_creation / recent_new_coins: new-coin detection ---------------
+
+def test_record_creation_captures_symbol_and_name():
+    f = pumpportal_live.PumpPortalFeed()
+    f._record_creation("M1", {"symbol": "FOO", "name": "Foo Coin"})
+    coins = f.recent_new_coins(10)
+    assert coins[0]["address"] == "M1"
+    assert coins[0]["symbol"] == "FOO"
+    assert coins[0]["name"] == "Foo Coin"
+    assert coins[0]["source"] == "pumpportal"
+
+
+def test_record_creation_leaves_market_data_none_for_later_enrichment():
+    # Deliberate: market_cap_usd/price_usd/has_social_links come from the
+    # already-verified pumpfun_data.get_coin() enrichment fetch, not a guess
+    # at PumpPortal's numeric field semantics.
+    f = pumpportal_live.PumpPortalFeed()
+    f._record_creation("M1", {"symbol": "FOO", "marketCapSol": 12.5})
+    coin = f.recent_new_coins(1)[0]
+    assert coin["market_cap_usd"] is None
+    assert coin["price_usd"] is None
+    assert coin["has_social_links"] is None
+
+
+def test_recent_new_coins_newest_first():
+    f = pumpportal_live.PumpPortalFeed()
+    f._record_creation("M1", {"symbol": "A"})
+    f._record_creation("M2", {"symbol": "B"})
+    f._record_creation("M3", {"symbol": "C"})
+    assert [c["address"] for c in f.recent_new_coins(10)] == ["M3", "M2", "M1"]
+
+
+def test_recent_new_coins_respects_limit():
+    f = pumpportal_live.PumpPortalFeed()
+    for i in range(5):
+        f._record_creation(f"M{i}", {"symbol": f"S{i}"})
+    assert len(f.recent_new_coins(2)) == 2
+
+
+def test_status_tracks_creations_seen():
+    f = pumpportal_live.PumpPortalFeed()
+    assert f.status()["creations_seen"] == 0
+    f._record_creation("M1", {"symbol": "A"})
+    assert f.status()["creations_seen"] == 1
+
+
+def test_handle_message_create_records_a_new_coin_candidate():
+    f = pumpportal_live.PumpPortalFeed()
+    ws = _FakeWS()
+    asyncio.run(f._handle_message(
+        '{"txType": "create", "mint": "NEWMINT", "symbol": "NEW", "name": "New Coin"}', ws))
+    coins = f.recent_new_coins(1)
+    assert coins[0]["address"] == "NEWMINT"
+    assert coins[0]["symbol"] == "NEW"
+
+
 def test_pop_expired_evicts_old_mints_and_returns_them():
     f = pumpportal_live.PumpPortalFeed()
     f._track("OLD")
