@@ -1780,6 +1780,7 @@ def memecoin_watch(seconds):
     click.echo(f"Connecting to {pumpfun_live.ws_url()} … watching for {seconds}s "
               f"(Ctrl+C to stop early)")
     seen = 0
+    last_printed_error = None
     import time as _t
     start = _t.time()
     try:
@@ -1791,8 +1792,14 @@ def memecoin_watch(seconds):
                 click.echo(f"  NEW  {c['address']}")
             seen = len(rows)
             st = feed.status()
-            if not st["connected"] and st["last_error"]:
+            # last_error persists on the status dict across poll ticks while a
+            # reconnect backoff is sleeping — print each distinct error once,
+            # not once per 2s tick, or a single disconnect looks like a storm.
+            if not st["connected"] and st["last_error"] and st["last_error"] != last_printed_error:
                 click.echo(f"  [!] {st['last_error']}")
+                last_printed_error = st["last_error"]
+            elif st["connected"]:
+                last_printed_error = None
     except KeyboardInterrupt:
         pass
     finally:
