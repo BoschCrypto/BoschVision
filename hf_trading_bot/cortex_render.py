@@ -870,6 +870,16 @@ _APP_JS = r"""
       h += '<div class="line"><span class="muted">autotrade</span><span>off — launch with ' +
            '--memecoin-autotrade</span></div>';
     }
+    if (m.pumpportal) {
+      var pp = m.pumpportal;
+      var ppCls = pp.connected ? 'pos' : 'neg';
+      h += '<div class="line"><span class="muted">buyer diversity</span><span class="' + ppCls +
+           '">' + (pp.connected ? 'connected' : 'reconnecting') + ' &middot; ' +
+           pp.mints_tracked + ' tracked</span></div>';
+      if (!pp.connected && pp.last_error) {
+        h += '<div class="muted" style="font-size:10px">' + esc(pp.last_error) + '</div>';
+      }
+    }
     if (live) {
       h += '<button class="study-btn" data-memecoin-cycle="1" ' +
            'style="margin:8px 0 0;float:none;display:block;width:100%">RUN CYCLE NOW</button>';

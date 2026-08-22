@@ -482,6 +482,42 @@ Two things stated plainly:
 — it's ignored (with a banner note explaining why) otherwise. The dashboard's
 Memecoin panel shows the feed's live connection state and detection count.
 
+### Buyer diversity and rug screening — PumpPortal + RugCheck
+
+The scalp entry score originally used only freshness + raw SOL raised on the
+bonding curve. Those two work against each other (a coin needs to be very
+fresh AND already have real SOL raised, which takes time freshness is
+spending down), and worse, SOL raised fast from ONE wallet — the textbook
+bundled/insider-launch pattern — scored identically to genuine broad-based
+buying. Two free integrations fix that:
+
+- **PumpPortal** (`pumpportal.fun`) — a free, keyless third-party WebSocket
+  feed watching the same on-chain pump.fun events. It supplies *distinct
+  buyer count* per candidate mint, which the momentum score now weighs as
+  heavily as freshness (40/40/20 split with SOL-raised). It runs automatically
+  whenever `--memecoin-scalp` is set — no extra flag needed. Verify it works
+  on your machine first, same reasoning as the live feed above:
+  ```bash
+  hf-bot memecoin pp-watch --seconds 120
+  ```
+  This is a supplementary signal only — if PumpPortal is unreachable or a
+  mint has no buyer data yet, scoring just falls back to freshness +
+  SOL-raised, never blocking a trade on a missing connection.
+
+- **RugCheck.xyz** — a free, keyless-for-reads REST API giving top-holder
+  concentration and a composite risk score. `memecoin.rugcheck_flags()` calls
+  it as a **final gate right before a buy executes** (not for every scanned
+  candidate, to stay well under the free-tier rate limit) — a red flag there
+  vetoes the buy even after the momentum score already cleared. This is the
+  one check that can actually see a bundled/insider launch; the on-chain
+  mint/freeze-authority check alone can't.
+
+Both are genuinely free and neither requires an API key to function (an
+optional `RUGCHECK_API_KEY` just raises RugCheck's rate limit). Like the live
+feed, PumpPortal's exact message schema is implemented from public docs, not
+verified against a live connection from this dev environment — `pp-watch` is
+the honest way to find out if that's held up before it feeds real scoring.
+
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 
 Two commands turn "what to look out for" into concrete, checkable rules —

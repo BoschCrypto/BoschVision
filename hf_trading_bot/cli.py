@@ -1808,6 +1808,53 @@ def memecoin_watch(seconds):
               f"status: {feed.status()}")
 
 
+@memecoin.command("pp-watch")
+@click.option("--seconds", default=60, type=int, help="How long to watch before stopping.")
+def memecoin_pp_watch(seconds):
+    """Connect to PumpPortal's free WebSocket feed and print buyer-diversity
+    stats as they accumulate, for --seconds. Read-only, no wallet touched.
+
+    Run this BEFORE trusting the buyer-diversity signal inside the
+    autonomous scalp loop — same reasoning as `memecoin watch` for the
+    Helius-based feed: verify it actually works, with your eyes on the
+    output, before scoring depends on it. If you see zero mints tracked
+    after a minute or two, check the status line for a connection error."""
+    from hf_trading_bot import pumpportal_live
+
+    feed = pumpportal_live.PumpPortalFeed()
+    feed.start()
+    click.echo(f"Connecting to {pumpportal_live.ws_url()} … watching for {seconds}s "
+              f"(Ctrl+C to stop early)")
+    last_buy_count: dict[str, int] = {}
+    import time as _t
+    start = _t.time()
+    last_printed_error = None
+    try:
+        while _t.time() - start < seconds:
+            _t.sleep(2)
+            st = feed.status()
+            for mint in feed.tracked_mints():
+                stats = feed.buyer_stats(mint)
+                if not stats:
+                    continue
+                if mint not in last_buy_count:
+                    click.echo(f"  NEW  {mint}  (tracking for buyer diversity)")
+                if stats["buy_count"] != last_buy_count.get(mint):
+                    last_buy_count[mint] = stats["buy_count"]
+                    click.echo(f"  {mint}  {stats['unique_buyers']} distinct buyer(s), "
+                              f"{stats['buy_count']} buy(s), {stats['age_s']:.0f}s old")
+            if not st["connected"] and st["last_error"] and st["last_error"] != last_printed_error:
+                click.echo(f"  [!] {st['last_error']}")
+                last_printed_error = st["last_error"]
+            elif st["connected"]:
+                last_printed_error = None
+    except KeyboardInterrupt:
+        pass
+    finally:
+        feed.stop()
+    click.echo(f"\nDone. status: {feed.status()}")
+
+
 @memecoin.command("check")
 @click.option("--token", "token_address", required=True, help="Token mint address to screen.")
 def memecoin_check(token_address):
@@ -2423,7 +2470,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         s = Storage(db_path)
         try:
             report = memecoin.run_autotrade_cycle(
-                s, scalp=memecoin_scalp, live_candidates=live_candidates)
+                s, scalp=memecoin_scalp, live_candidates=live_candidates,
+                pumpportal_feed=memecoin_pumpportal_feed)
         finally:
             s.close()
         memecoin_autotrade_status["last_run_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
@@ -2599,6 +2647,14 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     if memecoin_live_on:
         from hf_trading_bot import pumpfun_live
         memecoin_live_feed = pumpfun_live.LiveFeed()
+
+    # PumpPortal's buyer-diversity feed is independent of the Helius-based
+    # live feed above — it's a free, separate data source, so it starts
+    # whenever scalp mode's entry scoring can use it, autotrade or not.
+    memecoin_pumpportal_feed = None
+    if memecoin_scalp:
+        from hf_trading_bot import pumpportal_live
+        memecoin_pumpportal_feed = pumpportal_live.PumpPortalFeed()
 
     # Access token: required before exposing the dashboard past this machine.
     # A tunnel ALWAYS forces auth — never expose the committee without a lock.
@@ -3075,6 +3131,9 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     payload["memecoin"]["activity"] = list(memecoin_activity[:10])
                     payload["memecoin"]["live_feed"] = (memecoin_live_feed.status()
                                                         if memecoin_live_feed is not None else None)
+                    payload["memecoin"]["pumpportal"] = (memecoin_pumpportal_feed.status()
+                                                         if memecoin_pumpportal_feed is not None
+                                                         else None)
                     self._send(200, json.dumps(payload).encode(), "application/json")
                     return
                 html = render_html(snap, mode="live").replace(
@@ -3322,6 +3381,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         threading.Thread(target=_memecoin_autotrade_loop, daemon=True).start()
     if memecoin_live_feed is not None:
         memecoin_live_feed.start()   # persistent websocket subscription, its own thread
+    if memecoin_pumpportal_feed is not None:
+        memecoin_pumpportal_feed.start()   # separate websocket, buyer-diversity only
     tunnel_proc = _start_tunnel(port, token) if tunnel else None
     try:
         server.serve_forever()
