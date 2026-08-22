@@ -24,12 +24,19 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from hf_trading_bot import jupiter, solana_wallet
+from hf_trading_bot import jupiter, rugcheck, solana_wallet
 
 CONFIRM_ENV = "HF_BOT_I_UNDERSTAND_MEMECOIN_RISK"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 DEFAULT_MAX_TRADE_USD = 25.0
 DEFAULT_BUDGET_USD = 50.0
+
+# A single wallet (excluding the LP itself) holding this much of supply is
+# the textbook bundled/insider-launch pattern real pump.fun scalpers flag —
+# see rugcheck_flags() below.
+RUGCHECK_TOP_HOLDER_RED_PCT = 20.0
+RUGCHECK_TOP_HOLDER_YELLOW_PCT = 10.0
+RUGCHECK_SCORE_RED_THRESHOLD = 80.0   # RugCheck's own 0-100 composite; higher = riskier
 
 
 class MemecoinError(RuntimeError):
@@ -189,6 +196,40 @@ def pumpfun_risk_flags(coin: dict, mint_info: dict) -> list[dict]:
         flags.append({"level": "red", "reason":
                      "freeze authority NOT revoked — the creator can freeze any "
                      "wallet's tokens and block them from ever selling"})
+    return flags
+
+
+def rugcheck_flags(token_address: str, *, env: Optional[dict] = None) -> list[dict]:
+    """A final, best-effort safety check via RugCheck.xyz — called only right
+    before a buy actually executes, not for every scanned candidate (keeps
+    real-world call volume well under RugCheck's free-tier rate limit, and
+    matches what this is for: a last check before money moves).
+
+    Fills the one real gap pumpfun_risk_flags() has no visibility into: a
+    single wallet (often funded from the same source as several others in
+    the same block) holding an outsized share of supply — the textbook
+    bundled/insider-launch pattern. RugCheck being unreachable, or a coin
+    not indexed yet, returns no flags — never a reason to block OR to enter;
+    it is one more input, not a requirement."""
+    try:
+        report = rugcheck.get_report(token_address, env=env)
+    except rugcheck.RugCheckError:
+        return []
+    if not report:
+        return []
+    flags: list[dict] = []
+    top = report.get("top_holder_pct")
+    if top is not None and top >= RUGCHECK_TOP_HOLDER_RED_PCT:
+        flags.append({"level": "red", "reason":
+                     f"RugCheck: a single wallet holds {top:.1f}% of supply — "
+                     f"a bundled/insider-launch pattern"})
+    elif top is not None and top >= RUGCHECK_TOP_HOLDER_YELLOW_PCT:
+        flags.append({"level": "yellow", "reason":
+                     f"RugCheck: top non-pool holder owns {top:.1f}% of supply"})
+    score = report.get("score")
+    if score is not None and score >= RUGCHECK_SCORE_RED_THRESHOLD:
+        flags.append({"level": "red", "reason":
+                     f"RugCheck composite risk score {score:.0f}/100 is very high"})
     return flags
 
 
@@ -405,7 +446,8 @@ MAX_NEW_POSITIONS_PER_CYCLE = 2
 def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
                         max_new_positions: int = MAX_NEW_POSITIONS_PER_CYCLE,
                         scalp: bool = False,
-                        live_candidates: Optional[list] = None) -> dict:
+                        live_candidates: Optional[list] = None,
+                        pumpportal_feed=None) -> dict:
     """One full autonomous pass: check exits on every held position FIRST (a
     stop-loss always gets first claim on attention and budget), then look for
     new entries with whatever budget remains. Returns a report of every
@@ -425,6 +467,12 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
     (a persistent WebSocket subscription) rather than REST-polling once per
     cycle. Ignored when scalp=False. A caller not wired to a live feed
     (the CLI, tests) simply omits it and gets the REST-polling behavior.
+
+    `pumpportal_feed`, when scalp=True, supplies buyer_stats (distinct
+    buyer count) per candidate to pumpfun_entry_signal — PumpPortal's free
+    WebSocket trade stream is the only source of that; without it, scoring
+    falls back to freshness + SOL-raised alone. Also ignored when
+    scalp=False; None is the correct default when no feed is running.
     there is no liquidity figure yet the way DexScreener has one. That is a
     real, deliberate increase in risk, not a smaller version of the normal
     screen; it is what trading a coin this early means.
@@ -537,9 +585,18 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
             report["errors"].append({"stage": "entry-mint-check", "token_address": t["address"],
                                      "error": str(e)})
             continue
-        sig = (memecoin_strategy.pumpfun_entry_signal(t, mint_info) if scalp
-              else memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms))
+        if scalp:
+            buyer_stats = pumpportal_feed.buyer_stats(t["address"]) if pumpportal_feed else None
+            sig = memecoin_strategy.pumpfun_entry_signal(t, mint_info, buyer_stats=buyer_stats)
+        else:
+            sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms)
         if not sig.enter:
+            continue
+        rc_flags = rugcheck_flags(t["address"], env=env)
+        rc_red = [f["reason"] for f in rc_flags if f["level"] == "red"]
+        if rc_red:
+            report["errors"].append({"stage": "entry-rugcheck-veto", "token_address": t["address"],
+                                     "error": "; ".join(rc_red)})
             continue
         size = min(trade_size, remaining)
         try:

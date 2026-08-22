@@ -279,7 +279,17 @@ def scalp_exit_signal(**kwargs) -> ExitSignal:
 SCALP_MIN_ENTRY_SCORE = 50.0
 
 
-def pumpfun_momentum_score(coin: dict) -> dict:
+def pumpfun_momentum_score(coin: dict, *, buyer_stats: Optional[dict] = None) -> dict:
+    """Freshness + buyer diversity + bonding-curve progress, 40/40/20.
+
+    Buyer diversity (distinct wallets buying, from PumpPortal's free trade
+    stream) is weighted as heavily as freshness deliberately: SOL raised
+    fast from ONE wallet — or a handful funded from the same source in the
+    same block — is the textbook bundled/insider-launch pattern real
+    pump.fun scalpers watch for, not organic demand. Raw SOL-raised alone
+    can't tell those apart; buyer count can. Missing buyer_stats (no
+    PumpPortal connection, or a mint too new to have data yet) just drops
+    that component to 0 — never blocks scoring on the other two."""
     components: list[dict] = []
     score = 0.0
 
@@ -287,15 +297,25 @@ def pumpfun_momentum_score(coin: dict) -> dict:
     if created_at_ms:
         import time as _time
         age_min = max(0.0, (_time.time() * 1000 - created_at_ms) / 60_000.0)
-        pts = max(0.0, 50.0 * (1 - min(age_min, 30.0) / 30.0))
+        pts = max(0.0, 40.0 * (1 - min(age_min, 30.0) / 30.0))
         score += pts
         components.append({"points": pts, "reason": f"created {age_min:.1f} min ago"})
     else:
         components.append({"points": 0.0, "reason": "no creation timestamp available"})
 
+    if buyer_stats is not None:
+        unique = buyer_stats.get("unique_buyers") or 0
+        pts = min(40.0, unique * 4.0)
+        score += pts
+        components.append({"points": pts, "reason":
+                          f"{unique} distinct wallet(s) have bought so far (PumpPortal)"})
+    else:
+        components.append({"points": 0.0, "reason":
+                          "no buyer-diversity data yet (PumpPortal not connected, or too new)"})
+
     sol_raised = coin.get("sol_raised")
     if sol_raised is not None:
-        pts = min(50.0, max(0.0, sol_raised) * 2.0)
+        pts = min(20.0, max(0.0, sol_raised) * 1.0)
         score += pts
         components.append({"points": pts, "reason":
                           f"{sol_raised:.2f} SOL raised on the bonding curve so far"})
@@ -306,7 +326,8 @@ def pumpfun_momentum_score(coin: dict) -> dict:
 
 
 def pumpfun_entry_signal(coin: dict, mint_info: dict, *,
-                         min_score: float = SCALP_MIN_ENTRY_SCORE) -> EntrySignal:
+                         min_score: float = SCALP_MIN_ENTRY_SCORE,
+                         buyer_stats: Optional[dict] = None) -> EntrySignal:
     """The pump.fun-native equivalent of entry_signal(): mint/freeze
     authority is still checked (memecoin.pumpfun_risk_flags — the only
     universally-applicable structural check this early); everything past
@@ -319,7 +340,7 @@ def pumpfun_entry_signal(coin: dict, mint_info: dict, *,
                            reasons=["a red risk flag is present — never enter regardless "
                                    "of momentum"],
                            risk_flags=flags)
-    m = pumpfun_momentum_score(coin)
+    m = pumpfun_momentum_score(coin, buyer_stats=buyer_stats)
     reasons = [c["reason"] for c in m["components"] if c["points"] > 0]
     enter = m["score"] >= min_score
     if not enter:

@@ -128,6 +128,7 @@ def test_cycle_enters_on_passing_candidate(storage, monkeypatch):
         buy_calls.append((token, usd))
         return {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.1,
                "usd_amount": usd}
+    monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
     monkeypatch.setattr(memecoin, "execute_buy", fake_execute_buy)
 
     report = memecoin.run_autotrade_cycle(
@@ -135,6 +136,37 @@ def test_cycle_enters_on_passing_candidate(storage, monkeypatch):
                           MEMECOIN_WALLET_BUDGET_USD="50"))
     assert buy_calls == [("NEW1", 25.0)]
     assert report["entries"][0]["token_address"] == "NEW1"
+
+
+def test_cycle_rugcheck_red_flag_vetoes_the_buy(storage, monkeypatch):
+    # A candidate that clears the momentum score can still be blocked at the
+    # final gate -- this is the whole point of calling RugCheck right before
+    # money moves, not just during scanning.
+    storage.set_kill_switch(False)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+    candidate = {"address": "BUNDLED1", "symbol": "BUNDLED", "liquidity_usd": 200_000,
+                "volume_24h_usd": 500_000, "price_change_h1_pct": 15.0,
+                "price_change_h6_pct": 10.0, "price_change_h24_pct": 20.0,
+                "buys_h1": 90, "sells_h1": 10, "buys_h24": 500, "sells_h24": 300,
+                "pair_created_at": None}
+    monkeypatch.setattr(memecoin_data, "trending", lambda limit=30, env=None: [candidate])
+    monkeypatch.setattr(memecoin_data, "filter_candidates", lambda rows, **k: rows)
+    monkeypatch.setattr(solana_wallet, "get_mint_info",
+                        lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
+    monkeypatch.setattr(memecoin, "rugcheck_flags",
+                        lambda addr, env=None: [{"level": "red", "reason":
+                                                 "a single wallet holds 40% of supply"}])
+
+    def fail_if_called(token, usd, s, **k):
+        raise AssertionError("execute_buy must not be called after a red RugCheck veto")
+    monkeypatch.setattr(memecoin, "execute_buy", fail_if_called)
+
+    report = memecoin.run_autotrade_cycle(
+        storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25",
+                          MEMECOIN_WALLET_BUDGET_USD="50"))
+    assert report["entries"] == []
+    assert report["errors"][0]["stage"] == "entry-rugcheck-veto"
+    assert "40%" in report["errors"][0]["error"]
 
 
 def test_cycle_never_exceeds_max_new_positions_per_cycle(storage, monkeypatch):
@@ -152,6 +184,7 @@ def test_cycle_never_exceeds_max_new_positions_per_cycle(storage, monkeypatch):
     monkeypatch.setattr(memecoin_data, "filter_candidates", lambda rows, **k: rows)
     monkeypatch.setattr(solana_wallet, "get_mint_info",
                         lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
+    monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
     monkeypatch.setattr(memecoin, "execute_buy",
                         lambda token, usd, s, **k: {"tx_signature": "sig", "status": "confirmed",
                                                     "sol_amount": 0.1, "usd_amount": usd})
@@ -178,6 +211,7 @@ def test_cycle_stops_entries_when_budget_exhausted_mid_cycle(storage, monkeypatc
     monkeypatch.setattr(memecoin_data, "filter_candidates", lambda rows, **k: rows)
     monkeypatch.setattr(solana_wallet, "get_mint_info",
                         lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
+    monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
     monkeypatch.setattr(memecoin, "execute_buy",
                         lambda token, usd, s, **k: {"tx_signature": "sig", "status": "confirmed",
                                                     "sol_amount": 0.1, "usd_amount": usd})
@@ -209,6 +243,7 @@ def test_cycle_scalp_mode_uses_pumpfun_discovery_not_dexscreener(storage, monkey
     monkeypatch.setattr(solana_wallet, "get_mint_info",
                         lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
     buy_calls = []
+    monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
     monkeypatch.setattr(memecoin, "execute_buy",
                         lambda token, usd, s, **k: buy_calls.append((token, usd)) or
                         {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.1,
@@ -232,6 +267,7 @@ def test_cycle_scalp_mode_uses_live_candidates_when_given(storage, monkeypatch):
     monkeypatch.setattr(solana_wallet, "get_mint_info",
                         lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
     buy_calls = []
+    monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
     monkeypatch.setattr(memecoin, "execute_buy",
                         lambda token, usd, s, **k: buy_calls.append(token) or
                         {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.1,

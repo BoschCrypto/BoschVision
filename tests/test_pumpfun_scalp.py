@@ -115,10 +115,40 @@ def test_exit_signal_no_token_data_past_stall_now_exits():
 # --- pumpfun momentum / entry ---------------------------------------------
 
 def test_pumpfun_momentum_fresh_coin_with_raise_scores_high():
+    # Freshness (40 max) + SOL-raised (20 max) is the ceiling with no
+    # buyer-diversity data at all -- 60, not the pre-PumpPortal 100.
     now_ms = int(time.time() * 1000)
     coin = {"created_at_ms": now_ms - 60_000, "sol_raised": 20.0}   # 1 min old
     result = memecoin_strategy.pumpfun_momentum_score(coin)
-    assert result["score"] > 80
+    assert result["score"] > 55
+
+
+def test_pumpfun_momentum_many_distinct_buyers_scores_higher_than_one_buyer():
+    # The exact distinction PumpPortal's buyer count exists to make: same
+    # freshness and same SOL raised, but one whale (or a bundle) vs many
+    # distinct wallets should NOT score the same.
+    now_ms = int(time.time() * 1000)
+    coin = {"created_at_ms": now_ms - 60_000, "sol_raised": 5.0}
+    one_buyer = memecoin_strategy.pumpfun_momentum_score(
+        coin, buyer_stats={"unique_buyers": 1, "buy_count": 5, "age_s": 30})
+    many_buyers = memecoin_strategy.pumpfun_momentum_score(
+        coin, buyer_stats={"unique_buyers": 12, "buy_count": 15, "age_s": 30})
+    assert many_buyers["score"] > one_buyer["score"]
+
+
+def test_pumpfun_momentum_buyer_diversity_capped_at_40():
+    coin = {}
+    result = memecoin_strategy.pumpfun_momentum_score(
+        coin, buyer_stats={"unique_buyers": 50, "buy_count": 60, "age_s": 30})
+    assert result["score"] == 40.0
+
+
+def test_pumpfun_momentum_missing_buyer_stats_scores_that_component_zero():
+    coin = {"sol_raised": 5.0}
+    result = memecoin_strategy.pumpfun_momentum_score(coin, buyer_stats=None)
+    buyer_component = next(c for c in result["components"] if "PumpPortal" in c["reason"]
+                           or "buyer-diversity" in c["reason"])
+    assert buyer_component["points"] == 0.0
 
 
 def test_pumpfun_momentum_old_coin_scores_low_on_freshness():
@@ -144,6 +174,19 @@ def test_pumpfun_entry_signal_passes_fresh_clean_coin():
     coin = {"created_at_ms": int(time.time() * 1000), "sol_raised": 30.0}
     sig = memecoin_strategy.pumpfun_entry_signal(coin, CLEAN_MINT)
     assert sig.enter is True
+
+
+def test_pumpfun_entry_signal_uses_buyer_stats_to_clear_threshold():
+    # A coin too stale/thin on SOL raised alone to clear the entry bar can
+    # still clear it on genuine buyer diversity -- this is the actual fix
+    # for a bot that otherwise never enters.
+    now_ms = int(time.time() * 1000)
+    coin = {"created_at_ms": now_ms - 10 * 60_000, "sol_raised": 1.0}   # 10 min old, thin raise
+    without = memecoin_strategy.pumpfun_entry_signal(coin, CLEAN_MINT)
+    with_buyers = memecoin_strategy.pumpfun_entry_signal(
+        coin, CLEAN_MINT, buyer_stats={"unique_buyers": 10, "buy_count": 12, "age_s": 60})
+    assert without.enter is False
+    assert with_buyers.enter is True
 
 
 def test_pumpfun_risk_flags_only_checks_authorities():
