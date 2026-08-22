@@ -404,6 +404,42 @@ Without `--memecoin-autotrade`, the dashboard still shows the wallet and
 positions (refreshed on the same interval) — you get the view and the
 command bar, and trigger a cycle manually with the **RUN CYCLE NOW** button.
 
+### Scalp mode — brand-new pump.fun coins, tight exits (`--memecoin-scalp`)
+
+`--memecoin-autotrade` on its own runs the swing profile above: DexScreener's
+trending list, +100%/+300% take-profit trims, a 6h stall window. Add
+**`--memecoin-scalp`** and both halves switch to a different, deliberately
+riskier profile:
+
+- **Discovery** comes from **pump.fun's own new-coin feed** (`pumpfun_data.py`)
+  instead of DexScreener — coins seconds/minutes old, the way Photon's
+  Memescope shows them, not the trending-boosts list. DexScreener only
+  indexes a pair once it has a liquidity pool, so it structurally cannot show
+  something this new.
+- **This is an unofficial, undocumented API.** It can change or break
+  without notice — test it first: `hf-bot memecoin newcoins` (or `--raw` to
+  see the raw response if something looks wrong).
+- **No liquidity-based safety check applies.** A bonding-curve coin this
+  fresh has no comparable liquidity figure the way a DexScreener pair does —
+  only **mint/freeze authority** is checked. That is a real, deliberate
+  increase in risk, not a smaller version of the normal screen; it is what
+  trading a coin this early means.
+- **Exits are tight:** stop-loss **-15%** (vs -35%), first trim at **+15%**
+  (vs +100%), trailing stop after +20%, and a **30-minute** stall exit (vs
+  6h) — if it hasn't moved by then, out regardless.
+
+```bash
+hf-bot memecoin newcoins                                   # test the feed first
+hf-bot dashboard --open --memecoin-autotrade --memecoin-scalp --memecoin-cycle-seconds 90
+```
+
+A short cycle actually matters for scalping — **the free public Solana RPC
+will rate-limit at 60-120s cycles**; a paid RPC (Helius, QuickNode) is
+recommended for scalp mode specifically. Everything else stays the same: the
+kill switch, `MEMECOIN_MAX_TRADE_USD`, and `MEMECOIN_WALLET_BUDGET_USD` all
+still apply exactly as before — scalp mode changes *what* gets bought and
+*when* it gets sold, never *how much* the bot is allowed to risk in total.
+
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 
 Two commands turn "what to look out for" into concrete, checkable rules —

@@ -831,7 +831,8 @@ _APP_JS = r"""
     var at = m.autotrade || {};
     var h = '<div class="readout"><h4>Memecoin' +
            (at.enabled ? ' <span class="autoexec" style="display:inline;margin-left:8px;'
-                        + 'padding:1px 7px">AUTOTRADE ON</span>' : '') + '</h4>';
+                        + 'padding:1px 7px">AUTOTRADE ON' + (at.scalp ? ' &middot; SCALP' : '')
+                        + '</span>' : '') + '</h4>';
     if (!m.configured) {
       h += '<div class="muted">Not configured — set SOLANA_PRIVATE_KEY in .env to see the ' +
            'wallet, positions, and enable autotrade. See the READMEs Memecoin trading ' +

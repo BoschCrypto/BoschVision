@@ -1719,6 +1719,47 @@ def memecoin_scan(query, limit):
                    f"{(t['symbol'] or '?'):<10} {t['address']}  (no price data)")
 
 
+@memecoin.command("newcoins")
+@click.option("--limit", default=20, type=int)
+@click.option("--raw", is_flag=True,
+              help="Dump the raw JSON from pump.fun's API instead of the parsed table — "
+                   "use this to sanity-check the feed before trusting it, or to help "
+                   "diagnose a field-name mismatch if pump.fun changed their API shape.")
+def memecoin_newcoins(limit, raw):
+    """Brand-new pump.fun coins, straight from pump.fun's own (UNOFFICIAL,
+    undocumented) API — not DexScreener, so these can be seconds/minutes old,
+    the way Photon's Memescope shows them. Data only, nothing spent.
+
+    This API can change or break without notice; if it errors, see
+    pumpfun_data.py for how to update PUMPFUN_BASE_URL. There is no
+    comparable liquidity figure for a coin this fresh — mint/freeze
+    authority (see `memecoin check`) is the only structural safety check
+    that applies this early."""
+    from hf_trading_bot import pumpfun_data
+
+    try:
+        if raw:
+            import json as _json
+            data = pumpfun_data._get(f"/coins?offset=0&limit={limit}&sort=created_timestamp"
+                                     f"&order=DESC&includeNsfw=false")
+            click.echo(_json.dumps(data, indent=2)[:4000])
+            return
+        rows = pumpfun_data.list_new_coins(limit=limit)
+    except pumpfun_data.PumpFunError as e:
+        raise click.ClickException(str(e))
+    if not rows:
+        click.echo("No results (or pump.fun's API shape changed — try --raw).")
+        return
+    import time as _t
+    now_ms = int(_t.time() * 1000)
+    for c in rows:
+        age = (f"{(now_ms - c['created_at_ms']) / 60000.0:.1f}m ago"
+              if c["created_at_ms"] else "age unknown")
+        mc = f"${c['market_cap_usd']:,.0f} mc" if c["market_cap_usd"] is not None else "mc n/a"
+        sol = f"{c['sol_raised']:.2f} SOL raised" if c["sol_raised"] is not None else "raised n/a"
+        click.echo(f"{(c['symbol'] or '?'):<10} {c['address']}  {age}  {mc}  {sol}")
+
+
 @memecoin.command("check")
 @click.option("--token", "token_address", required=True, help="Token mint address to screen.")
 def memecoin_check(token_address):
@@ -2108,6 +2149,16 @@ def memecoin_positions(cfg):
               help="Seconds between autotrade cycles (default 300 = 5 min). Also the refresh "
                    "interval for the dashboard's memecoin wallet/positions view when "
                    "SOLANA_PRIVATE_KEY is configured, even without --memecoin-autotrade.")
+@click.option("--memecoin-scalp", is_flag=True,
+              help="Switch --memecoin-autotrade to the scalp profile: entries come from "
+                   "pump.fun's own brand-new-coin feed (pumpfun_data — an UNOFFICIAL API, "
+                   "may break; test with `hf-bot memecoin newcoins` first) instead of "
+                   "DexScreener's trending list, and exits use much tighter thresholds "
+                   "(stop-loss -15%, first trim +15%, 30-min stall) instead of the swing "
+                   "defaults. A coin this fresh has no liquidity figure yet — only "
+                   "mint/freeze authority is checked, a real increase in risk. Ignored "
+                   "without --memecoin-autotrade. Pair with a short "
+                   "--memecoin-cycle-seconds (60-120) and a paid Solana RPC.")
 @click.option("--open", "open_browser", is_flag=True,
               help="Open the dashboard in your default browser once the server is up.")
 @click.option("--token", default=None,
@@ -2126,6 +2177,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               fallback_cmd: Optional[str], auto_execute: bool,
               auto_execute_max: float, committee_model: Optional[str],
               tiered: bool, memecoin_autotrade: bool, memecoin_cycle_seconds: int,
+              memecoin_scalp: bool,
               open_browser: bool,
               token: Optional[str], auth: bool, tunnel: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
@@ -2260,7 +2312,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     # keeps the last good cache rather than showing a false zero.
     memecoin_cache: dict = {"configured": False}
     memecoin_autotrade_status: dict = {"enabled": False, "last_run_at": None,
-                                       "last_report": None, "cycle_seconds": memecoin_cycle_seconds}
+                                       "last_report": None, "cycle_seconds": memecoin_cycle_seconds,
+                                       "scalp": memecoin_scalp}
     memecoin_activity: list = []   # recent actions for the panel, newest first
     MEMECOIN_ACTIVITY_CAP = 30
 
@@ -2310,7 +2363,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         from hf_trading_bot import memecoin
         s = Storage(db_path)
         try:
-            report = memecoin.run_autotrade_cycle(s)
+            report = memecoin.run_autotrade_cycle(s, scalp=memecoin_scalp)
         finally:
             s.close()
         memecoin_autotrade_status["last_run_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
@@ -3153,9 +3206,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     if memecoin_autotrade and memecoin_autotrade_blocked_reason:
         runner_note += (f"\n  [!] --memecoin-autotrade BLOCKED — {memecoin_autotrade_blocked_reason}")
     elif memecoin_autotrade_on:
-        runner_note += (f"\n  [!] MEMECOIN AUTOTRADE ON — real money, entries and exits fire "
-                        f"with no approval click, every {memecoin_cycle_seconds}s. "
-                        "Kill switch, per-trade ceiling and wallet budget still apply.")
+        mode_note = "SCALP mode (pump.fun new-coin feed, tight exits)" if memecoin_scalp \
+            else "swing mode (DexScreener trending)"
+        runner_note += (f"\n  [!] MEMECOIN AUTOTRADE ON — {mode_note} — real money, entries "
+                        f"and exits fire with no approval click, every "
+                        f"{memecoin_cycle_seconds}s. Kill switch, per-trade ceiling and "
+                        "wallet budget still apply.")
     # The address to actually type in a browser: when bound to all interfaces,
     # localhost still works here, and other devices use this machine's LAN IP.
     local_url = f"http://127.0.0.1:{port}" if host in ("0.0.0.0", "127.0.0.1", "localhost") \

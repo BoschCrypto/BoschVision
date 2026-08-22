@@ -191,3 +191,54 @@ def test_cycle_stops_entries_when_budget_exhausted_mid_cycle(storage, monkeypatc
         max_new_positions=5)
     assert len(report["entries"]) == 2
     assert sum(e["usd_amount"] for e in report["entries"]) == pytest.approx(45.0)
+
+
+def test_cycle_scalp_mode_uses_pumpfun_discovery_not_dexscreener(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+
+    def boom_trending(*a, **k):
+        raise AssertionError("scalp mode must not call DexScreener trending()")
+    monkeypatch.setattr(memecoin_data, "trending", boom_trending)
+
+    from hf_trading_bot import pumpfun_data
+    import time as _t
+    coin = {"address": "PF1", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000),
+           "sol_raised": 30.0, "market_cap_usd": 4000, "migrated": False, "source": "pumpfun"}
+    monkeypatch.setattr(pumpfun_data, "list_new_coins", lambda limit=30, env=None: [coin])
+    monkeypatch.setattr(solana_wallet, "get_mint_info",
+                        lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
+    buy_calls = []
+    monkeypatch.setattr(memecoin, "execute_buy",
+                        lambda token, usd, s, **k: buy_calls.append((token, usd)) or
+                        {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.1,
+                         "usd_amount": usd})
+
+    report = memecoin.run_autotrade_cycle(
+        storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25",
+                          MEMECOIN_WALLET_BUDGET_USD="50"), scalp=True)
+    assert buy_calls == [("PF1", 25.0)]
+    assert report["entries"][0]["token_address"] == "PF1"
+
+
+def test_cycle_scalp_mode_exit_uses_tight_thresholds(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    # +20% would NOT trigger a swing exit (needs +100%) but DOES trigger a
+    # scalp trim (+15%) -- confirms scalp=True actually swaps the profile.
+    monkeypatch.setattr(memecoin, "list_positions",
+                        lambda s, env=None: [_position(price=1.20)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    sell_calls = []
+    monkeypatch.setattr(memecoin, "execute_sell",
+                        lambda token, pct, s, **k: sell_calls.append((token, pct)) or
+                        {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.05,
+                         "usd_amount": 5.0})
+    from hf_trading_bot import pumpfun_data
+    monkeypatch.setattr(pumpfun_data, "list_new_coins", lambda limit=30, env=None: [])
+
+    report = memecoin.run_autotrade_cycle(storage, env=CONFIRMED_ENV, scalp=True)
+    assert len(sell_calls) == 1
+    assert sell_calls[0][1] == memecoin_strategy.SCALP_TRIM_1_SELL_PCT

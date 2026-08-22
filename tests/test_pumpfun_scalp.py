@@ -1,0 +1,153 @@
+"""pump.fun discovery, the scalp exit profile, and pumpfun-native entry
+scoring. No network — HTTP is stubbed."""
+import json
+import time
+
+import pytest
+
+from hf_trading_bot import memecoin, memecoin_strategy, pumpfun_data
+
+CLEAN_MINT = {"mint_authority": None, "freeze_authority": None}
+
+
+# --- pumpfun_data ------------------------------------------------------
+
+class _Resp:
+    def __init__(self, payload):
+        self._p = payload
+    def read(self):
+        return json.dumps(self._p).encode()
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def test_list_new_coins_normalizes_and_excludes_migrated(monkeypatch):
+    raw = [
+        {"mint": "M1", "symbol": "FOO", "created_timestamp": 1_700_000_000,
+        "usd_market_cap": 5000, "real_sol_reserves": 12.5, "complete": False},
+        {"mint": "M2", "symbol": "BAR", "created_timestamp": 1_700_000_100,
+        "complete": True},   # migrated -> excluded by default
+    ]
+    monkeypatch.setattr(pumpfun_data.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Resp(raw))
+    rows = pumpfun_data.list_new_coins(limit=10)
+    assert len(rows) == 1
+    assert rows[0]["address"] == "M1"
+    assert rows[0]["symbol"] == "FOO"
+    assert rows[0]["created_at_ms"] == 1_700_000_000_000   # seconds -> ms
+    assert rows[0]["market_cap_usd"] == 5000
+    assert rows[0]["source"] == "pumpfun"
+
+
+def test_list_new_coins_include_migrated(monkeypatch):
+    raw = [{"mint": "M2", "symbol": "BAR", "complete": True}]
+    monkeypatch.setattr(pumpfun_data.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Resp(raw))
+    rows = pumpfun_data.list_new_coins(limit=10, include_migrated=True)
+    assert len(rows) == 1
+
+
+def test_list_new_coins_skips_rows_without_a_mint(monkeypatch):
+    raw = [{"symbol": "NOMINT"}, {"mint": "M1", "symbol": "OK"}]
+    monkeypatch.setattr(pumpfun_data.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Resp(raw))
+    rows = pumpfun_data.list_new_coins(limit=10)
+    assert len(rows) == 1 and rows[0]["address"] == "M1"
+
+
+def test_list_new_coins_handles_dict_wrapper_shape(monkeypatch):
+    # Defensive against the API wrapping the array in {"coins": [...]}.
+    raw = {"coins": [{"mint": "M1", "symbol": "OK"}]}
+    monkeypatch.setattr(pumpfun_data.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Resp(raw))
+    rows = pumpfun_data.list_new_coins(limit=10)
+    assert len(rows) == 1
+
+
+def test_base_url_default_and_override():
+    assert pumpfun_data.base_url({}) == pumpfun_data.DEFAULT_BASE_URL
+    assert pumpfun_data.base_url({"PUMPFUN_BASE_URL": "https://x"}) == "https://x"
+
+
+# --- scalp exit profile ------------------------------------------------
+
+def test_scalp_stop_loss_is_tighter_than_swing():
+    assert memecoin_strategy.SCALP_STOP_LOSS_PCT > memecoin_strategy.STOP_LOSS_PCT
+    # (both negative; "tighter" means closer to zero, less room to fall)
+
+
+def test_scalp_exit_signal_stop_loss():
+    sig = memecoin_strategy.scalp_exit_signal(
+        entry_price_usd=1.0, current_price_usd=0.83, peak_price_usd=1.0, hours_held=0.1)
+    assert sig.exit is True and "stop-loss" in sig.reason
+    assert sig.sell_pct == 100.0
+
+
+def test_scalp_exit_signal_does_not_trigger_swing_thresholds():
+    # +20% would not trigger a SWING trim (needs +100%) but DOES trigger the
+    # scalp trim-1 (+15%) -- confirms the tighter profile is actually used.
+    swing = memecoin_strategy.exit_signal(
+        entry_price_usd=1.0, current_price_usd=1.20, peak_price_usd=1.20, hours_held=0.1)
+    scalp = memecoin_strategy.scalp_exit_signal(
+        entry_price_usd=1.0, current_price_usd=1.20, peak_price_usd=1.20, hours_held=0.1)
+    assert swing.exit is False
+    assert scalp.exit is True and "take-profit" in scalp.reason
+
+
+def test_scalp_exit_signal_stall_is_much_faster():
+    assert memecoin_strategy.SCALP_STALL_HOURS < memecoin_strategy.STALL_HOURS
+    sig = memecoin_strategy.scalp_exit_signal(
+        entry_price_usd=1.0, current_price_usd=1.02, peak_price_usd=1.05,
+        hours_held=memecoin_strategy.SCALP_STALL_HOURS + 0.01)
+    assert sig.exit is True and "stall" in sig.reason
+
+
+def test_exit_signal_no_token_data_past_stall_now_exits():
+    # A swing position with no DexScreener data available past the stall
+    # deadline now exits rather than holding forever with no way to check
+    # momentum -- a deliberate tightening alongside the scalp work.
+    sig = memecoin_strategy.exit_signal(
+        entry_price_usd=1.0, current_price_usd=1.02, peak_price_usd=1.05,
+        hours_held=memecoin_strategy.STALL_HOURS + 0.1, token=None)
+    assert sig.exit is True and "no data" in sig.reason
+
+
+# --- pumpfun momentum / entry ---------------------------------------------
+
+def test_pumpfun_momentum_fresh_coin_with_raise_scores_high():
+    now_ms = int(time.time() * 1000)
+    coin = {"created_at_ms": now_ms - 60_000, "sol_raised": 20.0}   # 1 min old
+    result = memecoin_strategy.pumpfun_momentum_score(coin)
+    assert result["score"] > 80
+
+
+def test_pumpfun_momentum_old_coin_scores_low_on_freshness():
+    now_ms = int(time.time() * 1000)
+    coin = {"created_at_ms": now_ms - 60 * 60_000, "sol_raised": 0.0}   # 1h old, no raise
+    result = memecoin_strategy.pumpfun_momentum_score(coin)
+    assert result["score"] < 10
+
+
+def test_pumpfun_momentum_missing_data_scores_zero():
+    result = memecoin_strategy.pumpfun_momentum_score({})
+    assert result["score"] == 0.0
+
+
+def test_pumpfun_entry_signal_red_flag_blocks():
+    hot_mint = dict(CLEAN_MINT, mint_authority="Creator")
+    coin = {"created_at_ms": int(time.time() * 1000), "sol_raised": 30.0}
+    sig = memecoin_strategy.pumpfun_entry_signal(coin, hot_mint)
+    assert sig.enter is False
+
+
+def test_pumpfun_entry_signal_passes_fresh_clean_coin():
+    coin = {"created_at_ms": int(time.time() * 1000), "sol_raised": 30.0}
+    sig = memecoin_strategy.pumpfun_entry_signal(coin, CLEAN_MINT)
+    assert sig.enter is True
+
+
+def test_pumpfun_risk_flags_only_checks_authorities():
+    # No liquidity concept for a coin this fresh -- confirm the flag set is
+    # exactly {mint, freeze}, nothing liquidity/volume-shaped leaks in.
+    flags = memecoin.pumpfun_risk_flags({}, dict(CLEAN_MINT, mint_authority="X"))
+    assert len(flags) == 1 and "mint authority" in flags[0]["reason"]

@@ -173,6 +173,25 @@ def risk_verdict(flags: list[dict]) -> str:
     return "no obvious red flags detected (still speculative — not investment advice)"
 
 
+def pumpfun_risk_flags(coin: dict, mint_info: dict) -> list[dict]:
+    """The only universally-applicable structural check for a brand-new
+    pump.fun coin pre-migration: mint/freeze authority. There is no
+    comparable liquidity figure this early — a bonding curve is not a
+    liquidity pool — so the liquidity/volume checks in risk_flags() above do
+    not apply. This is deliberately a much shorter list; it is not a lesser
+    version of the same safety, it is honestly what is checkable this early."""
+    flags: list[dict] = []
+    if mint_info.get("mint_authority"):
+        flags.append({"level": "red", "reason":
+                     "mint authority NOT revoked — the creator can mint unlimited "
+                     "new supply at will and dilute/dump on holders"})
+    if mint_info.get("freeze_authority"):
+        flags.append({"level": "red", "reason":
+                     "freeze authority NOT revoked — the creator can freeze any "
+                     "wallet's tokens and block them from ever selling"})
+    return flags
+
+
 def check_token(token_address: str, *, env: Optional[dict] = None) -> dict:
     """Fetch live data and run the mechanical screen. Read-only — no wallet
     spend, no guards to pass (there's nothing to protect against here)."""
@@ -384,7 +403,8 @@ MAX_NEW_POSITIONS_PER_CYCLE = 2
 
 
 def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
-                        max_new_positions: int = MAX_NEW_POSITIONS_PER_CYCLE) -> dict:
+                        max_new_positions: int = MAX_NEW_POSITIONS_PER_CYCLE,
+                        scalp: bool = False) -> dict:
     """One full autonomous pass: check exits on every held position FIRST (a
     stop-loss always gets first claim on attention and budget), then look for
     new entries with whatever budget remains. Returns a report of every
@@ -392,11 +412,20 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
     failure, so one bad RPC call or a token that goes illiquid never stops
     the rest of the pass or a later cycle.
 
+    `scalp=True` switches BOTH halves together — exits use the tight
+    SCALP_* thresholds (memecoin_strategy.scalp_exit_signal), and new-entry
+    discovery reads pump.fun's own new-coin feed (pumpfun_data) instead of
+    DexScreener's trending list, scored by pumpfun_entry_signal — the only
+    universal safety check on a coin this fresh is mint/freeze authority,
+    there is no liquidity figure yet the way DexScreener has one. That is a
+    real, deliberate increase in risk, not a smaller version of the normal
+    screen; it is what trading a coin this early means.
+
     This is the function both the dashboard's background loop and a manual
     'run once' trigger call — the loop is just this on a timer."""
     import time as _time
 
-    from hf_trading_bot import memecoin_data
+    from hf_trading_bot import memecoin_data, memecoin_strategy
 
     report: dict = {"exits": [], "entries": [], "errors": [], "skipped": None}
 
@@ -433,8 +462,8 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
             except memecoin_data.DexScreenerError:
                 token = None
 
-            from hf_trading_bot import memecoin_strategy
-            sig = memecoin_strategy.exit_signal(
+            exit_fn = memecoin_strategy.scalp_exit_signal if scalp else memecoin_strategy.exit_signal
+            sig = exit_fn(
                 entry_price_usd=basis["avg_entry_price"], current_price_usd=p.current_price_usd,
                 peak_price_usd=peak, hours_held=hours_held, token=token,
                 already_trimmed_1=bool(state.get("trimmed_1")),
@@ -443,11 +472,15 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
                 continue
             result = execute_sell(p.token_address, sig.sell_pct, storage,
                                   kill_switch=kill_switch, env=env)
+            trim1_pct = (memecoin_strategy.SCALP_TRIM_1_SELL_PCT if scalp
+                        else memecoin_strategy.TRIM_1_SELL_PCT)
+            trim2_pct = (memecoin_strategy.SCALP_TRIM_2_SELL_PCT if scalp
+                        else memecoin_strategy.TRIM_2_SELL_PCT)
             if sig.sell_pct >= 99.9:
                 storage.memecoin_clear_position_state(p.token_address)
-            elif abs(sig.sell_pct - memecoin_strategy.TRIM_1_SELL_PCT) < 1e-6 and not state.get("trimmed_1"):
+            elif abs(sig.sell_pct - trim1_pct) < 1e-6 and not state.get("trimmed_1"):
                 storage.memecoin_mark_trimmed(p.token_address, 1)
-            elif abs(sig.sell_pct - memecoin_strategy.TRIM_2_SELL_PCT) < 1e-6 and not state.get("trimmed_2"):
+            elif abs(sig.sell_pct - trim2_pct) < 1e-6 and not state.get("trimmed_2"):
                 storage.memecoin_mark_trimmed(p.token_address, 2)
             report["exits"].append({"token_address": p.token_address, "symbol": p.symbol,
                                     "sell_pct": sig.sell_pct, "reason": sig.reason,
@@ -464,16 +497,24 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
     if remaining < trade_size * 0.5:
         return report
 
-    try:
-        candidates = memecoin_data.trending(limit=30, env=env)
-    except memecoin_data.DexScreenerError as e:
-        report["errors"].append({"stage": "scan", "error": str(e)})
-        return report
+    if scalp:
+        from hf_trading_bot import pumpfun_data
+        try:
+            candidates = pumpfun_data.list_new_coins(limit=30, env=env)
+        except pumpfun_data.PumpFunError as e:
+            report["errors"].append({"stage": "scan", "error": str(e)})
+            return report
+        picked = [c for c in candidates if c["address"] not in held_addresses][:30]
+    else:
+        try:
+            candidates = memecoin_data.trending(limit=30, env=env)
+        except memecoin_data.DexScreenerError as e:
+            report["errors"].append({"stage": "scan", "error": str(e)})
+            return report
+        picked = memecoin_data.filter_candidates(
+            candidates, min_liquidity_usd=memecoin_strategy.MIN_LIQUIDITY_FOR_ENTRY_USD,
+            limit=30, exclude=held_addresses)
 
-    from hf_trading_bot import memecoin_strategy
-    picked = memecoin_data.filter_candidates(
-        candidates, min_liquidity_usd=memecoin_strategy.MIN_LIQUIDITY_FOR_ENTRY_USD,
-        limit=30, exclude=held_addresses)
     now_ms = int(_time.time() * 1000)
     bought = 0
     for t in picked:
@@ -485,7 +526,8 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
             report["errors"].append({"stage": "entry-mint-check", "token_address": t["address"],
                                      "error": str(e)})
             continue
-        sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms)
+        sig = (memecoin_strategy.pumpfun_entry_signal(t, mint_info) if scalp
+              else memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms))
         if not sig.enter:
             continue
         size = min(trade_size, remaining)

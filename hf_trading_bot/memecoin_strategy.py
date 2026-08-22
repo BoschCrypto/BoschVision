@@ -162,53 +162,167 @@ def exit_signal(*, entry_price_usd: float, current_price_usd: float,
                 peak_price_usd: float, hours_held: float,
                 token: Optional[dict] = None,
                 already_trimmed_1: bool = False,
-                already_trimmed_2: bool = False) -> ExitSignal:
+                already_trimmed_2: bool = False,
+                stop_loss_pct: float = STOP_LOSS_PCT,
+                trim_1_gain_pct: float = TRIM_1_GAIN_PCT,
+                trim_1_sell_pct: float = TRIM_1_SELL_PCT,
+                trim_2_gain_pct: float = TRIM_2_GAIN_PCT,
+                trim_2_sell_pct: float = TRIM_2_SELL_PCT,
+                trail_activate_gain_pct: float = TRAIL_ACTIVATE_GAIN_PCT,
+                trail_drawdown_pct: float = TRAIL_DRAWDOWN_PCT,
+                stall_hours: float = STALL_HOURS) -> ExitSignal:
     """What to do about a live position, checked in order of urgency:
     stop-loss first (capital protection outranks everything), then take-
     profit trims, then a trailing stop protecting gains already made, then a
     momentum-stall exit if the tape has gone quiet. Returns the single most
     urgent applicable action — never advice to hold and also do something
     else. `already_trimmed_*` prevents re-firing a trim that already happened
-    (the caller tracks that per-position; this function is stateless)."""
+    (the caller tracks that per-position; this function is stateless).
+
+    All thresholds default to the swing-trade constants above; `scalp_exit_signal`
+    calls this with the tighter SCALP_* constants instead — one set of logic,
+    two threshold profiles, so they can never silently drift apart."""
     if entry_price_usd <= 0:
         raise memecoin.MemecoinError("invalid entry price")
 
     gain_pct = (current_price_usd - entry_price_usd) / entry_price_usd * 100.0
 
-    if gain_pct <= STOP_LOSS_PCT:
+    if gain_pct <= stop_loss_pct:
         return ExitSignal(exit=True, sell_pct=100.0,
                           reason=f"stop-loss: down {gain_pct:.1f}% from entry "
-                                f"(limit {STOP_LOSS_PCT:.0f}%) — capital protection first")
+                                f"(limit {stop_loss_pct:.0f}%) — capital protection first")
 
-    if gain_pct >= TRIM_2_GAIN_PCT and not already_trimmed_2:
-        return ExitSignal(exit=True, sell_pct=TRIM_2_SELL_PCT,
+    if gain_pct >= trim_2_gain_pct and not already_trimmed_2:
+        return ExitSignal(exit=True, sell_pct=trim_2_sell_pct,
                           reason=f"take-profit: up {gain_pct:.1f}% (past "
-                                f"+{TRIM_2_GAIN_PCT:.0f}%) — trim {TRIM_2_SELL_PCT:.0f}% "
+                                f"+{trim_2_gain_pct:.0f}%) — trim {trim_2_sell_pct:.0f}% "
                                 f"of what's left, let the rest ride")
 
-    if gain_pct >= TRIM_1_GAIN_PCT and not already_trimmed_1:
-        return ExitSignal(exit=True, sell_pct=TRIM_1_SELL_PCT,
+    if gain_pct >= trim_1_gain_pct and not already_trimmed_1:
+        return ExitSignal(exit=True, sell_pct=trim_1_sell_pct,
                           reason=f"take-profit: up {gain_pct:.1f}% (past "
-                                f"+{TRIM_1_GAIN_PCT:.0f}%) — trim {TRIM_1_SELL_PCT:.0f}% "
+                                f"+{trim_1_gain_pct:.0f}%) — trim {trim_1_sell_pct:.0f}% "
                                 f"and de-risk the trade")
 
     peak_gain_pct = (peak_price_usd - entry_price_usd) / entry_price_usd * 100.0
-    if peak_gain_pct >= TRAIL_ACTIVATE_GAIN_PCT and peak_price_usd > 0:
+    if peak_gain_pct >= trail_activate_gain_pct and peak_price_usd > 0:
         drawdown_pct = (peak_price_usd - current_price_usd) / peak_price_usd * 100.0
-        if drawdown_pct >= TRAIL_DRAWDOWN_PCT:
+        if drawdown_pct >= trail_drawdown_pct:
             return ExitSignal(exit=True, sell_pct=100.0,
                               reason=f"trailing stop: peaked at +{peak_gain_pct:.1f}%, "
                                     f"now down {drawdown_pct:.1f}% from that peak "
-                                    f"(limit {TRAIL_DRAWDOWN_PCT:.0f}%) — protect the gain")
+                                    f"(limit {trail_drawdown_pct:.0f}%) — protect the gain")
 
-    if hours_held >= STALL_HOURS and token is not None:
-        h1 = token.get("price_change_h1_pct")
-        buys_h1, sells_h1 = token.get("buys_h1") or 0, token.get("sells_h1") or 0
-        if h1 is not None and h1 <= 0 and sells_h1 > buys_h1:
+    if hours_held >= stall_hours:
+        h1 = token.get("price_change_h1_pct") if token is not None else None
+        if h1 is not None:
+            buys_h1 = token.get("buys_h1") or 0
+            sells_h1 = token.get("sells_h1") or 0
+            if h1 <= 0 and sells_h1 > buys_h1:
+                return ExitSignal(exit=True, sell_pct=100.0,
+                                  reason=f"momentum stalled: held {hours_held:.1f}h, 1h "
+                                        f"move {h1:+.1f}%, sell pressure exceeds buy "
+                                        f"pressure — the move this was betting on is over")
+        else:
+            # No buy/sell-pressure data (e.g. a brand-new pump.fun coin with no
+            # DexScreener history yet) — for a scalp, holding past the deadline
+            # with nothing to show for it IS the stall signal, full stop.
             return ExitSignal(exit=True, sell_pct=100.0,
-                              reason=f"momentum stalled: held {hours_held:.1f}h, 1h "
-                                    f"move {h1:+.1f}%, sell pressure exceeds buy "
-                                    f"pressure — the move this was betting on is over")
+                              reason=f"held {hours_held:.1f}h past the stall deadline "
+                                    f"({stall_hours:.2f}h) with no move — no data to "
+                                    f"justify holding longer")
 
     return ExitSignal(exit=False, sell_pct=0.0,
                       reason=f"no exit rule triggered ({gain_pct:+.1f}% from entry)")
+
+
+# --- scalp profile: same rules, much tighter thresholds --------------------
+# A scalp on a brand-new, ultra-low-cap coin is a different bet than a swing
+# position: the edge (if any) decays in minutes, not days, so gains must be
+# taken fast and a loser cut fast. These are deliberately much tighter than
+# the swing constants above.
+
+SCALP_STOP_LOSS_PCT = -15.0
+SCALP_TRIM_1_GAIN_PCT = 15.0
+SCALP_TRIM_1_SELL_PCT = 50.0
+SCALP_TRIM_2_GAIN_PCT = 40.0
+SCALP_TRIM_2_SELL_PCT = 50.0
+SCALP_TRAIL_ACTIVATE_GAIN_PCT = 20.0
+SCALP_TRAIL_DRAWDOWN_PCT = 15.0
+SCALP_STALL_HOURS = 0.5   # 30 minutes
+
+
+def scalp_exit_signal(**kwargs) -> ExitSignal:
+    """exit_signal() with the scalp threshold profile. Same priority order,
+    same statelessness — only the numbers change."""
+    kwargs.setdefault("stop_loss_pct", SCALP_STOP_LOSS_PCT)
+    kwargs.setdefault("trim_1_gain_pct", SCALP_TRIM_1_GAIN_PCT)
+    kwargs.setdefault("trim_1_sell_pct", SCALP_TRIM_1_SELL_PCT)
+    kwargs.setdefault("trim_2_gain_pct", SCALP_TRIM_2_GAIN_PCT)
+    kwargs.setdefault("trim_2_sell_pct", SCALP_TRIM_2_SELL_PCT)
+    kwargs.setdefault("trail_activate_gain_pct", SCALP_TRAIL_ACTIVATE_GAIN_PCT)
+    kwargs.setdefault("trail_drawdown_pct", SCALP_TRAIL_DRAWDOWN_PCT)
+    kwargs.setdefault("stall_hours", SCALP_STALL_HOURS)
+    return exit_signal(**kwargs)
+
+
+# --- pump.fun-native entry: scoring a coin with no DexScreener history yet --
+#
+# A coin fresh off pump.fun's creation feed usually has no price-change or
+# buy/sell transaction history the way a DexScreener pair does — there is no
+# comparable liquidity figure either (a bonding curve is not a liquidity
+# pool). What IS checkable: how fresh it is, and how much SOL has been
+# raised on the curve so far as a rough proxy for real buying (which can
+# also just mean the creator/insiders bought — this is a much weaker signal
+# than DexScreener's momentum_score above, by necessity).
+
+SCALP_MIN_ENTRY_SCORE = 50.0
+
+
+def pumpfun_momentum_score(coin: dict) -> dict:
+    components: list[dict] = []
+    score = 0.0
+
+    created_at_ms = coin.get("created_at_ms")
+    if created_at_ms:
+        import time as _time
+        age_min = max(0.0, (_time.time() * 1000 - created_at_ms) / 60_000.0)
+        pts = max(0.0, 50.0 * (1 - min(age_min, 30.0) / 30.0))
+        score += pts
+        components.append({"points": pts, "reason": f"created {age_min:.1f} min ago"})
+    else:
+        components.append({"points": 0.0, "reason": "no creation timestamp available"})
+
+    sol_raised = coin.get("sol_raised")
+    if sol_raised is not None:
+        pts = min(50.0, max(0.0, sol_raised) * 2.0)
+        score += pts
+        components.append({"points": pts, "reason":
+                          f"{sol_raised:.2f} SOL raised on the bonding curve so far"})
+    else:
+        components.append({"points": 0.0, "reason": "no bonding-curve progress data available"})
+
+    return {"score": round(min(100.0, score), 1), "components": components}
+
+
+def pumpfun_entry_signal(coin: dict, mint_info: dict, *,
+                         min_score: float = SCALP_MIN_ENTRY_SCORE) -> EntrySignal:
+    """The pump.fun-native equivalent of entry_signal(): mint/freeze
+    authority is still checked (memecoin.pumpfun_risk_flags — the only
+    universally-applicable structural check this early); everything past
+    that is a much thinner momentum read than DexScreener's, by necessity."""
+    from hf_trading_bot import memecoin
+
+    flags = memecoin.pumpfun_risk_flags(coin, mint_info)
+    if any(f["level"] == "red" for f in flags):
+        return EntrySignal(enter=False, score=0.0,
+                           reasons=["a red risk flag is present — never enter regardless "
+                                   "of momentum"],
+                           risk_flags=flags)
+    m = pumpfun_momentum_score(coin)
+    reasons = [c["reason"] for c in m["components"] if c["points"] > 0]
+    enter = m["score"] >= min_score
+    if not enter:
+        reasons.append(f"momentum score {m['score']:.0f} is below the {min_score:.0f} "
+                       f"entry threshold")
+    return EntrySignal(enter=enter, score=m["score"], reasons=reasons, risk_flags=flags)
