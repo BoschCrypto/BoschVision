@@ -42,6 +42,15 @@ from hf_trading_bot import solana_wallet
 PUMPFUN_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 _MAX_RECENT = 100
 _RECONNECT_BACKOFF_S = (2, 5, 10, 30, 60)
+DEFAULT_MIN_TX_INTERVAL_S = 0.35   # ~3/sec ceiling on getTransaction calls
+
+
+def min_tx_interval_s(env: Optional[dict] = None) -> float:
+    e = env if env is not None else os.environ
+    try:
+        return max(0.0, float(e.get("PUMPFUN_LIVE_MIN_TX_INTERVAL_S", DEFAULT_MIN_TX_INTERVAL_S)))
+    except (TypeError, ValueError):
+        return DEFAULT_MIN_TX_INTERVAL_S
 
 
 def ws_url(env: Optional[dict] = None) -> str:
@@ -87,6 +96,8 @@ class LiveFeed:
                               "last_error": None, "started_at": None}
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._min_tx_interval_s = min_tx_interval_s(env)
+        self._last_tx_call = 0.0
 
     def start(self) -> None:
         if self._thread is not None:
@@ -140,6 +151,7 @@ class LiveFeed:
 
         url = ws_url(self._env)
         program = Pubkey.from_string(PUMPFUN_PROGRAM_ID)
+        loop = asyncio.get_running_loop()
         async with connect(url) as ws:
             await ws.logs_subscribe(RpcTransactionLogsFilterMentions(program),
                                     commitment="confirmed")
@@ -157,9 +169,31 @@ class LiveFeed:
                         continue
                     if logs_response.err is not None:
                         continue   # a failed tx created nothing real
-                    self._handle_signature(str(logs_response.signature))
+                    # _handle_signature makes a BLOCKING HTTP call. Running it
+                    # inline here would stall this coroutine — and with it,
+                    # the whole event loop, including the ping/pong keepalive
+                    # `connect()` needs to run concurrently. The server then
+                    # (correctly) decides the connection is dead and drops it
+                    # with a 1011 timeout. run_in_executor moves the blocking
+                    # work to a thread so the loop stays free to keep the
+                    # connection alive while it waits.
+                    await loop.run_in_executor(None, self._handle_signature,
+                                               str(logs_response.signature))
 
     def _handle_signature(self, signature: str) -> None:
+        # A conservative floor between getTransaction calls: pump.fun's
+        # program sees a buy/sell/create every few hundred ms network-wide,
+        # and fetching full detail for every single one blew through
+        # Helius's free-tier rate limit almost immediately. This trades
+        # completeness for reliability under load — under heavy activity
+        # some detections are silently skipped rather than erroring — which
+        # is the honest trade a free-tier rate limit forces.
+        with self._lock:
+            wait = self._min_tx_interval_s - (time.monotonic() - self._last_tx_call)
+        if wait > 0:
+            time.sleep(wait)
+        with self._lock:
+            self._last_tx_call = time.monotonic()
         try:
             tx = solana_wallet.get_transaction(signature, env=self._env)
         except solana_wallet.WalletError as e:

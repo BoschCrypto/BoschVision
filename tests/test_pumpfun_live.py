@@ -3,6 +3,8 @@ the thread-safe recent()/status() read side. No real network/websocket
 connection — _subscribe_once is never exercised here, only what's testable
 without one.
 """
+import time
+
 import pytest
 
 from hf_trading_bot import pumpfun_live
@@ -103,6 +105,55 @@ def test_livefeed_status_starts_disconnected():
     f = pumpfun_live.LiveFeed()
     assert f.status()["connected"] is False
     assert f.status()["last_error"] is None
+
+
+def test_min_tx_interval_default_and_override():
+    assert pumpfun_live.min_tx_interval_s({}) == pumpfun_live.DEFAULT_MIN_TX_INTERVAL_S
+    assert pumpfun_live.min_tx_interval_s(
+        {"PUMPFUN_LIVE_MIN_TX_INTERVAL_S": "1.5"}) == 1.5
+
+
+def test_min_tx_interval_invalid_falls_back_to_default():
+    assert pumpfun_live.min_tx_interval_s(
+        {"PUMPFUN_LIVE_MIN_TX_INTERVAL_S": "garbage"}) == pumpfun_live.DEFAULT_MIN_TX_INTERVAL_S
+
+
+def test_handle_signature_respects_rate_limit(monkeypatch):
+    """Two calls to _handle_signature back-to-back must be spaced by at least
+    the configured interval — this is exactly the Helius 429 fix: don't call
+    getTransaction faster than the configured ceiling, ever."""
+    calls = []
+
+    def fake_get_transaction(sig, env=None):
+        calls.append(time.monotonic())
+        return {"meta": {"preTokenBalances": [], "postTokenBalances": []}}
+
+    monkeypatch.setattr(pumpfun_live.solana_wallet, "get_transaction", fake_get_transaction)
+    f = pumpfun_live.LiveFeed(env={"PUMPFUN_LIVE_MIN_TX_INTERVAL_S": "0.1"})
+    f._handle_signature("sig1")
+    f._handle_signature("sig2")
+    assert len(calls) == 2
+    assert calls[1] - calls[0] >= 0.1 - 0.01   # small epsilon for timer jitter
+
+
+def test_handle_signature_records_on_new_mint(monkeypatch):
+    monkeypatch.setattr(pumpfun_live.solana_wallet, "get_transaction",
+                        lambda sig, env=None: {"meta": {
+                            "preTokenBalances": [], "postTokenBalances": [{"mint": "NEW1"}]}})
+    f = pumpfun_live.LiveFeed(env={"PUMPFUN_LIVE_MIN_TX_INTERVAL_S": "0"})
+    f._handle_signature("sig1")
+    assert f.status()["detections"] == 1
+    assert f.recent(1)[0]["address"] == "NEW1"
+
+
+def test_handle_signature_records_getTransaction_error(monkeypatch):
+    def boom(sig, env=None):
+        raise pumpfun_live.solana_wallet.WalletError("rate limited")
+    monkeypatch.setattr(pumpfun_live.solana_wallet, "get_transaction", boom)
+    f = pumpfun_live.LiveFeed(env={"PUMPFUN_LIVE_MIN_TX_INTERVAL_S": "0"})
+    f._handle_signature("sig1")
+    assert "rate limited" in f.status()["last_error"]
+    assert f.status()["detections"] == 0
 
 
 def test_livefeed_normalized_coin_shape_matches_pumpfun_data():
