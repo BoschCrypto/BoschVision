@@ -2351,26 +2351,42 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         verb = parts[0].lower()
 
         if verb == "screen":
+            # "screen" shows only passes; "screen all" also shows every
+            # rejected candidate with the specific reason it failed — same
+            # split as `hf-bot memecoin screen` / `--show-all` on the CLI.
+            show_all = len(parts) >= 2 and parts[1].lower() == "all"
             try:
                 candidates = memecoin_data.trending(limit=20)
             except memecoin_data.DexScreenerError as e:
                 return {"ok": False, "error": str(e)}
             import time as _t
+            from hf_trading_bot import solana_wallet as _sw
             now_ms = int(_t.time() * 1000)
-            passed = []
+            results = []
             for t in candidates:
                 try:
-                    from hf_trading_bot import solana_wallet as _sw
                     mint_info = _sw.get_mint_info(t["address"])
-                except Exception:  # noqa: BLE001
+                except _sw.WalletError as e:
+                    if show_all:
+                        results.append({"symbol": t.get("symbol"), "address": t["address"],
+                                        "score": None, "enter": False,
+                                        "reasons": [f"could not read mint: {e}"]})
                     continue
                 sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms)
-                if sig.enter:
-                    passed.append({"symbol": t["symbol"], "address": t["address"],
-                                   "score": sig.score})
-            _memecoin_log("screen", f"{len(passed)}/{len(candidates)} candidates passed")
-            return {"ok": True, "message": f"{len(passed)} candidate(s) passed entry criteria.",
-                    "candidates": passed}
+                if not sig.enter and not show_all:
+                    continue
+                # A red risk flag's specific reason ("thin liquidity ($X)") is
+                # far more useful here than the generic "a red risk flag is
+                # present" that entry_signal returns for display purposes.
+                reds = [f["reason"] for f in sig.risk_flags if f["level"] == "red"]
+                reason_list = reds[:2] if reds else sig.reasons[:3]
+                results.append({"symbol": t.get("symbol"), "address": t["address"],
+                                "score": sig.score, "enter": sig.enter,
+                                "reasons": reason_list})
+            passed = sum(1 for r in results if r["enter"])
+            _memecoin_log("screen", f"{passed}/{len(candidates)} candidates passed")
+            return {"ok": True, "message": f"{passed}/{len(candidates)} candidate(s) passed.",
+                    "candidates": results}
 
         if verb == "check" and len(parts) >= 2:
             try:

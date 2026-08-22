@@ -693,6 +693,11 @@ _APP_JS = r"""
       return ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : "&gt;";
     });
   }
+  // Shared with _CMD_JS's separate script block (its own closure) — token
+  // symbols/names come from DexScreener (set by whoever created the token),
+  // so untrusted text rendered in the memecoin command bar must go through
+  // the same HTML-escaping as everywhere else, not a second copy of it.
+  window.__CORTEX_ESC__ = esc;
 
   function apexConsolePanel(d) {
     var cmds = (d.commands || []).slice();   // newest-first from the server
@@ -1152,14 +1157,26 @@ _CMD_JS = r"""
     }).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
       .then(function (res) {
         if (!out) return;
+        var esc = window.__CORTEX_ESC__ || function (s) { return s; };
         if (!res.ok) { out.textContent = "error: " + (res.j.error || "command failed"); return; }
         var j = res.j;
         if (j.candidates) {
-          out.textContent = j.message + (j.candidates.length
-            ? " — " + j.candidates.map(function (c) { return c.symbol + " (" + c.score.toFixed(0) + ")"; }).join(", ")
-            : "");
+          var lines = [esc(j.message)];
+          for (var i = 0; i < j.candidates.length; i++) {
+            var c = j.candidates[i];
+            var mark = c.enter ? "PASS" : "no ";
+            var scoreTxt = c.score != null ? c.score.toFixed(0) : "?";
+            lines.push("[" + mark + "] " + esc(c.symbol || "?") + " " +
+                       esc((c.address || "").slice(0, 8)) + "&hellip;  score " + scoreTxt);
+            if (c.reasons && c.reasons.length) {
+              lines.push("&nbsp;&nbsp;&nbsp;&nbsp;" + esc(c.reasons[0]));
+            }
+          }
+          out.innerHTML = lines.join("<br>");
         } else if (j.flags) {
-          out.textContent = j.verdict + (j.flags.length ? " — " + j.flags.join("; ") : "");
+          var flines = [esc(j.verdict)];
+          for (var k = 0; k < j.flags.length; k++) flines.push("&nbsp;&nbsp;" + esc(j.flags[k]));
+          out.innerHTML = flines.join("<br>");
         } else {
           out.textContent = j.message || "done";
         }
