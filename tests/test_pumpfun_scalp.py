@@ -94,6 +94,21 @@ def test_get_coin_raises_on_other_errors(monkeypatch):
         pumpfun_data.get_coin("M1")
 
 
+def test_normalize_derives_price_from_market_cap_when_not_reported():
+    n = pumpfun_data._normalize({"mint": "M1", "usd_market_cap": 5_000})
+    assert n["price_usd"] == pytest.approx(5_000 / pumpfun_data.TOTAL_SUPPLY)
+
+
+def test_normalize_prefers_reported_price_over_derived():
+    n = pumpfun_data._normalize({"mint": "M1", "usd_market_cap": 5_000, "price_usd": 0.0000123})
+    assert n["price_usd"] == 0.0000123
+
+
+def test_normalize_price_none_without_market_cap_or_reported_price():
+    n = pumpfun_data._normalize({"mint": "M1"})
+    assert n["price_usd"] is None
+
+
 # --- scalp exit profile ------------------------------------------------
 
 def test_scalp_stop_loss_is_tighter_than_swing():

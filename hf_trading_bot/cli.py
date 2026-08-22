@@ -2546,6 +2546,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                         if show_all:
                             results.append({"symbol": t.get("symbol"), "address": t["address"],
                                             "score": None, "enter": False,
+                                            "price_usd": t.get("price_usd"),
                                             "reasons": [f"could not read mint: {e}"]})
                         continue
                     buyer_stats = (memecoin_pumpportal_feed.buyer_stats(t["address"])
@@ -2567,7 +2568,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                             mc_line = f"market cap fetch FAILED: {e}"
                         else:
                             if fresh and fresh.get("market_cap_usd") is not None:
-                                t = dict(t, market_cap_usd=fresh["market_cap_usd"])
+                                t = dict(t, market_cap_usd=fresh["market_cap_usd"],
+                                        price_usd=fresh.get("price_usd"))
                                 mc_line = f"market cap: fetched ${fresh['market_cap_usd']:,.0f}"
                             else:
                                 mc_line = "market cap: fetch returned no data for this mint"
@@ -2586,6 +2588,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     reason_list = (diag + reds[:1]) if reds else (diag + sig.reasons[:1])
                     results.append({"symbol": t.get("symbol"), "address": t["address"],
                                     "score": sig.score, "enter": sig.enter,
+                                    "price_usd": t.get("price_usd"),
                                     "reasons": reason_list})
             else:
                 try:
@@ -2599,6 +2602,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                         if show_all:
                             results.append({"symbol": t.get("symbol"), "address": t["address"],
                                             "score": None, "enter": False,
+                                            "price_usd": t.get("price_usd"),
                                             "reasons": [f"could not read mint: {e}"]})
                         continue
                     sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms)
@@ -2611,6 +2615,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     reason_list = reds[:2] if reds else sig.reasons[:3]
                     results.append({"symbol": t.get("symbol"), "address": t["address"],
                                     "score": sig.score, "enter": sig.enter,
+                                    "price_usd": t.get("price_usd"),
                                     "reasons": reason_list})
 
             passed = sum(1 for r in results if r["enter"])

@@ -36,6 +36,11 @@ from typing import Any, Optional
 
 DEFAULT_BASE_URL = "https://frontend-api-v3.pump.fun"
 _TIMEOUT = 20
+# Every pump.fun coin is minted with exactly this total supply — a fixed,
+# documented platform convention, not something read per-coin from the API.
+# Used to derive a per-token USD price from market cap when the API doesn't
+# report price directly.
+TOTAL_SUPPLY = 1_000_000_000
 _HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
@@ -92,14 +97,19 @@ def _normalize(raw: dict) -> Optional[dict]:
         except (TypeError, ValueError):
             created_at_ms = None
     market_cap = _first(raw, "usd_market_cap", "market_cap", "marketCapUsd")
+    market_cap_usd = float(market_cap) if market_cap is not None else None
     sol_raised = _first(raw, "real_sol_reserves", "sol_raised", "virtual_sol_reserves")
     complete = bool(_first(raw, "complete", "migrated", default=False))
+    price_raw = _first(raw, "price_usd", "usd_price", "price")
+    price_usd = (float(price_raw) if price_raw is not None
+                else (market_cap_usd / TOTAL_SUPPLY if market_cap_usd is not None else None))
     return {
         "address": address,
         "symbol": _first(raw, "symbol", "ticker"),
         "name": _first(raw, "name"),
         "created_at_ms": created_at_ms,
-        "market_cap_usd": float(market_cap) if market_cap is not None else None,
+        "market_cap_usd": market_cap_usd,
+        "price_usd": price_usd,
         "sol_raised": float(sol_raised) / 1_000_000_000.0 if sol_raised and
                       float(sol_raised) > 1000 else (float(sol_raised) if sol_raised else None),
         "migrated": complete,

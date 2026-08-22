@@ -1187,10 +1187,14 @@ _CMD_JS = r"""
             var c = j.candidates[i];
             var mark = c.enter ? "PASS" : "no ";
             var scoreTxt = c.score != null ? c.score.toFixed(0) : "?";
+            var priceTxt = c.price_usd != null ? "  $" + c.price_usd.toPrecision(3) : "";
             lines.push("[" + mark + "] " + esc(c.symbol || "?") + " " +
-                       esc((c.address || "").slice(0, 8)) + "&hellip;  score " + scoreTxt);
+                       esc((c.address || "").slice(0, 8)) + "&hellip;  score " + scoreTxt +
+                       priceTxt);
             if (c.reasons && c.reasons.length) {
-              lines.push("&nbsp;&nbsp;&nbsp;&nbsp;" + esc(c.reasons[0]));
+              for (var ri = 0; ri < c.reasons.length; ri++) {
+                lines.push("&nbsp;&nbsp;&nbsp;&nbsp;" + esc(c.reasons[ri]));
+              }
             }
           }
           out.innerHTML = lines.join("<br>");

@@ -216,5 +216,5 @@ def test_livefeed_normalized_coin_shape_matches_pumpfun_data():
     f._record("M1")
     live_coin = f.recent(1)[0]
     expected_keys = {"address", "symbol", "name", "created_at_ms", "market_cap_usd",
-                     "sol_raised", "migrated", "source"}
+                     "price_usd", "sol_raised", "migrated", "source"}
     assert expected_keys.issubset(live_coin.keys())
