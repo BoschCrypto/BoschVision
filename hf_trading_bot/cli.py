@@ -2515,35 +2515,76 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
             # "screen" shows only passes; "screen all" also shows every
             # rejected candidate with the specific reason it failed — same
             # split as `hf-bot memecoin screen` / `--show-all` on the CLI.
+            #
+            # In scalp mode this must mirror run_autotrade_cycle's actual
+            # entry path (live/pumpfun candidates, pumpfun_entry_signal,
+            # buyer_stats from PumpPortal) -- otherwise this command shows
+            # unrelated DexScreener trending tokens while the autotrade loop
+            # is scoring something completely different, making it useless
+            # for diagnosing why the loop isn't (or is) entering.
             show_all = len(parts) >= 2 and parts[1].lower() == "all"
-            try:
-                candidates = memecoin_data.trending(limit=20)
-            except memecoin_data.DexScreenerError as e:
-                return {"ok": False, "error": str(e)}
             import time as _t
             from hf_trading_bot import solana_wallet as _sw
             now_ms = int(_t.time() * 1000)
             results = []
-            for t in candidates:
+
+            if memecoin_scalp:
+                live_candidates = (memecoin_live_feed.recent(30)
+                                  if memecoin_live_feed is not None else None)
+                if live_candidates is not None:
+                    candidates = live_candidates
+                else:
+                    from hf_trading_bot import pumpfun_data
+                    try:
+                        candidates = pumpfun_data.list_new_coins(limit=20)
+                    except pumpfun_data.PumpFunError as e:
+                        return {"ok": False, "error": str(e)}
+                for t in candidates:
+                    try:
+                        mint_info = _sw.get_mint_info(t["address"])
+                    except _sw.WalletError as e:
+                        if show_all:
+                            results.append({"symbol": t.get("symbol"), "address": t["address"],
+                                            "score": None, "enter": False,
+                                            "reasons": [f"could not read mint: {e}"]})
+                        continue
+                    buyer_stats = (memecoin_pumpportal_feed.buyer_stats(t["address"])
+                                  if memecoin_pumpportal_feed is not None else None)
+                    sig = memecoin_strategy.pumpfun_entry_signal(t, mint_info,
+                                                                 buyer_stats=buyer_stats)
+                    if not sig.enter and not show_all:
+                        continue
+                    reds = [f["reason"] for f in sig.risk_flags if f["level"] == "red"]
+                    reason_list = reds[:2] if reds else sig.reasons[:3]
+                    results.append({"symbol": t.get("symbol"), "address": t["address"],
+                                    "score": sig.score, "enter": sig.enter,
+                                    "reasons": reason_list})
+            else:
                 try:
-                    mint_info = _sw.get_mint_info(t["address"])
-                except _sw.WalletError as e:
-                    if show_all:
-                        results.append({"symbol": t.get("symbol"), "address": t["address"],
-                                        "score": None, "enter": False,
-                                        "reasons": [f"could not read mint: {e}"]})
-                    continue
-                sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms)
-                if not sig.enter and not show_all:
-                    continue
-                # A red risk flag's specific reason ("thin liquidity ($X)") is
-                # far more useful here than the generic "a red risk flag is
-                # present" that entry_signal returns for display purposes.
-                reds = [f["reason"] for f in sig.risk_flags if f["level"] == "red"]
-                reason_list = reds[:2] if reds else sig.reasons[:3]
-                results.append({"symbol": t.get("symbol"), "address": t["address"],
-                                "score": sig.score, "enter": sig.enter,
-                                "reasons": reason_list})
+                    candidates = memecoin_data.trending(limit=20)
+                except memecoin_data.DexScreenerError as e:
+                    return {"ok": False, "error": str(e)}
+                for t in candidates:
+                    try:
+                        mint_info = _sw.get_mint_info(t["address"])
+                    except _sw.WalletError as e:
+                        if show_all:
+                            results.append({"symbol": t.get("symbol"), "address": t["address"],
+                                            "score": None, "enter": False,
+                                            "reasons": [f"could not read mint: {e}"]})
+                        continue
+                    sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms)
+                    if not sig.enter and not show_all:
+                        continue
+                    # A red risk flag's specific reason ("thin liquidity ($X)")
+                    # is far more useful here than the generic "a red risk flag
+                    # is present" that entry_signal returns for display.
+                    reds = [f["reason"] for f in sig.risk_flags if f["level"] == "red"]
+                    reason_list = reds[:2] if reds else sig.reasons[:3]
+                    results.append({"symbol": t.get("symbol"), "address": t["address"],
+                                    "score": sig.score, "enter": sig.enter,
+                                    "reasons": reason_list})
+
             passed = sum(1 for r in results if r["enter"])
             _memecoin_log("screen", f"{passed}/{len(candidates)} candidates passed")
             return {"ok": True, "message": f"{passed}/{len(candidates)} candidate(s) passed.",
