@@ -195,12 +195,29 @@ class PumpPortalFeed:
             async for raw in ws:
                 if self._stop.is_set():
                     return
-                for mint in self._pop_expired():
-                    try:
-                        await ws.send(json.dumps({"method": "unsubscribeTokenTrade",
-                                                  "keys": [mint]}))
-                    except Exception:  # noqa: BLE001 — best-effort, never fatal
-                        pass
+                expired = self._pop_expired()
+                if expired:
+                    for mint in expired:
+                        try:
+                            await ws.send(json.dumps({"method": "unsubscribeTokenTrade",
+                                                      "keys": [mint]}))
+                        except Exception:  # noqa: BLE001 — best-effort, never fatal
+                            pass
+                    # Belt-and-suspenders against the same additive-vs-replace
+                    # ambiguity noted in _handle_message: if subscribeTokenTrade
+                    # actually replaces the server-side key list rather than
+                    # adding to it, an explicit per-mint unsubscribe may not be
+                    # honored the way expected either. Resending the current
+                    # (post-prune) full list keeps us correctly subscribed to
+                    # exactly what we still track, regardless of which
+                    # semantics PumpPortal actually implements.
+                    remaining = self.tracked_mints()
+                    if remaining:
+                        try:
+                            await ws.send(json.dumps({"method": "subscribeTokenTrade",
+                                                      "keys": remaining}))
+                        except Exception:  # noqa: BLE001 — best-effort, never fatal
+                            pass
                 # Parsing/dispatch is pure Python (no network), so unlike
                 # pumpfun_live.py's getTransaction calls there's nothing here
                 # worth moving to an executor — this can't stall the loop.
@@ -219,8 +236,19 @@ class PumpPortalFeed:
         tx_type = (msg.get("txType") or "").lower()
         if tx_type == "create":
             if self._track(mint):
+                # Resend the FULL current watch list, not just the new mint.
+                # PumpPortal's docs don't make it unambiguous whether repeated
+                # subscribeTokenTrade calls are additive or replace the prior
+                # key list — live testing showed near-zero buy events ever
+                # recorded across many tracked mints despite high real
+                # trading volume, exactly the symptom of a replace-based API
+                # silently dropping every previously-watched mint each time a
+                # new one (created every 1-2 seconds) gets subscribed. Always
+                # sending the complete set is correct either way: harmless
+                # if additive, required if not.
                 try:
-                    await ws.send(json.dumps({"method": "subscribeTokenTrade", "keys": [mint]}))
+                    await ws.send(json.dumps({"method": "subscribeTokenTrade",
+                                              "keys": self.tracked_mints()}))
                 except Exception:  # noqa: BLE001 — best-effort, never fatal
                     pass
         elif tx_type == "buy":

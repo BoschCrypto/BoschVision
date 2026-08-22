@@ -2,6 +2,7 @@
 dispatch and the thread-safe buyer_stats()/status() read side. No real
 network/websocket connection — _subscribe_once is never exercised here."""
 import asyncio
+import json
 import time
 from contextlib import asynccontextmanager
 
@@ -162,6 +163,19 @@ def test_handle_message_does_not_resubscribe_for_already_tracked_mint():
     asyncio.run(f._handle_message('{"txType": "create", "mint": "M1"}', ws))
     subscribe_sends = [s for s in ws.sent if "subscribeTokenTrade" in s]
     assert len(subscribe_sends) == 1
+
+
+def test_handle_message_resends_full_watch_list_not_just_new_mint():
+    # The real bug found in live testing: subscribing with only the newest
+    # mint's key, if PumpPortal's API replaces rather than adds to the
+    # subscription, silently drops every previously-tracked mint. Each new
+    # subscribeTokenTrade call must carry the FULL current set.
+    f = pumpportal_live.PumpPortalFeed()
+    ws = _FakeWS()
+    asyncio.run(f._handle_message('{"txType": "create", "mint": "M1"}', ws))
+    asyncio.run(f._handle_message('{"txType": "create", "mint": "M2"}', ws))
+    last_subscribe = json.loads([s for s in ws.sent if "subscribeTokenTrade" in s][-1])
+    assert set(last_subscribe["keys"]) == {"M1", "M2"}
 
 
 # --- _subscribe_once: connect() gets the widened ping_timeout ---------------
