@@ -102,6 +102,8 @@ def test_multi_buy_jupiter_network_error_does_not_stop_the_rest(storage, monkeyp
     # transient network hiccup on ONE token silently aborts the whole batch.
     from hf_trading_bot import jupiter
 
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)   # no real delay in tests
+
     def fake_execute_buy(token, usd, s, *, kill_switch, slippage_bps=100, dry_run=False, env=None):
         if token == "BAD":
             raise jupiter.JupiterError("Jupiter unreachable: [Errno 11001] getaddrinfo failed")

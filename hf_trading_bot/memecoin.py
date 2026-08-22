@@ -387,8 +387,8 @@ def multi_buy(token_addresses: list[str], usd_each: float, storage, *,
     results: list[dict] = []
     for addr in token_addresses:
         try:
-            r = execute_buy(addr, usd_each, storage, kill_switch=kill_switch,
-                            slippage_bps=slippage_bps, dry_run=dry_run, env=env)
+            r = _with_jupiter_retry(execute_buy, addr, usd_each, storage, kill_switch=kill_switch,
+                                    slippage_bps=slippage_bps, dry_run=dry_run, env=env)
             r["token_address"] = addr
             r["ok"] = True
         except (MemecoinError, jupiter.JupiterError, solana_wallet.WalletError) as e:
@@ -466,6 +466,33 @@ def _get_mint_info_for_fresh_candidate(address: str, *, env: Optional[dict]) -> 
     raise last_error
 
 
+_JUPITER_RETRY_DELAYS_S = (0.5, 1.5)
+
+
+def _with_jupiter_retry(fn, *args, **kwargs):
+    """Retry ONLY on jupiter.JupiterError -- a network/DNS failure reaching
+    Jupiter's quote or swap-transaction endpoint. Both of those calls
+    happen strictly BEFORE anything is signed or broadcast (see
+    jupiter.py's quote()/swap_transaction()), so a JupiterError means no
+    money has moved yet and a retry can never cause a double-spend. Live
+    testing showed "Jupiter unreachable: [Errno 11001] getaddrinfo failed"
+    hitting real, already-passing candidates at the exact moment of
+    execution -- a genuinely missed trade each time, not just noise.
+    MemecoinError and solana_wallet.WalletError are deliberately NOT
+    retried here: a WalletError can occur AFTER a transaction is already
+    submitted (e.g. a timeout waiting for confirmation), where blindly
+    retrying risks buying/selling twice."""
+    last_error = None
+    for delay in (0.0,) + _JUPITER_RETRY_DELAYS_S:
+        if delay:
+            time.sleep(delay)
+        try:
+            return fn(*args, **kwargs)
+        except jupiter.JupiterError as e:
+            last_error = e
+    raise last_error
+
+
 def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) -> dict:
     """Check every held position against its exit rule and sell if
     triggered. This is the risk-critical half of run_autotrade_cycle,
@@ -527,8 +554,8 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) 
                 already_trimmed_2=bool(state.get("trimmed_2")))
             if not sig.exit:
                 continue
-            result = execute_sell(p.token_address, sig.sell_pct, storage,
-                                  kill_switch=kill_switch, env=env)
+            result = _with_jupiter_retry(execute_sell, p.token_address, sig.sell_pct, storage,
+                                         kill_switch=kill_switch, env=env)
             trim1_pct = (memecoin_strategy.SCALP_TRIM_1_SELL_PCT if scalp
                         else memecoin_strategy.TRIM_1_SELL_PCT)
             trim2_pct = (memecoin_strategy.SCALP_TRIM_2_SELL_PCT if scalp
@@ -758,7 +785,8 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
             continue
         size = min(trade_size, remaining)
         try:
-            result = execute_buy(t["address"], size, storage, kill_switch=kill_switch, env=env)
+            result = _with_jupiter_retry(execute_buy, t["address"], size, storage,
+                                         kill_switch=kill_switch, env=env)
             report["entries"].append({"token_address": t["address"], "symbol": t["symbol"],
                                       "score": sig.score, "usd_amount": size, "result": result})
             remaining -= size

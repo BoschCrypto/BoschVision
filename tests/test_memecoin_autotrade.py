@@ -157,6 +157,7 @@ def test_exit_check_jupiter_network_error_does_not_stop_other_positions(storage,
     # would skip checking every OTHER held position for this pass too.
     from hf_trading_bot import jupiter
 
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)   # no real delay in tests
     storage.set_kill_switch(False)
     for addr in ("BAD", "GOOD"):
         storage.record_memecoin_trade(side="buy", token_address=addr, token_symbol=addr,
@@ -292,7 +293,49 @@ def test_get_mint_info_for_fresh_candidate_does_not_retry_other_errors(monkeypat
     assert len(calls) == 1   # no retry for a non-race-condition failure
 
 
+# --- _with_jupiter_retry: safe because JupiterError means nothing was sent -
+
+def test_with_jupiter_retry_succeeds_on_second_attempt(monkeypatch):
+    from hf_trading_bot import jupiter
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)
+    calls = []
+
+    def flaky(x):
+        calls.append(x)
+        if len(calls) < 2:
+            raise jupiter.JupiterError("Jupiter unreachable: [Errno 11001] getaddrinfo failed")
+        return "ok"
+
+    assert memecoin._with_jupiter_retry(flaky, "arg") == "ok"
+    assert len(calls) == 2
+
+
+def test_with_jupiter_retry_gives_up_after_retries_exhausted(monkeypatch):
+    from hf_trading_bot import jupiter
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)
+
+    def always_fails():
+        raise jupiter.JupiterError("Jupiter unreachable: [Errno 11001] getaddrinfo failed")
+
+    with pytest.raises(jupiter.JupiterError, match="unreachable"):
+        memecoin._with_jupiter_retry(always_fails)
+
+
+def test_with_jupiter_retry_does_not_retry_other_errors(monkeypatch):
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)
+    calls = []
+
+    def boom():
+        calls.append(1)
+        raise memecoin.MemecoinError("kill switch is ON")
+
+    with pytest.raises(memecoin.MemecoinError):
+        memecoin._with_jupiter_retry(boom)
+    assert len(calls) == 1   # MemecoinError/WalletError must never be retried here
+
+
 def test_cycle_entry_buy_jupiter_network_error_recorded_not_raised(storage, monkeypatch):
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)   # no real delay in tests
     storage.set_kill_switch(False)
     monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
     candidate = {"address": "NEW1", "symbol": "NEW", "liquidity_usd": 200_000,
