@@ -278,18 +278,27 @@ def scalp_exit_signal(**kwargs) -> ExitSignal:
 
 SCALP_MIN_ENTRY_SCORE = 50.0
 
+# Live-tested against Photon's own Memescope: a coin already carrying $10k+
+# market cap in its first minute consistently showed dozens to hundreds of
+# holders, a far more direct "this is real" signal than buyer-diversity
+# counting (via PumpPortal) has proven to be so far — that mechanism kept
+# coming back near-zero even after two rounds of fixes chasing a live bug.
+# Market cap gets the heaviest single weight for exactly that reason.
+MARKET_CAP_FULL_SCORE_USD = 10_000.0
+
 
 def pumpfun_momentum_score(coin: dict, *, buyer_stats: Optional[dict] = None) -> dict:
-    """Freshness + buyer diversity + bonding-curve progress, 40/40/20.
+    """Freshness(25) + market cap(35) + buyer diversity(25) + bonding-curve
+    progress(15). Each missing input just drops its own component to 0 —
+    never blocks scoring on the others.
 
     Buyer diversity (distinct wallets buying, from PumpPortal's free trade
-    stream) is weighted as heavily as freshness deliberately: SOL raised
-    fast from ONE wallet — or a handful funded from the same source in the
-    same block — is the textbook bundled/insider-launch pattern real
-    pump.fun scalpers watch for, not organic demand. Raw SOL-raised alone
-    can't tell those apart; buyer count can. Missing buyer_stats (no
-    PumpPortal connection, or a mint too new to have data yet) just drops
-    that component to 0 — never blocks scoring on the other two."""
+    stream) exists to tell organic demand apart from a bundled/insider
+    launch (SOL raised fast from ONE wallet, or a handful funded from the
+    same source in the same block) — raw SOL-raised alone can't make that
+    distinction. Market cap crossing a real threshold is a blunter but
+    more reliable confirmation of the same thing: a coin that's actually
+    attracting money, whoever it's coming from."""
     components: list[dict] = []
     score = 0.0
 
@@ -297,15 +306,23 @@ def pumpfun_momentum_score(coin: dict, *, buyer_stats: Optional[dict] = None) ->
     if created_at_ms:
         import time as _time
         age_min = max(0.0, (_time.time() * 1000 - created_at_ms) / 60_000.0)
-        pts = max(0.0, 40.0 * (1 - min(age_min, 30.0) / 30.0))
+        pts = max(0.0, 25.0 * (1 - min(age_min, 30.0) / 30.0))
         score += pts
         components.append({"points": pts, "reason": f"created {age_min:.1f} min ago"})
     else:
         components.append({"points": 0.0, "reason": "no creation timestamp available"})
 
+    market_cap_usd = coin.get("market_cap_usd")
+    if market_cap_usd is not None:
+        pts = min(35.0, max(0.0, market_cap_usd) / MARKET_CAP_FULL_SCORE_USD * 35.0)
+        score += pts
+        components.append({"points": pts, "reason": f"${market_cap_usd:,.0f} market cap"})
+    else:
+        components.append({"points": 0.0, "reason": "no market cap data available"})
+
     if buyer_stats is not None:
         unique = buyer_stats.get("unique_buyers") or 0
-        pts = min(40.0, unique * 4.0)
+        pts = min(25.0, unique * 2.5)
         score += pts
         components.append({"points": pts, "reason":
                           f"{unique} distinct wallet(s) have bought so far (PumpPortal)"})
@@ -315,7 +332,7 @@ def pumpfun_momentum_score(coin: dict, *, buyer_stats: Optional[dict] = None) ->
 
     sol_raised = coin.get("sol_raised")
     if sol_raised is not None:
-        pts = min(20.0, max(0.0, sol_raised) * 1.0)
+        pts = min(15.0, max(0.0, sol_raised) * 0.75)
         score += pts
         components.append({"points": pts, "reason":
                           f"{sol_raised:.2f} SOL raised on the bonding curve so far"})

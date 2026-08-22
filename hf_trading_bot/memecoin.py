@@ -554,10 +554,10 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
         return report
 
     if scalp:
+        from hf_trading_bot import pumpfun_data
         if live_candidates is not None:
             candidates = live_candidates
         else:
-            from hf_trading_bot import pumpfun_data
             try:
                 candidates = pumpfun_data.list_new_coins(limit=30, env=env)
             except pumpfun_data.PumpFunError as e:
@@ -587,6 +587,24 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
             continue
         if scalp:
             buyer_stats = pumpportal_feed.buyer_stats(t["address"]) if pumpportal_feed else None
+            # The live feed (pumpfun_live.py) only ever knows a bare mint
+            # address — it never carries market cap. Real-world testing
+            # (Photon's Memescope, filtered to >=$10k market cap) showed
+            # that threshold catching coins with dozens to hundreds of
+            # holders within their first minute — a far more direct signal
+            # than buyer-diversity counting has proven to be so far. Fetch
+            # a live market cap for scoring only if the candidate doesn't
+            # already carry one (pumpfun_data.list_new_coins()'s REST
+            # candidates already do). A fetch failure just means this
+            # component scores 0, same as any other missing-data case —
+            # never blocks the candidate outright.
+            if t.get("market_cap_usd") is None:
+                try:
+                    fresh = pumpfun_data.get_coin(t["address"], env=env)
+                except pumpfun_data.PumpFunError:
+                    fresh = None
+                if fresh and fresh.get("market_cap_usd") is not None:
+                    t = dict(t, market_cap_usd=fresh["market_cap_usd"])
             sig = memecoin_strategy.pumpfun_entry_signal(t, mint_info, buyer_stats=buyer_stats)
         else:
             sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms)

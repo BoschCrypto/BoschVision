@@ -107,6 +107,24 @@ def _normalize(raw: dict) -> Optional[dict]:
     }
 
 
+def get_coin(mint: str, *, env: Optional[dict] = None) -> Optional[dict]:
+    """A single coin's current state (market cap, SOL raised, etc.) —
+    pump.fun's own coin-detail endpoint, same unofficial API as
+    list_new_coins(). Returns None (not an error) for a 404 — a coin that
+    doesn't exist, or one still too new to be indexed. Raises PumpFunError
+    for an actual network/parse failure, same distinction as
+    memecoin_data.get_token()."""
+    try:
+        raw = _get(f"/coins/{mint}", env=env)
+    except PumpFunError as ex:
+        if "HTTP 404" in str(ex):
+            return None
+        raise
+    if not isinstance(raw, dict):
+        return None
+    return _normalize(raw)
+
+
 def list_new_coins(limit: int = 30, *, include_migrated: bool = False,
                    env: Optional[dict] = None) -> list[dict]:
     """The most recently created pump.fun coins, newest first. Raises

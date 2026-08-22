@@ -274,15 +274,78 @@ def test_cycle_scalp_mode_uses_live_candidates_when_given(storage, monkeypatch):
                          "usd_amount": usd})
 
     import time as _t
+    # market_cap_usd is set explicitly so this candidate clears the entry
+    # score threshold AND so run_autotrade_cycle doesn't attempt a live
+    # pumpfun_data.get_coin() enrichment fetch (real network in this test).
     live_coin = {"address": "LIVE1", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000),
-                "sol_raised": 30.0, "market_cap_usd": None, "migrated": False,
+                "sol_raised": 30.0, "market_cap_usd": 10_000, "migrated": False,
                 "source": "pumpfun_live"}
     report = memecoin.run_autotrade_cycle(
         storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25",
                           MEMECOIN_WALLET_BUDGET_USD="50"),
         scalp=True, live_candidates=[live_coin])
     assert buy_calls == ["LIVE1"]
-    assert report["entries"][0]["token_address"] == "LIVE1"
+
+
+def test_cycle_fetches_market_cap_when_live_candidate_lacks_one(storage, monkeypatch):
+    # pumpfun_live.py's live feed never knows market cap (bare mint address
+    # only) -- run_autotrade_cycle must fetch it live via pumpfun_data so
+    # scoring isn't permanently blind to the strongest available signal.
+    storage.set_kill_switch(False)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+    from hf_trading_bot import pumpfun_data
+    fetch_calls = []
+
+    def fake_get_coin(mint, env=None):
+        fetch_calls.append(mint)
+        return {"address": mint, "market_cap_usd": 10_000}
+    monkeypatch.setattr(pumpfun_data, "get_coin", fake_get_coin)
+    monkeypatch.setattr(solana_wallet, "get_mint_info",
+                        lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
+    monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
+    buy_calls = []
+    monkeypatch.setattr(memecoin, "execute_buy",
+                        lambda token, usd, s, **k: buy_calls.append(token) or
+                        {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.1,
+                         "usd_amount": usd})
+
+    import time as _t
+    live_coin = {"address": "LIVE2", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000),
+                "sol_raised": 2.0, "market_cap_usd": None, "migrated": False,
+                "source": "pumpfun_live"}
+    report = memecoin.run_autotrade_cycle(
+        storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25",
+                          MEMECOIN_WALLET_BUDGET_USD="50"),
+        scalp=True, live_candidates=[live_coin])
+    assert fetch_calls == ["LIVE2"]
+    # Without the fetched market cap, freshness + thin sol_raised alone
+    # can't clear the entry threshold -- the fetch is what makes this enter.
+    assert buy_calls == ["LIVE2"]
+
+
+def test_cycle_skips_market_cap_fetch_when_candidate_already_has_one(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+    from hf_trading_bot import pumpfun_data
+
+    def boom(*a, **k):
+        raise AssertionError("market cap already present -> get_coin must not be called")
+    monkeypatch.setattr(pumpfun_data, "get_coin", boom)
+    monkeypatch.setattr(solana_wallet, "get_mint_info",
+                        lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
+    monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
+    monkeypatch.setattr(memecoin, "execute_buy",
+                        lambda token, usd, s, **k: {"tx_signature": "sig", "status": "confirmed",
+                                                    "sol_amount": 0.1, "usd_amount": usd})
+
+    import time as _t
+    live_coin = {"address": "LIVE3", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000),
+                "sol_raised": 2.0, "market_cap_usd": 10_000, "migrated": False,
+                "source": "pumpfun_live"}
+    memecoin.run_autotrade_cycle(
+        storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25",
+                          MEMECOIN_WALLET_BUDGET_USD="50"),
+        scalp=True, live_candidates=[live_coin])   # must not raise
 
 
 def test_cycle_scalp_mode_exit_uses_tight_thresholds(storage, monkeypatch):

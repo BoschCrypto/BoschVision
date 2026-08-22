@@ -526,7 +526,28 @@ moment, far faster than the original 50-mint/10-minute tracking window could
 hold. `PUMPPORTAL_MAX_WATCHED_MINTS` (default 300) and `PUMPPORTAL_WATCH_TTL_S`
 (default 180) exist so this can be tuned to whatever volume you actually
 see — if `pp-watch` still shows lots of "no record" for real candidates,
-raise the cap or shorten the TTL further.
+raise the cap or shorten the TTL further. Even after fixing that and a
+likely subscription bug (each new mint's subscribeTokenTrade call now
+resends the FULL watch list, not just the newest mint — see the module
+docstring), live buyer counts stayed stubbornly at zero across many tracked
+mints, which real pump.fun trading volume makes implausible as "just quiet
+coins."
+
+**The pivot that actually worked in testing:** live buyer diversity never
+got confirmed working end-to-end. What *did* work — validated by directly
+comparing against Photon's own Memescope, filtered to its "$10k+ market
+cap" preset — is market cap itself: coins crossing that threshold in their
+first minute consistently showed dozens to hundreds of real holders, a
+single, robust number instead of many individually-fragile trade events.
+`pumpfun_momentum_score` now weighs freshness(25) + market cap(35) + buyer
+diversity(25) + SOL-raised(15); market cap reaches full score at
+`MARKET_CAP_FULL_SCORE_USD` ($10,000, matching that Photon setting exactly).
+`run_autotrade_cycle` fetches a live market cap per scalp candidate
+(`pumpfun_data.get_coin()`) when the live feed's own bare-mint-address
+detection doesn't already carry one. Buyer diversity stays in the mix at a
+reduced weight rather than being ripped out — it may yet prove itself once
+the subscription fix has more live runtime, but market cap is the signal
+this project actually has evidence for.
 
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 

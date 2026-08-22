@@ -2,6 +2,7 @@
 scoring. No network — HTTP is stubbed."""
 import json
 import time
+import urllib.error
 
 import pytest
 
@@ -69,6 +70,30 @@ def test_base_url_default_and_override():
     assert pumpfun_data.base_url({"PUMPFUN_BASE_URL": "https://x"}) == "https://x"
 
 
+def test_get_coin_normalizes_a_single_coin(monkeypatch):
+    raw = {"mint": "M1", "symbol": "FOO", "usd_market_cap": 12_500, "real_sol_reserves": 15.0}
+    monkeypatch.setattr(pumpfun_data.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Resp(raw))
+    coin = pumpfun_data.get_coin("M1")
+    assert coin["market_cap_usd"] == 12_500
+    assert coin["address"] == "M1"
+
+
+def test_get_coin_returns_none_on_404(monkeypatch):
+    def raise_404(req, timeout=None):
+        raise urllib.error.HTTPError("url", 404, "not found", {}, None)
+    monkeypatch.setattr(pumpfun_data.urllib.request, "urlopen", raise_404)
+    assert pumpfun_data.get_coin("BRAND_NEW") is None
+
+
+def test_get_coin_raises_on_other_errors(monkeypatch):
+    def raise_500(req, timeout=None):
+        raise urllib.error.HTTPError("url", 500, "server error", {}, None)
+    monkeypatch.setattr(pumpfun_data.urllib.request, "urlopen", raise_500)
+    with pytest.raises(pumpfun_data.PumpFunError):
+        pumpfun_data.get_coin("M1")
+
+
 # --- scalp exit profile ------------------------------------------------
 
 def test_scalp_stop_loss_is_tighter_than_swing():
@@ -115,12 +140,30 @@ def test_exit_signal_no_token_data_past_stall_now_exits():
 # --- pumpfun momentum / entry ---------------------------------------------
 
 def test_pumpfun_momentum_fresh_coin_with_raise_scores_high():
-    # Freshness (40 max) + SOL-raised (20 max) is the ceiling with no
-    # buyer-diversity data at all -- 60, not the pre-PumpPortal 100.
+    # Freshness (25 max) + SOL-raised (15 max) is the ceiling with no
+    # market-cap or buyer-diversity data at all -- 40, not the full 100.
     now_ms = int(time.time() * 1000)
     coin = {"created_at_ms": now_ms - 60_000, "sol_raised": 20.0}   # 1 min old
     result = memecoin_strategy.pumpfun_momentum_score(coin)
-    assert result["score"] > 55
+    assert result["score"] > 35
+
+
+def test_pumpfun_momentum_market_cap_scores_higher_than_no_market_cap():
+    # The signal live-testing actually validated (Photon's own >=$10k
+    # Memescope filter) -- a coin already carrying real market cap should
+    # score meaningfully higher than an otherwise-identical one with none.
+    coin_base = {"created_at_ms": int(time.time() * 1000)}
+    no_mc = memecoin_strategy.pumpfun_momentum_score(coin_base)
+    with_mc = memecoin_strategy.pumpfun_momentum_score(
+        dict(coin_base, market_cap_usd=10_000))
+    assert with_mc["score"] > no_mc["score"]
+
+
+def test_pumpfun_momentum_market_cap_capped_at_the_full_score_threshold():
+    coin = {"market_cap_usd": memecoin_strategy.MARKET_CAP_FULL_SCORE_USD * 5}
+    result = memecoin_strategy.pumpfun_momentum_score(coin)
+    mc_component = next(c for c in result["components"] if "market cap" in c["reason"])
+    assert mc_component["points"] == 35.0
 
 
 def test_pumpfun_momentum_many_distinct_buyers_scores_higher_than_one_buyer():
@@ -136,11 +179,11 @@ def test_pumpfun_momentum_many_distinct_buyers_scores_higher_than_one_buyer():
     assert many_buyers["score"] > one_buyer["score"]
 
 
-def test_pumpfun_momentum_buyer_diversity_capped_at_40():
+def test_pumpfun_momentum_buyer_diversity_capped_at_25():
     coin = {}
     result = memecoin_strategy.pumpfun_momentum_score(
         coin, buyer_stats={"unique_buyers": 50, "buy_count": 60, "age_s": 30})
-    assert result["score"] == 40.0
+    assert result["score"] == 25.0
 
 
 def test_pumpfun_momentum_missing_buyer_stats_scores_that_component_zero():
@@ -170,23 +213,34 @@ def test_pumpfun_entry_signal_red_flag_blocks():
     assert sig.enter is False
 
 
-def test_pumpfun_entry_signal_passes_fresh_clean_coin():
-    coin = {"created_at_ms": int(time.time() * 1000), "sol_raised": 30.0}
+def test_pumpfun_entry_signal_passes_fresh_clean_coin_with_market_cap():
+    coin = {"created_at_ms": int(time.time() * 1000), "sol_raised": 30.0,
+           "market_cap_usd": 10_000}
     sig = memecoin_strategy.pumpfun_entry_signal(coin, CLEAN_MINT)
     assert sig.enter is True
 
 
 def test_pumpfun_entry_signal_uses_buyer_stats_to_clear_threshold():
-    # A coin too stale/thin on SOL raised alone to clear the entry bar can
-    # still clear it on genuine buyer diversity -- this is the actual fix
-    # for a bot that otherwise never enters.
+    # A coin too thin to clear the entry bar on freshness + SOL-raised alone
+    # can still clear it on genuine buyer diversity -- this is the actual
+    # fix for a bot that otherwise never enters.
     now_ms = int(time.time() * 1000)
-    coin = {"created_at_ms": now_ms - 10 * 60_000, "sol_raised": 1.0}   # 10 min old, thin raise
+    coin = {"created_at_ms": now_ms - 60_000, "sol_raised": 2.0}   # 1 min old, thin raise
     without = memecoin_strategy.pumpfun_entry_signal(coin, CLEAN_MINT)
     with_buyers = memecoin_strategy.pumpfun_entry_signal(
         coin, CLEAN_MINT, buyer_stats={"unique_buyers": 10, "buy_count": 12, "age_s": 60})
     assert without.enter is False
     assert with_buyers.enter is True
+
+
+def test_pumpfun_entry_signal_uses_market_cap_to_clear_threshold():
+    now_ms = int(time.time() * 1000)
+    coin_no_mc = {"created_at_ms": now_ms - 60_000, "sol_raised": 2.0}
+    coin_with_mc = dict(coin_no_mc, market_cap_usd=10_000)
+    without = memecoin_strategy.pumpfun_entry_signal(coin_no_mc, CLEAN_MINT)
+    with_mc = memecoin_strategy.pumpfun_entry_signal(coin_with_mc, CLEAN_MINT)
+    assert without.enter is False
+    assert with_mc.enter is True
 
 
 def test_pumpfun_risk_flags_only_checks_authorities():
