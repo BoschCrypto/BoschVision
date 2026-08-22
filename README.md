@@ -607,6 +607,25 @@ semantics on top of an already-unverified message schema.
 buyer-diversity counts, so this is verifiable the same way as everything
 else here — with real output, before trusting it inside the autonomous loop.
 
+**Two follow-on fixes from the same live-testing round, worth noting
+separately:**
+
+- **PumpPortal-speed race on mint checks.** Merging in PumpPortal's feed
+  caused a wave of `entry-mint-check: no on-chain account for mint ...`
+  errors — PumpPortal notifies of a new mint essentially the instant the
+  transaction is broadcast, sometimes faster than our own RPC node has
+  confirmed it. `_get_mint_info_for_fresh_candidate()` retries that
+  specific failure (0.5s, then 1s) for scalp candidates only; any other
+  `WalletError` still fails immediately, no blind retry.
+- **Parallel market-cap enrichment.** With PumpPortal merged in, a single
+  entry cycle can carry dozens of candidates missing a market cap —
+  fetching those one at a time inside the scoring loop meant a real chunk
+  of each cycle was spent waiting on sequential REST calls rather than
+  actually deciding anything. `enrich_candidates_with_market_cap()` fetches
+  all of them up front with bounded concurrency (5 workers by default —
+  not unlimited, since blasting pump.fun's free-tier API at once would
+  likely trip its own rate limit) before the scoring loop runs at all.
+
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 
 Two commands turn "what to look out for" into concrete, checkable rules —

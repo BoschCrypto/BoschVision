@@ -554,6 +554,69 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) 
     return report
 
 
+_MARKET_CAP_FETCH_MAX_WORKERS = 5   # bounded -- not unlimited, to avoid bursting past pump.fun's rate limit
+
+
+def enrich_candidates_with_market_cap(candidates: list[dict], *, env: Optional[dict] = None,
+                                      max_workers: int = _MARKET_CAP_FETCH_MAX_WORKERS
+                                      ) -> tuple[list[dict], dict]:
+    """Fetch live market cap (pumpfun_data.get_coin()) for every candidate
+    missing one, IN PARALLEL with bounded concurrency — not one network call
+    at a time inside the scoring loop (which is what this replaces), and
+    not unlimited either, since pump.fun's free-tier API would likely
+    reject a full-blast burst. With a merged pool of dozens of candidates
+    per cycle (pumpfun_live.py + PumpPortal detections), sequential fetches
+    were spending a meaningful chunk of each entry cycle just waiting on
+    one REST call at a time before the next could even start.
+
+    Returns (enriched_candidates, outcomes) — outcomes maps address to
+    {"status": "already_present"|"fetched"|"no_data"|"error", ...}, for
+    callers that want to show what happened (the dashboard's screen
+    diagnostic); run_autotrade_cycle itself only needs the enriched list.
+    A fetch failure for one candidate never affects any other, same
+    "missing data is not a red flag" philosophy as the sequential version."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from hf_trading_bot import pumpfun_data
+
+    outcomes: dict[str, dict] = {}
+    need_fetch = []
+    for c in candidates:
+        if c.get("market_cap_usd") is not None:
+            outcomes[c["address"]] = {"status": "already_present"}
+        else:
+            need_fetch.append(c)
+
+    def _fetch(coin):
+        try:
+            return coin["address"], pumpfun_data.get_coin(coin["address"], env=env), None
+        except pumpfun_data.PumpFunError as e:
+            return coin["address"], None, e
+
+    if need_fetch:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(_fetch, c) for c in need_fetch]
+            for future in as_completed(futures):
+                address, fresh, error = future.result()
+                if error is not None:
+                    outcomes[address] = {"status": "error", "error": str(error)}
+                elif fresh and fresh.get("market_cap_usd") is not None:
+                    outcomes[address] = {"status": "fetched", "fresh": fresh}
+                else:
+                    outcomes[address] = {"status": "no_data"}
+
+    enriched = []
+    for c in candidates:
+        outcome = outcomes.get(c["address"], {})
+        if outcome.get("status") == "fetched":
+            fresh = outcome["fresh"]
+            c = dict(c, market_cap_usd=fresh["market_cap_usd"],
+                    price_usd=fresh.get("price_usd"),
+                    has_social_links=fresh.get("has_social_links"))
+        enriched.append(c)
+    return enriched, outcomes
+
+
 def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
                         max_new_positions: int = MAX_NEW_POSITIONS_PER_CYCLE,
                         scalp: bool = False,
@@ -651,6 +714,7 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
                     seen.add(c["address"])
             candidates.sort(key=lambda c: c.get("created_at_ms") or 0, reverse=True)
         picked = [c for c in candidates if c["address"] not in held_addresses][:30]
+        picked, _mc_outcomes = enrich_candidates_with_market_cap(picked, env=env)
     else:
         try:
             candidates = memecoin_data.trending(limit=30, env=env)
@@ -674,27 +738,13 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
                                      "error": str(e)})
             continue
         if scalp:
+            # Market cap (and price/social-links) are already enriched, in
+            # parallel, by enrich_candidates_with_market_cap() above — real
+            # testing showed Photon's own >=$10k Memescope filter catching
+            # coins with dozens to hundreds of holders in their first
+            # minute, a far more direct signal than buyer-diversity
+            # counting has proven to be so far.
             buyer_stats = pumpportal_feed.buyer_stats(t["address"]) if pumpportal_feed else None
-            # The live feed (pumpfun_live.py) only ever knows a bare mint
-            # address — it never carries market cap. Real-world testing
-            # (Photon's Memescope, filtered to >=$10k market cap) showed
-            # that threshold catching coins with dozens to hundreds of
-            # holders within their first minute — a far more direct signal
-            # than buyer-diversity counting has proven to be so far. Fetch
-            # a live market cap for scoring only if the candidate doesn't
-            # already carry one (pumpfun_data.list_new_coins()'s REST
-            # candidates already do). A fetch failure just means this
-            # component scores 0, same as any other missing-data case —
-            # never blocks the candidate outright.
-            if t.get("market_cap_usd") is None:
-                try:
-                    fresh = pumpfun_data.get_coin(t["address"], env=env)
-                except pumpfun_data.PumpFunError:
-                    fresh = None
-                if fresh and fresh.get("market_cap_usd") is not None:
-                    t = dict(t, market_cap_usd=fresh["market_cap_usd"],
-                            price_usd=fresh.get("price_usd"),
-                            has_social_links=fresh.get("has_social_links"))
             sig = memecoin_strategy.pumpfun_entry_signal(t, mint_info, buyer_stats=buyer_stats)
         else:
             sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms)

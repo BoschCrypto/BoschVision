@@ -2601,6 +2601,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                             candidates.append(c)
                             seen_addrs.add(c["address"])
                     candidates.sort(key=lambda c: c.get("created_at_ms") or 0, reverse=True)
+                # Fetch market cap for every candidate missing one UP FRONT,
+                # in parallel (bounded concurrency) -- not one network call
+                # at a time inside this loop. With PumpPortal merged in,
+                # this list can run into dozens of candidates; sequential
+                # fetches would spend real wall-clock time just waiting.
+                candidates, mc_outcomes = memecoin.enrich_candidates_with_market_cap(candidates)
                 for t in candidates:
                     try:
                         mint_info = _sw.get_mint_info(t["address"])
@@ -2613,29 +2619,21 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                         continue
                     buyer_stats = (memecoin_pumpportal_feed.buyer_stats(t["address"])
                                   if memecoin_pumpportal_feed is not None else None)
-                    # DIAGNOSTIC: this mirrors run_autotrade_cycle's market-cap
-                    # fetch, but ALSO captures the raw result/error instead of
-                    # silently swallowing it — the live feed never carries
-                    # market cap on its own, and if pumpfun_data.get_coin()'s
-                    # endpoint guess is wrong, silently treating that as "no
-                    # data" would look identical to "this coin genuinely has
-                    # no market cap yet" in the score alone.
-                    mc_line = "market cap: already present on candidate"
-                    if t.get("market_cap_usd") is None:
-                        from hf_trading_bot import pumpfun_data as _pfd
-                        try:
-                            fresh = _pfd.get_coin(t["address"])
-                        except _pfd.PumpFunError as e:
-                            fresh = None
-                            mc_line = f"market cap fetch FAILED: {e}"
-                        else:
-                            if fresh and fresh.get("market_cap_usd") is not None:
-                                t = dict(t, market_cap_usd=fresh["market_cap_usd"],
-                                        price_usd=fresh.get("price_usd"),
-                                        has_social_links=fresh.get("has_social_links"))
-                                mc_line = f"market cap: fetched ${fresh['market_cap_usd']:,.0f}"
-                            else:
-                                mc_line = "market cap: fetch returned no data for this mint"
+                    # DIAGNOSTIC: surfaces the raw enrichment outcome, not just
+                    # its score contribution — "no PumpPortal record for this
+                    # mint" and "PumpPortal sees 0 buyers so far" (or a failed
+                    # market-cap fetch vs. a genuinely quiet coin) look
+                    # identical in the score alone.
+                    outcome = mc_outcomes.get(t["address"], {})
+                    status = outcome.get("status")
+                    if status == "already_present":
+                        mc_line = "market cap: already present on candidate"
+                    elif status == "fetched":
+                        mc_line = f"market cap: fetched ${outcome['fresh']['market_cap_usd']:,.0f}"
+                    elif status == "error":
+                        mc_line = f"market cap fetch FAILED: {outcome['error']}"
+                    else:
+                        mc_line = "market cap: fetch returned no data for this mint"
                     sig = memecoin_strategy.pumpfun_entry_signal(t, mint_info,
                                                                  buyer_stats=buyer_stats)
                     if not sig.enter and not show_all:

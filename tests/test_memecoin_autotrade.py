@@ -179,6 +179,76 @@ def test_exit_check_jupiter_network_error_does_not_stop_other_positions(storage,
     assert len(report["exits"]) == 1 and report["exits"][0]["token_address"] == "GOOD"
 
 
+# --- enrich_candidates_with_market_cap: parallel, not sequential -----------
+
+def test_enrich_skips_candidates_that_already_have_market_cap(monkeypatch):
+    from hf_trading_bot import pumpfun_data
+
+    def boom(mint, env=None):
+        raise AssertionError("must not fetch a candidate that already has market_cap_usd")
+    monkeypatch.setattr(pumpfun_data, "get_coin", boom)
+
+    candidates = [{"address": "M1", "market_cap_usd": 5_000}]
+    enriched, outcomes = memecoin.enrich_candidates_with_market_cap(candidates)
+    assert enriched[0]["market_cap_usd"] == 5_000
+    assert outcomes["M1"]["status"] == "already_present"
+
+
+def test_enrich_fetches_all_missing_candidates_concurrently(monkeypatch):
+    from hf_trading_bot import pumpfun_data
+
+    def fake_get_coin(mint, env=None):
+        return {"market_cap_usd": 1_000.0 * int(mint[1:]), "price_usd": 0.001,
+               "has_social_links": True}
+    monkeypatch.setattr(pumpfun_data, "get_coin", fake_get_coin)
+
+    candidates = [{"address": f"M{i}"} for i in range(1, 6)]
+    enriched, outcomes = memecoin.enrich_candidates_with_market_cap(candidates, max_workers=3)
+    assert {c["address"]: c["market_cap_usd"] for c in enriched} == \
+        {f"M{i}": 1_000.0 * i for i in range(1, 6)}
+    assert all(outcomes[f"M{i}"]["status"] == "fetched" for i in range(1, 6))
+
+
+def test_enrich_one_candidate_error_does_not_affect_others(monkeypatch):
+    from hf_trading_bot import pumpfun_data
+
+    def flaky(mint, env=None):
+        if mint == "BAD":
+            raise pumpfun_data.PumpFunError("pump.fun unreachable")
+        return {"market_cap_usd": 7_000.0, "price_usd": None, "has_social_links": False}
+    monkeypatch.setattr(pumpfun_data, "get_coin", flaky)
+
+    candidates = [{"address": "BAD", "market_cap_usd": None},
+                 {"address": "GOOD", "market_cap_usd": None}]
+    enriched, outcomes = memecoin.enrich_candidates_with_market_cap(candidates)
+    by_addr = {c["address"]: c for c in enriched}
+    assert by_addr["BAD"]["market_cap_usd"] is None
+    assert by_addr["GOOD"]["market_cap_usd"] == 7_000.0
+    assert outcomes["BAD"]["status"] == "error"
+    assert "unreachable" in outcomes["BAD"]["error"]
+    assert outcomes["GOOD"]["status"] == "fetched"
+
+
+def test_enrich_no_data_returned_leaves_market_cap_none(monkeypatch):
+    from hf_trading_bot import pumpfun_data
+    monkeypatch.setattr(pumpfun_data, "get_coin", lambda mint, env=None: None)
+
+    enriched, outcomes = memecoin.enrich_candidates_with_market_cap(
+        [{"address": "M1", "market_cap_usd": None}])
+    assert enriched[0]["market_cap_usd"] is None
+    assert outcomes["M1"]["status"] == "no_data"
+
+
+def test_enrich_does_not_mutate_the_original_candidate_dicts(monkeypatch):
+    from hf_trading_bot import pumpfun_data
+    monkeypatch.setattr(pumpfun_data, "get_coin",
+                        lambda mint, env=None: {"market_cap_usd": 9_000.0, "price_usd": None,
+                                                "has_social_links": None})
+    original = {"address": "M1"}
+    memecoin.enrich_candidates_with_market_cap([original])
+    assert original.get("market_cap_usd") is None   # the input dict itself is untouched
+
+
 # --- _get_mint_info_for_fresh_candidate: the PumpPortal-speed race fix -----
 
 def test_get_mint_info_for_fresh_candidate_retries_on_missing_account(monkeypatch):
