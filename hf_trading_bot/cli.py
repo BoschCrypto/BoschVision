@@ -2550,20 +2550,40 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                         continue
                     buyer_stats = (memecoin_pumpportal_feed.buyer_stats(t["address"])
                                   if memecoin_pumpportal_feed is not None else None)
+                    # DIAGNOSTIC: this mirrors run_autotrade_cycle's market-cap
+                    # fetch, but ALSO captures the raw result/error instead of
+                    # silently swallowing it — the live feed never carries
+                    # market cap on its own, and if pumpfun_data.get_coin()'s
+                    # endpoint guess is wrong, silently treating that as "no
+                    # data" would look identical to "this coin genuinely has
+                    # no market cap yet" in the score alone.
+                    mc_line = "market cap: already present on candidate"
+                    if t.get("market_cap_usd") is None:
+                        from hf_trading_bot import pumpfun_data as _pfd
+                        try:
+                            fresh = _pfd.get_coin(t["address"])
+                        except _pfd.PumpFunError as e:
+                            fresh = None
+                            mc_line = f"market cap fetch FAILED: {e}"
+                        else:
+                            if fresh and fresh.get("market_cap_usd") is not None:
+                                t = dict(t, market_cap_usd=fresh["market_cap_usd"])
+                                mc_line = f"market cap: fetched ${fresh['market_cap_usd']:,.0f}"
+                            else:
+                                mc_line = "market cap: fetch returned no data for this mint"
                     sig = memecoin_strategy.pumpfun_entry_signal(t, mint_info,
                                                                  buyer_stats=buyer_stats)
                     if not sig.enter and not show_all:
                         continue
                     reds = [f["reason"] for f in sig.risk_flags if f["level"] == "red"]
-                    # DIAGNOSTIC: always surface the raw buyer_stats lookup result
-                    # (not just its score contribution) — "no PumpPortal record for
-                    # this mint" and "PumpPortal sees 0 buyers so far" look
-                    # identical in the score alone, and telling them apart is
-                    # exactly what's needed to debug the buyer-diversity signal.
+                    # Same reasoning as mc_line above, for buyer diversity —
+                    # "no PumpPortal record for this mint" and "PumpPortal
+                    # sees 0 buyers so far" look identical in the score alone.
                     pp_line = (f"pumpportal: no record for this mint" if buyer_stats is None
                               else f"pumpportal: {buyer_stats['unique_buyers']} buyer(s), "
                                    f"{buyer_stats['buy_count']} buy(s)")
-                    reason_list = ([pp_line] + reds[:1]) if reds else ([pp_line] + sig.reasons[:2])
+                    diag = [mc_line, pp_line]
+                    reason_list = (diag + reds[:1]) if reds else (diag + sig.reasons[:1])
                     results.append({"symbol": t.get("symbol"), "address": t["address"],
                                     "score": sig.score, "enter": sig.enter,
                                     "reasons": reason_list})
