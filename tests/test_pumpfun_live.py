@@ -44,6 +44,24 @@ def test_extract_new_mint_deterministic_with_multiple_new_mints():
     assert pumpfun_live.extract_new_mint(tx) == "A"   # sorted, deterministic
 
 
+def test_extract_new_mint_excludes_wrapped_sol():
+    # Real false positive seen live: a wallet's first WSOL token account in a
+    # transaction looks "new" by the balance-diff heuristic, but it's not a
+    # pump.fun-created token — it happens on nearly every buy/sell.
+    tx = {"meta": {"preTokenBalances": [],
+                   "postTokenBalances": [{"mint": "So11111111111111111111111111111111111111112"}]}}
+    assert pumpfun_live.extract_new_mint(tx) is None
+
+
+def test_extract_new_mint_excludes_wrapped_sol_but_keeps_real_new_mint():
+    tx = {"meta": {"preTokenBalances": [],
+                   "postTokenBalances": [
+                       {"mint": "So11111111111111111111111111111111111111112"},
+                       {"mint": "EE2YYxxq1bv7BsXU3Jx4TiGBQQFiYe28SDSsUSBcpump"},
+                   ]}}
+    assert pumpfun_live.extract_new_mint(tx) == "EE2YYxxq1bv7BsXU3Jx4TiGBQQFiYe28SDSsUSBcpump"
+
+
 # --- ws_url -------------------------------------------------------------
 
 def test_ws_url_explicit_override():

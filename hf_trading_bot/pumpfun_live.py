@@ -70,6 +70,16 @@ def ws_url(env: Optional[dict] = None) -> str:
     return rpc
 
 
+# Mints that are pre-existing on every wallet's first swap of the session,
+# not tokens pump.fun just created. Wrapped SOL in particular shows up as
+# "new" in nearly every pump.fun buy/sell (a wallet's first WSOL token
+# account in a given transaction), not as a rare edge case — every one of
+# these has to be excluded or the feed floods with false positives.
+_NOT_NEW_MINTS = frozenset({
+    "So11111111111111111111111111111111111111112",   # wrapped SOL
+})
+
+
 def extract_new_mint(tx: dict) -> Optional[str]:
     """Pure: given a getTransaction (jsonParsed) result, return a mint
     address present in postTokenBalances but absent from preTokenBalances —
@@ -78,7 +88,7 @@ def extract_new_mint(tx: dict) -> Optional[str]:
     meta = (tx or {}).get("meta") or {}
     pre_mints = {b.get("mint") for b in (meta.get("preTokenBalances") or []) if b.get("mint")}
     post_mints = {b.get("mint") for b in (meta.get("postTokenBalances") or []) if b.get("mint")}
-    new_mints = post_mints - pre_mints
+    new_mints = (post_mints - pre_mints) - _NOT_NEW_MINTS
     return sorted(new_mints)[0] if new_mints else None
 
 
