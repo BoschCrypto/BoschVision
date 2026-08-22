@@ -856,6 +856,16 @@ _APP_JS = r"""
              (rep.errors ? ', ' + rep.errors + ' err' : '') +
              (rep.skipped ? ' (' + esc(rep.skipped) + ')' : '') + '</span></div>';
       }
+      if (m.live_feed) {
+        var lf = m.live_feed;
+        var lfCls = lf.connected ? 'pos' : 'neg';
+        h += '<div class="line"><span class="muted">live feed</span><span class="' + lfCls + '">' +
+             (lf.connected ? 'connected' : 'reconnecting') + ' &middot; ' +
+             lf.detections + ' detected</span></div>';
+        if (!lf.connected && lf.last_error) {
+          h += '<div class="muted" style="font-size:10px">' + esc(lf.last_error) + '</div>';
+        }
+      }
     } else {
       h += '<div class="line"><span class="muted">autotrade</span><span>off — launch with ' +
            '--memecoin-autotrade</span></div>';

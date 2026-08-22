@@ -1760,6 +1760,47 @@ def memecoin_newcoins(limit, raw):
         click.echo(f"{(c['symbol'] or '?'):<10} {c['address']}  {age}  {mc}  {sol}")
 
 
+@memecoin.command("watch")
+@click.option("--seconds", default=60, type=int, help="How long to watch before stopping.")
+def memecoin_watch(seconds):
+    """Connect to the REAL live pump.fun feed (a persistent Solana WebSocket
+    subscription, not polling) and print each new-token detection as it
+    happens, for --seconds. Read-only, no wallet touched.
+
+    Run this BEFORE ever using --memecoin-live in the autonomous scalp loop —
+    it is the way to verify the connection and detection heuristic actually
+    work on your machine, with your eyes on the output. If you see nothing
+    within a minute or two, that itself is informative: check the status
+    line for a connection error, or pump.fun may simply be quiet — many new
+    tokens appear per minute during active hours, close to zero overnight."""
+    from hf_trading_bot import pumpfun_live
+
+    feed = pumpfun_live.LiveFeed()
+    feed.start()
+    click.echo(f"Connecting to {pumpfun_live.ws_url()} … watching for {seconds}s "
+              f"(Ctrl+C to stop early)")
+    seen = 0
+    import time as _t
+    start = _t.time()
+    try:
+        while _t.time() - start < seconds:
+            _t.sleep(2)
+            rows = feed.recent(100)
+            new_rows = rows[: len(rows) - seen] if len(rows) > seen else []
+            for c in reversed(new_rows):   # oldest of the new batch first
+                click.echo(f"  NEW  {c['address']}")
+            seen = len(rows)
+            st = feed.status()
+            if not st["connected"] and st["last_error"]:
+                click.echo(f"  [!] {st['last_error']}")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        feed.stop()
+    click.echo(f"\nDone — {seen} new token(s) detected in the window. "
+              f"status: {feed.status()}")
+
+
 @memecoin.command("check")
 @click.option("--token", "token_address", required=True, help="Token mint address to screen.")
 def memecoin_check(token_address):
@@ -2159,6 +2200,15 @@ def memecoin_positions(cfg):
                    "mint/freeze authority is checked, a real increase in risk. Ignored "
                    "without --memecoin-autotrade. Pair with a short "
                    "--memecoin-cycle-seconds (60-120) and a paid Solana RPC.")
+@click.option("--memecoin-live", is_flag=True,
+              help="Discover new pump.fun coins from a REAL live feed — a persistent "
+                   "Solana WebSocket subscription (pumpfun_live.py) that detects a token "
+                   "the instant it's created on-chain — instead of REST-polling pump.fun's "
+                   "API once per cycle. Run `hf-bot memecoin watch` first to verify the "
+                   "connection and detection actually work on your machine. Requires "
+                   "--memecoin-scalp; ignored otherwise. Needs a WebSocket-capable RPC — "
+                   "set SOLANA_WS_URL in .env if your provider's URL isn't a plain "
+                   "https->wss swap of SOLANA_RPC_URL.")
 @click.option("--open", "open_browser", is_flag=True,
               help="Open the dashboard in your default browser once the server is up.")
 @click.option("--token", default=None,
@@ -2177,7 +2227,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               fallback_cmd: Optional[str], auto_execute: bool,
               auto_execute_max: float, committee_model: Optional[str],
               tiered: bool, memecoin_autotrade: bool, memecoin_cycle_seconds: int,
-              memecoin_scalp: bool,
+              memecoin_scalp: bool, memecoin_live: bool,
               open_browser: bool,
               token: Optional[str], auth: bool, tunnel: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
@@ -2361,9 +2411,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
 
     def _run_memecoin_autotrade_cycle_once():
         from hf_trading_bot import memecoin
+        live_candidates = (memecoin_live_feed.recent(30)
+                          if memecoin_live_feed is not None else None)
         s = Storage(db_path)
         try:
-            report = memecoin.run_autotrade_cycle(s, scalp=memecoin_scalp)
+            report = memecoin.run_autotrade_cycle(
+                s, scalp=memecoin_scalp, live_candidates=live_candidates)
         finally:
             s.close()
         memecoin_autotrade_status["last_run_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
@@ -2529,6 +2582,16 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     memecoin_autotrade_on = memecoin_autotrade and memecoin_autotrade_blocked_reason is None
     if memecoin_autotrade_on:
         memecoin_autotrade_status["enabled"] = True
+
+    # A live feed only makes sense paired with scalp mode (swing mode's
+    # DexScreener discovery doesn't use it) and only once autotrade is
+    # actually cleared to run — no point opening a websocket for a loop
+    # that's blocked anyway.
+    memecoin_live_on = bool(memecoin_live and memecoin_scalp and memecoin_autotrade_on)
+    memecoin_live_feed = None
+    if memecoin_live_on:
+        from hf_trading_bot import pumpfun_live
+        memecoin_live_feed = pumpfun_live.LiveFeed()
 
     # Access token: required before exposing the dashboard past this machine.
     # A tunnel ALWAYS forces auth — never expose the committee without a lock.
@@ -3003,6 +3066,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     payload["memecoin"] = dict(memecoin_cache)
                     payload["memecoin"]["autotrade"] = dict(memecoin_autotrade_status)
                     payload["memecoin"]["activity"] = list(memecoin_activity[:10])
+                    payload["memecoin"]["live_feed"] = (memecoin_live_feed.status()
+                                                        if memecoin_live_feed is not None else None)
                     self._send(200, json.dumps(payload).encode(), "application/json")
                     return
                 html = render_html(snap, mode="live").replace(
@@ -3206,12 +3271,18 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     if memecoin_autotrade and memecoin_autotrade_blocked_reason:
         runner_note += (f"\n  [!] --memecoin-autotrade BLOCKED — {memecoin_autotrade_blocked_reason}")
     elif memecoin_autotrade_on:
-        mode_note = "SCALP mode (pump.fun new-coin feed, tight exits)" if memecoin_scalp \
-            else "swing mode (DexScreener trending)"
+        if memecoin_scalp:
+            mode_note = "SCALP mode (" + ("LIVE feed, real-time" if memecoin_live_on
+                                          else "pump.fun new-coin feed, polled") + ", tight exits)"
+        else:
+            mode_note = "swing mode (DexScreener trending)"
         runner_note += (f"\n  [!] MEMECOIN AUTOTRADE ON — {mode_note} — real money, entries "
                         f"and exits fire with no approval click, every "
                         f"{memecoin_cycle_seconds}s. Kill switch, per-trade ceiling and "
                         "wallet budget still apply.")
+    if memecoin_live and not memecoin_live_on:
+        runner_note += ("\n  [!] --memecoin-live had no effect — needs "
+                        "--memecoin-autotrade and --memecoin-scalp both on too.")
     # The address to actually type in a browser: when bound to all interfaces,
     # localhost still works here, and other devices use this machine's LAN IP.
     local_url = f"http://127.0.0.1:{port}" if host in ("0.0.0.0", "127.0.0.1", "localhost") \
@@ -3242,6 +3313,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
     threading.Thread(target=_memecoin_refresh_loop, daemon=True).start()
     if memecoin_autotrade_on:
         threading.Thread(target=_memecoin_autotrade_loop, daemon=True).start()
+    if memecoin_live_feed is not None:
+        memecoin_live_feed.start()   # persistent websocket subscription, its own thread
     tunnel_proc = _start_tunnel(port, token) if tunnel else None
     try:
         server.serve_forever()

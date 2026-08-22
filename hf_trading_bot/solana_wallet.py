@@ -138,6 +138,17 @@ def get_token_decimals(mint: str, *, env: Optional[dict] = None) -> int:
     return int(value["decimals"])
 
 
+def get_transaction(signature: str, *, env: Optional[dict] = None) -> Optional[dict]:
+    """Full parsed transaction (jsonParsed encoding, maxSupportedTransactionVersion 0)
+    or None if the RPC node doesn't have it (yet, or ever — an unconfirmed/
+    dropped signature). General-purpose Solana RPC helper, not memecoin-
+    specific — pumpfun_live.py uses this to inspect a transaction's token
+    balance changes."""
+    result = _rpc_call(rpc_url(env), "getTransaction",
+                       [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}])
+    return result or None
+
+
 def get_signature_status(signature: str, *, env: Optional[dict] = None) -> Optional[dict]:
     """{"confirmed": bool, "err": ...} or None if the signature isn't known
     to the RPC node yet (still propagating)."""

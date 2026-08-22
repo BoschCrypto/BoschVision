@@ -440,6 +440,48 @@ kill switch, `MEMECOIN_MAX_TRADE_USD`, and `MEMECOIN_WALLET_BUDGET_USD` all
 still apply exactly as before — scalp mode changes *what* gets bought and
 *when* it gets sold, never *how much* the bot is allowed to risk in total.
 
+### Live feed — real-time detection, not polling (`--memecoin-live`)
+
+`hf-bot memecoin newcoins` (and scalp mode without `--memecoin-live`) polls
+pump.fun's REST API once per cycle — good enough for testing, but it only
+ever sees "whatever was new the last time it happened to ask." A real live
+feed means a **persistent WebSocket subscription** that's told the instant a
+token is created on-chain — the actual mechanism Photon's Memescope-speed
+bots use. `--memecoin-live` is that: it subscribes to Solana program logs
+mentioning the pump.fun program, and for every matching transaction looks
+for a brand-new SPL token mint appearing in that transaction's token-balance
+change — sub-second detection, not a polling interval.
+
+```bash
+pip install -e ".[memecoin]"          # now also pulls solana + websockets
+hf-bot memecoin watch                 # verify the connection works — watch for a minute
+hf-bot dashboard --open --memecoin-autotrade --memecoin-scalp --memecoin-live \
+                  --memecoin-cycle-seconds 90
+```
+
+**Always run `hf-bot memecoin watch` first.** It connects to the real feed
+and prints each detection as it happens, with your eyes on the output —
+exactly the same verification step as `newcoins --raw` for the REST path,
+just for the thing that's actually going to feed the autonomous scalp loop.
+
+Two things stated plainly:
+- **The detection heuristic is a new mint appearing in a transaction that
+  touches the pump.fun program** — inferred from stable, documented Solana
+  RPC semantics (pre/post token balances), not by parsing pump.fun's own
+  undocumented log format. It should catch essentially every pump.fun token
+  creation; a rare false positive (something else creating a token in a
+  transaction that also happens to touch the program) is possible.
+- **This has never been exercised against a live connection while building
+  it** — every RPC/websocket call was verified against the installed
+  library's actual method signatures, but this development environment
+  cannot reach Solana's network at all. `hf-bot memecoin watch` is not
+  optional the first time — it's the only way either of us finds out if
+  something needs fixing before real money is involved.
+
+`--memecoin-live` requires both `--memecoin-autotrade` and `--memecoin-scalp`
+— it's ignored (with a banner note explaining why) otherwise. The dashboard's
+Memecoin panel shows the feed's live connection state and detection count.
+
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 
 Two commands turn "what to look out for" into concrete, checkable rules —

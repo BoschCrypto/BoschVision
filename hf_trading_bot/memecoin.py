@@ -404,7 +404,8 @@ MAX_NEW_POSITIONS_PER_CYCLE = 2
 
 def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
                         max_new_positions: int = MAX_NEW_POSITIONS_PER_CYCLE,
-                        scalp: bool = False) -> dict:
+                        scalp: bool = False,
+                        live_candidates: Optional[list] = None) -> dict:
     """One full autonomous pass: check exits on every held position FIRST (a
     stop-loss always gets first claim on attention and budget), then look for
     new entries with whatever budget remains. Returns a report of every
@@ -414,9 +415,16 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
 
     `scalp=True` switches BOTH halves together — exits use the tight
     SCALP_* thresholds (memecoin_strategy.scalp_exit_signal), and new-entry
-    discovery reads pump.fun's own new-coin feed (pumpfun_data) instead of
-    DexScreener's trending list, scored by pumpfun_entry_signal — the only
-    universal safety check on a coin this fresh is mint/freeze authority,
+    discovery reads pump.fun's own new-coin feed instead of DexScreener's
+    trending list, scored by pumpfun_entry_signal — the only universal
+    safety check on a coin this fresh is mint/freeze authority,
+
+    `live_candidates`, when scalp=True, is used as the entry-discovery list
+    INSTEAD of calling pumpfun_data.list_new_coins() — this is how the
+    dashboard passes real-time detections from pumpfun_live.LiveFeed
+    (a persistent WebSocket subscription) rather than REST-polling once per
+    cycle. Ignored when scalp=False. A caller not wired to a live feed
+    (the CLI, tests) simply omits it and gets the REST-polling behavior.
     there is no liquidity figure yet the way DexScreener has one. That is a
     real, deliberate increase in risk, not a smaller version of the normal
     screen; it is what trading a coin this early means.
@@ -498,12 +506,15 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
         return report
 
     if scalp:
-        from hf_trading_bot import pumpfun_data
-        try:
-            candidates = pumpfun_data.list_new_coins(limit=30, env=env)
-        except pumpfun_data.PumpFunError as e:
-            report["errors"].append({"stage": "scan", "error": str(e)})
-            return report
+        if live_candidates is not None:
+            candidates = live_candidates
+        else:
+            from hf_trading_bot import pumpfun_data
+            try:
+                candidates = pumpfun_data.list_new_coins(limit=30, env=env)
+            except pumpfun_data.PumpFunError as e:
+                report["errors"].append({"stage": "scan", "error": str(e)})
+                return report
         picked = [c for c in candidates if c["address"] not in held_addresses][:30]
     else:
         try:

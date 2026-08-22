@@ -221,6 +221,34 @@ def test_cycle_scalp_mode_uses_pumpfun_discovery_not_dexscreener(storage, monkey
     assert report["entries"][0]["token_address"] == "PF1"
 
 
+def test_cycle_scalp_mode_uses_live_candidates_when_given(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+
+    def boom(*a, **k):
+        raise AssertionError("live_candidates provided -> pumpfun_data must not be called")
+    from hf_trading_bot import pumpfun_data
+    monkeypatch.setattr(pumpfun_data, "list_new_coins", boom)
+    monkeypatch.setattr(solana_wallet, "get_mint_info",
+                        lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
+    buy_calls = []
+    monkeypatch.setattr(memecoin, "execute_buy",
+                        lambda token, usd, s, **k: buy_calls.append(token) or
+                        {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.1,
+                         "usd_amount": usd})
+
+    import time as _t
+    live_coin = {"address": "LIVE1", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000),
+                "sol_raised": 30.0, "market_cap_usd": None, "migrated": False,
+                "source": "pumpfun_live"}
+    report = memecoin.run_autotrade_cycle(
+        storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25",
+                          MEMECOIN_WALLET_BUDGET_USD="50"),
+        scalp=True, live_candidates=[live_coin])
+    assert buy_calls == ["LIVE1"]
+    assert report["entries"][0]["token_address"] == "LIVE1"
+
+
 def test_cycle_scalp_mode_exit_uses_tight_thresholds(storage, monkeypatch):
     storage.set_kill_switch(False)
     storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
