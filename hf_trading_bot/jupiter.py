@@ -17,6 +17,14 @@ from typing import Optional
 SOL_MINT = "So11111111111111111111111111111111111111112"
 DEFAULT_BASE_URL = "https://quote-api.jup.ag/v6"
 _TIMEOUT = 20
+_HEADERS = {
+    # A default urllib User-Agent (or none at all) can trip Cloudflare-style
+    # bot detection on public APIs — a browser-shaped UA avoids that class of
+    # false block without changing anything about the request itself.
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+    "Accept": "application/json",
+}
 
 
 class JupiterError(RuntimeError):
@@ -36,7 +44,7 @@ def quote(input_mint: str, output_mint: str, amount: int, *,
     params = (f"inputMint={input_mint}&outputMint={output_mint}&amount={amount}"
              f"&slippageBps={slippage_bps}")
     url = f"{base_url(env)}/quote?{params}"
-    req = urllib.request.Request(url, method="GET")
+    req = urllib.request.Request(url, method="GET", headers=_HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             data = json.loads(resp.read().decode())
@@ -64,7 +72,7 @@ def swap_transaction(quote_response: dict, user_pubkey: str, *,
     }).encode()
     url = f"{base_url(env)}/swap"
     req = urllib.request.Request(url, data=body, method="POST",
-                                 headers={"Content-Type": "application/json"})
+                                 headers=dict(_HEADERS, **{"Content-Type": "application/json"}))
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             data = json.loads(resp.read().decode())

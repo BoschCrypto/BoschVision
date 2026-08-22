@@ -24,10 +24,20 @@ class DexScreenerError(RuntimeError):
     pass
 
 
+_HEADERS = {
+    # DexScreener sits behind Cloudflare, which blocks the default
+    # urllib User-Agent (or its absence) as a bot signature (error 1010) — a
+    # browser-shaped UA + Accept header is enough to pass.
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+    "Accept": "application/json",
+}
+
+
 def _get(path: str, env: Optional[dict] = None) -> Any:
     e = env if env is not None else os.environ
     base = (e.get("DEXSCREENER_BASE_URL") or BASE_URL).rstrip("/")
-    req = urllib.request.Request(f"{base}{path}", method="GET")
+    req = urllib.request.Request(f"{base}{path}", method="GET", headers=_HEADERS)
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             return json.loads(resp.read().decode())
