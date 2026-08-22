@@ -28,12 +28,31 @@ def test_track_returns_true_for_new_mint_false_for_repeat():
     assert f._track("M1") is False
 
 
-def test_track_respects_max_watched_mints_cap(monkeypatch):
-    monkeypatch.setattr(pumpportal_live, "_MAX_WATCHED_MINTS", 2)
-    f = pumpportal_live.PumpPortalFeed()
+def test_track_respects_max_watched_mints_cap():
+    f = pumpportal_live.PumpPortalFeed(env={"PUMPPORTAL_MAX_WATCHED_MINTS": "2"})
     assert f._track("M1") is True
     assert f._track("M2") is True
     assert f._track("M3") is False
+
+
+def test_max_watched_mints_default_and_override():
+    assert pumpportal_live.max_watched_mints({}) == pumpportal_live.DEFAULT_MAX_WATCHED_MINTS
+    assert pumpportal_live.max_watched_mints({"PUMPPORTAL_MAX_WATCHED_MINTS": "10"}) == 10
+
+
+def test_max_watched_mints_invalid_falls_back_to_default():
+    assert pumpportal_live.max_watched_mints(
+        {"PUMPPORTAL_MAX_WATCHED_MINTS": "garbage"}) == pumpportal_live.DEFAULT_MAX_WATCHED_MINTS
+
+
+def test_watch_ttl_s_default_and_override():
+    assert pumpportal_live.watch_ttl_s({}) == pumpportal_live.DEFAULT_WATCH_TTL_S
+    assert pumpportal_live.watch_ttl_s({"PUMPPORTAL_WATCH_TTL_S": "60"}) == 60.0
+
+
+def test_watch_ttl_s_invalid_falls_back_to_default():
+    assert pumpportal_live.watch_ttl_s(
+        {"PUMPPORTAL_WATCH_TTL_S": "garbage"}) == pumpportal_live.DEFAULT_WATCH_TTL_S
 
 
 def test_record_buy_counts_and_dedupes_buyers():
@@ -86,7 +105,7 @@ def test_status_reflects_tracked_mints():
 def test_pop_expired_evicts_old_mints_and_returns_them():
     f = pumpportal_live.PumpPortalFeed()
     f._track("OLD")
-    f._watched["OLD"]["first_seen"] = time.time() - pumpportal_live._WATCH_TTL_S - 1
+    f._watched["OLD"]["first_seen"] = time.time() - f._watch_ttl_s - 1
     f._track("FRESH")
     expired = f._pop_expired()
     assert expired == ["OLD"]

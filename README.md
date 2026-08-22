@@ -518,6 +518,16 @@ feed, PumpPortal's exact message schema is implemented from public docs, not
 verified against a live connection from this dev environment — `pp-watch` is
 the honest way to find out if that's held up before it feeds real scoring.
 
+**A real tuning lesson from live testing:** the first live run showed real
+scalp candidates consistently coming back `pumpportal: no record for this
+mint`. The cause wasn't a parsing bug — a follow-up `pp-watch` run showed
+pump.fun creating a new coin roughly every 1-2 seconds even in a quiet
+moment, far faster than the original 50-mint/10-minute tracking window could
+hold. `PUMPPORTAL_MAX_WATCHED_MINTS` (default 300) and `PUMPPORTAL_WATCH_TTL_S`
+(default 180) exist so this can be tuned to whatever volume you actually
+see — if `pp-watch` still shows lots of "no record" for real candidates,
+raise the cap or shorten the TTL further.
+
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 
 Two commands turn "what to look out for" into concrete, checkable rules —

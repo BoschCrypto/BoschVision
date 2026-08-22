@@ -35,10 +35,16 @@ Honesty notes, stated plainly rather than glossed over:
    input to it.
 4. subscribeTokenTrade is metered past a small free allowance per
    PumpPortal's own docs (this file doesn't spend real money either way —
-   read-only market data — but it is a real usage cap). _MAX_WATCHED_MINTS
-   bounds how many mints are tracked at once, and expired mints are
-   explicitly unsubscribed, so exposure stays bounded rather than growing
-   for as long as the process runs.
+   read-only market data — but it is a real usage cap). PUMPFUN_MAX_WATCHED_MINTS
+   and PUMPPORTAL_WATCH_TTL_S bound how many mints are tracked and for how
+   long, and expired mints are explicitly unsubscribed, so exposure stays
+   bounded rather than growing for as long as the process runs — but the
+   right values genuinely depend on real-world pump.fun creation volume
+   this dev environment cannot observe. Live testing found the initial
+   guess (50 mints, 10 min) far too small for the actual rate (a new coin
+   roughly every 1-2 seconds even in a quiet moment); the current defaults
+   (300, 3 min) are a better-informed second guess, not a verified answer
+   — tune via env if `pp-watch` still shows lots of "no PumpPortal record".
 """
 from __future__ import annotations
 
@@ -51,8 +57,16 @@ from datetime import datetime, timezone
 from typing import Optional
 
 PUMPPORTAL_WS_URL = "wss://pumpportal.fun/api/data"
-_MAX_WATCHED_MINTS = 50
-_WATCH_TTL_S = 600.0   # stop tracking a mint 10 min after we first saw it created
+# Real observed pump.fun creation volume is far higher than a first guess —
+# live testing showed a new coin roughly every 1-2 seconds even in a quiet
+# moment. A too-small cap fills almost immediately and, combined with a long
+# TTL, stays clogged with old entries — meaning a freshly detected candidate
+# has real odds of never getting a tracking slot at all, showing up as "no
+# PumpPortal record" for reasons that have nothing to do with the mint
+# itself. Both are env-configurable since the right values depend on
+# real-world volume this dev environment can't observe (no network access).
+DEFAULT_MAX_WATCHED_MINTS = 300
+DEFAULT_WATCH_TTL_S = 180.0   # our own scoring only cares about the first few minutes anyway
 _RECONNECT_BACKOFF_S = (2, 5, 10, 30, 60)
 _PING_TIMEOUT_S = 60   # see pumpfun_live.py — websockets' 20s default is too tight here
 
@@ -60,6 +74,22 @@ _PING_TIMEOUT_S = 60   # see pumpfun_live.py — websockets' 20s default is too 
 def ws_url(env: Optional[dict] = None) -> str:
     e = env if env is not None else os.environ
     return (e.get("PUMPPORTAL_WS_URL") or PUMPPORTAL_WS_URL).strip()
+
+
+def max_watched_mints(env: Optional[dict] = None) -> int:
+    e = env if env is not None else os.environ
+    try:
+        return max(1, int(e.get("PUMPPORTAL_MAX_WATCHED_MINTS", DEFAULT_MAX_WATCHED_MINTS)))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_WATCHED_MINTS
+
+
+def watch_ttl_s(env: Optional[dict] = None) -> float:
+    e = env if env is not None else os.environ
+    try:
+        return max(1.0, float(e.get("PUMPPORTAL_WATCH_TTL_S", DEFAULT_WATCH_TTL_S)))
+    except (TypeError, ValueError):
+        return DEFAULT_WATCH_TTL_S
 
 
 class PumpPortalFeed:
@@ -76,6 +106,8 @@ class PumpPortalFeed:
                               "last_error": None, "started_at": None}
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._max_watched_mints = max_watched_mints(env)
+        self._watch_ttl_s = watch_ttl_s(env)
 
     def start(self) -> None:
         if self._thread is not None:
@@ -110,7 +142,7 @@ class PumpPortalFeed:
         """Start tracking a newly-created mint. Returns True if it should be
         subscribed to trade events (new to us and under the tracking cap)."""
         with self._lock:
-            if mint in self._watched or len(self._watched) >= _MAX_WATCHED_MINTS:
+            if mint in self._watched or len(self._watched) >= self._max_watched_mints:
                 return False
             self._watched[mint] = {"buyers": set(), "buy_count": 0, "first_seen": time.time()}
             return True
@@ -128,7 +160,8 @@ class PumpPortalFeed:
     def _pop_expired(self) -> list[str]:
         now = time.time()
         with self._lock:
-            expired = [m for m, w in self._watched.items() if now - w["first_seen"] > _WATCH_TTL_S]
+            expired = [m for m, w in self._watched.items()
+                      if now - w["first_seen"] > self._watch_ttl_s]
             for m in expired:
                 del self._watched[m]
         return expired
