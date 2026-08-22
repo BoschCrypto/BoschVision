@@ -2555,7 +2555,15 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     if not sig.enter and not show_all:
                         continue
                     reds = [f["reason"] for f in sig.risk_flags if f["level"] == "red"]
-                    reason_list = reds[:2] if reds else sig.reasons[:3]
+                    # DIAGNOSTIC: always surface the raw buyer_stats lookup result
+                    # (not just its score contribution) — "no PumpPortal record for
+                    # this mint" and "PumpPortal sees 0 buyers so far" look
+                    # identical in the score alone, and telling them apart is
+                    # exactly what's needed to debug the buyer-diversity signal.
+                    pp_line = (f"pumpportal: no record for this mint" if buyer_stats is None
+                              else f"pumpportal: {buyer_stats['unique_buyers']} buyer(s), "
+                                   f"{buyer_stats['buy_count']} buy(s)")
+                    reason_list = ([pp_line] + reds[:1]) if reds else ([pp_line] + sig.reasons[:2])
                     results.append({"symbol": t.get("symbol"), "address": t["address"],
                                     "score": sig.score, "enter": sig.enter,
                                     "reasons": reason_list})
