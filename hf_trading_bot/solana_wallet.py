@@ -106,6 +106,30 @@ def get_token_balance(owner_pubkey: str, mint: str, *,
         raise WalletError(f"unexpected token account shape: {ex}") from ex
 
 
+def get_mint_info(mint: str, *, env: Optional[dict] = None) -> dict:
+    """SPL token mint account info — specifically whether the mint and
+    freeze authorities are still active.
+
+    * An active **mint authority** means the creator can mint unlimited new
+      supply at will and dump/dilute on holders.
+    * An active **freeze authority** means the creator can freeze any
+      wallet's tokens, blocking them from ever selling.
+    Both being null (revoked) is the healthy state; either present is one of
+    the single clearest rug-risk signals on Solana."""
+    result = _rpc_call(rpc_url(env), "getAccountInfo", [mint, {"encoding": "jsonParsed"}])
+    value = (result or {}).get("value")
+    if not value:
+        raise WalletError(f"no on-chain account found for mint {mint}")
+    try:
+        info = value["data"]["parsed"]["info"]
+    except (KeyError, TypeError) as ex:
+        raise WalletError(f"unexpected mint account shape: {ex}") from ex
+    return {"mint_authority": info.get("mintAuthority"),
+            "freeze_authority": info.get("freezeAuthority"),
+            "decimals": info.get("decimals"),
+            "supply": info.get("supply")}
+
+
 def get_token_decimals(mint: str, *, env: Optional[dict] = None) -> int:
     result = _rpc_call(rpc_url(env), "getTokenSupply", [mint])
     value = (result or {}).get("value") or {}

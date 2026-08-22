@@ -109,6 +109,87 @@ def token_amount_from_raw(raw: int, decimals: int) -> float:
     return raw / (10 ** decimals) if decimals >= 0 else float(raw)
 
 
+# ---- mechanical rug-risk screen (pure — the part that's exhaustively tested) --
+#
+# There are no earnings, filings, or fundamentals for a memecoin — the
+# committee's usual valuation/red-team doctrine does not apply. What DOES
+# exist is a handful of concrete, checkable facts that catch the most common
+# instant-rug patterns. Passing every check here is NOT a recommendation —
+# most tokens that pass still go to zero on pure momentum decay. It only
+# means the token avoids the specific, well-known traps below.
+
+MIN_LIQUIDITY_RED_USD = 5_000.0
+MIN_LIQUIDITY_YELLOW_USD = 20_000.0
+VOLUME_LIQUIDITY_RATIO_YELLOW = 20.0
+NEW_POOL_HOURS_YELLOW = 24.0
+
+
+def risk_flags(token: dict, mint_info: dict, *, now_ms: Optional[int] = None) -> list[dict]:
+    """Each flag: {"level": "red"|"yellow", "reason": str}. `token` is a
+    memecoin_data-normalized dict; `mint_info` is solana_wallet.get_mint_info's
+    return. Pure — no network, so this is where the actual judgement logic
+    gets exhaustively unit-tested."""
+    flags: list[dict] = []
+
+    if mint_info.get("mint_authority"):
+        flags.append({"level": "red", "reason":
+                     "mint authority NOT revoked — the creator can mint unlimited "
+                     "new supply at will and dilute/dump on holders"})
+    if mint_info.get("freeze_authority"):
+        flags.append({"level": "red", "reason":
+                     "freeze authority NOT revoked — the creator can freeze any "
+                     "wallet's tokens and block them from ever selling"})
+
+    liq = token.get("liquidity_usd") or 0.0
+    if liq < MIN_LIQUIDITY_RED_USD:
+        flags.append({"level": "red", "reason":
+                     f"very thin liquidity (${liq:,.0f}) — high slippage, may not "
+                     f"be sellable in size"})
+    elif liq < MIN_LIQUIDITY_YELLOW_USD:
+        flags.append({"level": "yellow", "reason":
+                     f"low liquidity (${liq:,.0f}) — expect meaningful slippage"})
+
+    vol = token.get("volume_24h_usd") or 0.0
+    if liq > 0 and (vol / liq) > VOLUME_LIQUIDITY_RATIO_YELLOW:
+        flags.append({"level": "yellow", "reason":
+                     f"24h volume is {vol / liq:.0f}x liquidity — often wash "
+                     f"trading or extreme volatility, not organic demand"})
+
+    created = token.get("pair_created_at")
+    if created and now_ms:
+        age_hours = (now_ms - created) / 3_600_000.0
+        if 0 <= age_hours < NEW_POOL_HOURS_YELLOW:
+            flags.append({"level": "yellow", "reason":
+                         f"pool is only {age_hours:.1f}h old — very new and unproven"})
+
+    return flags
+
+
+def risk_verdict(flags: list[dict]) -> str:
+    if any(f["level"] == "red" for f in flags):
+        return "HIGH RISK — red flag(s) present"
+    if any(f["level"] == "yellow" for f in flags):
+        return "ELEVATED RISK — caution flag(s) present"
+    return "no obvious red flags detected (still speculative — not investment advice)"
+
+
+def check_token(token_address: str, *, env: Optional[dict] = None) -> dict:
+    """Fetch live data and run the mechanical screen. Read-only — no wallet
+    spend, no guards to pass (there's nothing to protect against here)."""
+    import time
+
+    from hf_trading_bot import memecoin_data
+
+    token = memecoin_data.get_token(token_address, env=env)
+    if not token:
+        raise MemecoinError(f"no DexScreener liquidity pool found for {token_address} "
+                            f"— either brand new or not tradable yet")
+    mint_info = solana_wallet.get_mint_info(token_address, env=env)
+    flags = risk_flags(token, mint_info, now_ms=int(time.time() * 1000))
+    return {"token": token, "mint_info": mint_info, "flags": flags,
+            "verdict": risk_verdict(flags)}
+
+
 # ---- network-touching orchestration -----------------------------------
 
 def get_sol_price_usd(*, env: Optional[dict] = None) -> float:

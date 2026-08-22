@@ -1719,6 +1719,37 @@ def memecoin_scan(query, limit):
                    f"{(t['symbol'] or '?'):<10} {t['address']}  (no price data)")
 
 
+@memecoin.command("check")
+@click.option("--token", "token_address", required=True, help="Token mint address to screen.")
+def memecoin_check(token_address):
+    """Run mechanical rug-risk checks: mint/freeze authority, liquidity,
+    volume/liquidity ratio, pool age. Read-only — no wallet touched, nothing
+    spent. PASSING IS NOT A RECOMMENDATION: there are no fundamentals for a
+    memecoin, only common-scam-pattern detection. Most tokens that pass this
+    screen still go to zero on momentum decay alone."""
+    from hf_trading_bot import memecoin
+
+    try:
+        result = memecoin.check_token(token_address)
+    except Exception as e:  # noqa: BLE001
+        raise click.ClickException(str(e))
+    t = result["token"]
+    click.echo(f"{(t['symbol'] or '?')}  {token_address}")
+    click.echo(f"  price ${t['price_usd']:.8f}  liq ${t['liquidity_usd']:,.0f}  "
+              f"vol24h ${t['volume_24h_usd']:,.0f}"
+              if t['price_usd'] is not None else "  (no price data)")
+    mi = result["mint_info"]
+    click.echo(f"  mint authority:   {mi['mint_authority'] or 'revoked (good)'}")
+    click.echo(f"  freeze authority: {mi['freeze_authority'] or 'revoked (good)'}")
+    if not result["flags"]:
+        click.echo("  No flags raised.")
+    for f in result["flags"]:
+        click.echo(f"  [{f['level'].upper()}] {f['reason']}")
+    click.echo(f"\nVerdict: {result['verdict']}")
+    click.echo("This is a mechanical scam-pattern screen, not investment advice — "
+              "a token can pass every check here and still be worthless.")
+
+
 @memecoin.command("quote")
 @click.option("--token", "token_address", required=True, help="Token mint address to buy.")
 @click.option("--usd", "usd_amount", required=True, type=float)

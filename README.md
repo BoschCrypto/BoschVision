@@ -418,6 +418,7 @@ intended budget in it.
 hf-bot memecoin wallet                          # address, SOL balance, budget used
 hf-bot memecoin scan                             # trending Solana tokens (data only)
 hf-bot memecoin scan --query BONK                # search for a specific token
+hf-bot memecoin check --token <MINT>             # mechanical rug-risk screen — read-only
 hf-bot memecoin quote --token <MINT> --usd 10    # preview a buy — spends nothing
 hf-bot memecoin buy --token <MINT> --usd 10 --dry-run   # full preview, still nothing sent
 hf-bot memecoin buy --token <MINT> --usd 10      # real trade
@@ -427,6 +428,23 @@ hf-bot memecoin multi-buy --count 3 --usd-each 10          # spread across 3 tre
 hf-bot memecoin multi-buy --usd-each 10 --tokens <M1>,<M2> # or name them explicitly
 hf-bot memecoin positions                        # live holdings + unrealized P/L
 ```
+
+**On `memecoin check` — what it can and can't tell you.** `scan` lists tokens
+by *paid promotion*, not quality — attention, not a recommendation. `check`
+is the closer thing to real screening: it reads live, mechanical facts and
+flags the most common instant-rug patterns —
+- **mint/freeze authority not revoked** (red) — the creator can mint
+  unlimited new supply, or freeze your wallet's tokens outright;
+- **thin liquidity** (red under $5k, yellow under $20k) — high slippage,
+  possibly unsellable;
+- **volume far exceeding liquidity** (yellow) — often wash trading, not
+  organic demand;
+- **a brand-new pool** (yellow) — unproven.
+
+**Passing every check is not investment advice.** A memecoin has no
+fundamentals for this to evaluate — `check` only rules out the specific,
+well-known scam mechanics above. Most tokens that pass it still go to zero on
+momentum decay alone; use it to avoid the obvious traps, not to pick winners.
 
 **On "multi-token" vs. arbitrage:** true cross-DEX arbitrage on Solana is a
 speed contest against professional MEV infrastructure — not something worth
