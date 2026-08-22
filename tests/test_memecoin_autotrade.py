@@ -150,6 +150,63 @@ def test_cycle_one_bad_position_does_not_stop_the_rest(storage, monkeypatch):
     assert len(report["exits"]) == 1 and report["exits"][0]["token_address"] == "GOOD"
 
 
+def test_exit_check_jupiter_network_error_does_not_stop_other_positions(storage, monkeypatch):
+    # Real bug found in live testing: a Jupiter DNS/network failure during a
+    # sell attempt raises jupiter.JupiterError, not memecoin.MemecoinError --
+    # this is the fast, risk-critical exit loop, so letting that propagate
+    # would skip checking every OTHER held position for this pass too.
+    from hf_trading_bot import jupiter
+
+    storage.set_kill_switch(False)
+    for addr in ("BAD", "GOOD"):
+        storage.record_memecoin_trade(side="buy", token_address=addr, token_symbol=addr,
+                                      sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                      tx_signature=f"s-{addr}", status="confirmed")
+    monkeypatch.setattr(memecoin, "list_positions",
+                        lambda s, env=None: [_position("BAD", "BAD", 0.5),
+                                             _position("GOOD", "GOOD", 0.5)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+
+    def fake_execute_sell(token, pct, s, *, kill_switch, env=None, **k):
+        if token == "BAD":
+            raise jupiter.JupiterError("Jupiter unreachable: [Errno 11001] getaddrinfo failed")
+        return {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.05,
+               "usd_amount": 5.0}
+    monkeypatch.setattr(memecoin, "execute_sell", fake_execute_sell)
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    assert len(report["errors"]) == 1 and report["errors"][0]["token_address"] == "BAD"
+    assert len(report["exits"]) == 1 and report["exits"][0]["token_address"] == "GOOD"
+
+
+def test_cycle_entry_buy_jupiter_network_error_recorded_not_raised(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+    candidate = {"address": "NEW1", "symbol": "NEW", "liquidity_usd": 200_000,
+                "volume_24h_usd": 500_000, "price_change_h1_pct": 15.0,
+                "price_change_h6_pct": 10.0, "price_change_h24_pct": 20.0,
+                "buys_h1": 90, "sells_h1": 10, "buys_h24": 500, "sells_h24": 300,
+                "pair_created_at": None}
+    monkeypatch.setattr(memecoin_data, "trending", lambda limit=30, env=None: [candidate])
+    monkeypatch.setattr(memecoin_data, "filter_candidates", lambda rows, **k: rows)
+    monkeypatch.setattr(solana_wallet, "get_mint_info",
+                        lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
+    monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
+
+    from hf_trading_bot import jupiter
+
+    def fake_execute_buy(token, usd, s, **k):
+        raise jupiter.JupiterError("Jupiter unreachable: [Errno 11001] getaddrinfo failed")
+    monkeypatch.setattr(memecoin, "execute_buy", fake_execute_buy)
+
+    report = memecoin.run_autotrade_cycle(
+        storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25",
+                          MEMECOIN_WALLET_BUDGET_USD="50"))
+    assert report["entries"] == []
+    assert report["errors"][0]["stage"] == "entry-buy"
+    assert "unreachable" in report["errors"][0]["error"]
+
+
 def test_cycle_enters_on_passing_candidate(storage, monkeypatch):
     storage.set_kill_switch(False)
     monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])

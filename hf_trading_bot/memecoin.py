@@ -391,7 +391,7 @@ def multi_buy(token_addresses: list[str], usd_each: float, storage, *,
                             slippage_bps=slippage_bps, dry_run=dry_run, env=env)
             r["token_address"] = addr
             r["ok"] = True
-        except MemecoinError as e:
+        except (MemecoinError, jupiter.JupiterError, solana_wallet.WalletError) as e:
             r = {"token_address": addr, "ok": False, "error": str(e)}
         results.append(r)
     return results
@@ -519,7 +519,12 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) 
             report["exits"].append({"token_address": p.token_address, "symbol": p.symbol,
                                     "sell_pct": sig.sell_pct, "reason": sig.reason,
                                     "result": result})
-        except MemecoinError as e:
+        except (MemecoinError, jupiter.JupiterError, solana_wallet.WalletError) as e:
+            # A transient Jupiter/RPC failure on ONE position must never
+            # abort checking the rest — this is the fast, risk-critical
+            # loop; letting an exception propagate here would skip every
+            # other held position's exit check for this pass, the opposite
+            # of what a stop-loss check is for.
             report["errors"].append({"stage": "exit", "token_address": p.token_address,
                                      "error": str(e)})
 
@@ -662,7 +667,10 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
                                       "score": sig.score, "usd_amount": size, "result": result})
             remaining -= size
             bought += 1
-        except MemecoinError as e:
+        except (MemecoinError, jupiter.JupiterError, solana_wallet.WalletError) as e:
+            # Same reasoning as run_exit_check: a transient network failure
+            # on ONE candidate must not abort scoring/buying the rest of
+            # this cycle's picked list.
             report["errors"].append({"stage": "entry-buy", "token_address": t["address"],
                                      "error": str(e)})
 

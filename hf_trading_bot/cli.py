@@ -1960,7 +1960,7 @@ def memecoin_quote_cmd(token_address, usd_amount):
 def memecoin_buy(cfg, token_address, usd_amount, slippage_bps, dry_run):
     """Buy TOKEN with USD_AMOUNT worth of SOL. Real money — see `hf-bot
     memecoin wallet` and the README before using this."""
-    from hf_trading_bot import memecoin
+    from hf_trading_bot import jupiter, memecoin, solana_wallet
 
     storage = _load_storage(cfg)
     try:
@@ -1969,7 +1969,7 @@ def memecoin_buy(cfg, token_address, usd_amount, slippage_bps, dry_run):
             token_address, usd_amount, storage,
             kill_switch=bool(settings["kill_switch_active"]),
             slippage_bps=slippage_bps, dry_run=dry_run)
-    except memecoin.MemecoinError as e:
+    except (memecoin.MemecoinError, jupiter.JupiterError, solana_wallet.WalletError) as e:
         storage.close()
         raise click.ClickException(str(e))
     finally:
@@ -2000,7 +2000,7 @@ def memecoin_buy(cfg, token_address, usd_amount, slippage_bps, dry_run):
 @click.pass_obj
 def memecoin_sell(cfg, token_address, pct, slippage_bps, mark_trim, dry_run):
     """Sell PCT% of the held balance of TOKEN back to SOL."""
-    from hf_trading_bot import memecoin
+    from hf_trading_bot import jupiter, memecoin, solana_wallet
 
     storage = _load_storage(cfg)
     try:
@@ -2016,7 +2016,7 @@ def memecoin_sell(cfg, token_address, pct, slippage_bps, mark_trim, dry_run):
                 storage.memecoin_clear_position_state(token_address)
             elif mark_trim:
                 storage.memecoin_mark_trimmed(token_address, int(mark_trim))
-    except memecoin.MemecoinError as e:
+    except (memecoin.MemecoinError, jupiter.JupiterError, solana_wallet.WalletError) as e:
         storage.close()
         raise click.ClickException(str(e))
     finally:
@@ -2547,7 +2547,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         """Parse and run one typed memecoin command from the dashboard's own
         input. Real money on buy/sell — the typed command is the confirmation,
         same as running the equivalent CLI command by hand."""
-        from hf_trading_bot import memecoin, memecoin_data, memecoin_strategy
+        from hf_trading_bot import jupiter, memecoin, memecoin_data, memecoin_strategy
+        from hf_trading_bot import solana_wallet as _sw
 
         parts = text.strip().split()
         if not parts:
@@ -2567,7 +2568,6 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
             # for diagnosing why the loop isn't (or is) entering.
             show_all = len(parts) >= 2 and parts[1].lower() == "all"
             import time as _t
-            from hf_trading_bot import solana_wallet as _sw
             now_ms = int(_t.time() * 1000)
             results = []
 
@@ -2685,7 +2685,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                 settings = s.get_settings()
                 result = memecoin.execute_buy(
                     parts[1], usd, s, kill_switch=bool(settings["kill_switch_active"]))
-            except memecoin.MemecoinError as e:
+            except (memecoin.MemecoinError, jupiter.JupiterError, _sw.WalletError) as e:
                 s.close()
                 return {"ok": False, "error": str(e)}
             s.close()
@@ -2712,7 +2712,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     parts[1], pct, s, kill_switch=bool(settings["kill_switch_active"]))
                 if pct >= 99.9:
                     s.memecoin_clear_position_state(parts[1])
-            except memecoin.MemecoinError as e:
+            except (memecoin.MemecoinError, jupiter.JupiterError, _sw.WalletError) as e:
                 s.close()
                 return {"ok": False, "error": str(e)}
             s.close()

@@ -95,6 +95,27 @@ def test_multi_buy_one_bad_token_does_not_stop_the_rest(storage, monkeypatch):
     assert results[0]["tx_signature"] == "sig-GOOD1"
 
 
+def test_multi_buy_jupiter_network_error_does_not_stop_the_rest(storage, monkeypatch):
+    # Real bug found in live testing: execute_buy can raise jupiter.JupiterError
+    # (a network/DNS failure calling Jupiter) or solana_wallet.WalletError, not
+    # just memecoin.MemecoinError -- multi_buy must catch those too, or one
+    # transient network hiccup on ONE token silently aborts the whole batch.
+    from hf_trading_bot import jupiter
+
+    def fake_execute_buy(token, usd, s, *, kill_switch, slippage_bps=100, dry_run=False, env=None):
+        if token == "BAD":
+            raise jupiter.JupiterError("Jupiter unreachable: [Errno 11001] getaddrinfo failed")
+        return {"dry_run": False, "side": "buy", "usd_amount": usd,
+               "sol_amount": 0.01, "tx_signature": f"sig-{token}", "status": "confirmed",
+               "price_impact_pct": 0.1}
+    monkeypatch.setattr(memecoin, "execute_buy", fake_execute_buy)
+
+    results = memecoin.multi_buy(["GOOD1", "BAD", "GOOD2"], 5.0, storage, kill_switch=False)
+    assert [r["ok"] for r in results] == [True, False, True]
+    assert "unreachable" in results[1]["error"]
+    assert results[2]["tx_signature"] == "sig-GOOD2"
+
+
 def test_multi_buy_dry_run_passthrough(storage, monkeypatch):
     monkeypatch.setattr(memecoin, "execute_buy",
                         lambda token, usd, s, **k: {"dry_run": True, "sol_amount": 0.01,
