@@ -78,6 +78,20 @@ def get_token(address: str, *, env: Optional[dict] = None) -> Optional[dict]:
     return _normalize(pairs[0])
 
 
+def filter_candidates(rows: list[dict], *, min_liquidity_usd: float = 10_000.0,
+                      limit: int = 5, exclude: Optional[set] = None) -> list[dict]:
+    """Narrow a token list to plausible multi-buy candidates: real liquidity
+    (a floor against the thinnest, most rug-prone pools — not a safety
+    guarantee), not already held, ranked by 24h volume. Pure filtering, no
+    network — the part this is worth unit-testing exhaustively."""
+    exclude = exclude or set()
+    filtered = [r for r in rows
+               if r.get("address") not in exclude
+               and (r.get("liquidity_usd") or 0) >= min_liquidity_usd]
+    filtered.sort(key=lambda r: r.get("volume_24h_usd") or 0, reverse=True)
+    return filtered[: max(0, limit)]
+
+
 def trending(limit: int = 20, *, env: Optional[dict] = None) -> list[dict]:
     """Currently-boosted (paid promotion, not necessarily quality) Solana
     tokens, enriched with price/liquidity/volume. This is momentum/attention,

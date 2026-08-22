@@ -1833,6 +1833,97 @@ def memecoin_history(cfg, limit):
     click.echo(f"\nNet deployed: ${net:,.2f}")
 
 
+@memecoin.command("multi-buy")
+@click.option("--count", default=3, type=int,
+              help="How many tokens to buy (ignored if --tokens is given).")
+@click.option("--usd-each", required=True, type=float, help="USD to spend per token.")
+@click.option("--tokens", "tokens_csv", default=None,
+              help="Comma-separated mint addresses to use instead of scanning trending.")
+@click.option("--min-liquidity", default=10_000.0, type=float,
+              help="Skip trending candidates below this liquidity, in USD.")
+@click.option("--slippage-bps", default=100, type=int)
+@click.option("--dry-run", is_flag=True, help="Preview every leg — sign and send nothing.")
+@click.pass_obj
+def memecoin_multi_buy(cfg, count, usd_each, tokens_csv, min_liquidity, slippage_bps, dry_run):
+    """Buy several tokens at once — spread exposure across --count trending
+    tokens (or an explicit --tokens list) instead of concentrating in one.
+    Each leg still passes through the same per-trade ceiling and cumulative
+    wallet budget as a single buy; the budget running out partway is reported,
+    not silently bypassed."""
+    from hf_trading_bot import memecoin, memecoin_data
+
+    storage = _load_storage(cfg)
+    try:
+        if tokens_csv:
+            addrs = [t.strip() for t in tokens_csv.split(",") if t.strip()]
+        else:
+            held = set(storage.memecoin_distinct_tokens())
+            try:
+                candidates = memecoin_data.trending(limit=30)
+            except memecoin_data.DexScreenerError as e:
+                raise click.ClickException(str(e))
+            picked = memecoin_data.filter_candidates(
+                candidates, min_liquidity_usd=min_liquidity, limit=count, exclude=held)
+            addrs = [c["address"] for c in picked]
+        if not addrs:
+            click.echo("No candidate tokens found — try --min-liquidity lower, "
+                       "or pass --tokens explicitly.")
+            return
+        settings = storage.get_settings()
+        results = memecoin.multi_buy(
+            addrs, usd_each, storage, kill_switch=bool(settings["kill_switch_active"]),
+            slippage_bps=slippage_bps, dry_run=dry_run)
+    finally:
+        storage.close()
+
+    bought = 0
+    for r in results:
+        short = r["token_address"][:10] + "…"
+        if not r.get("ok", True):
+            click.echo(f"  {short}  SKIPPED — {r['error']}")
+        elif r.get("dry_run"):
+            click.echo(f"  {short}  DRY RUN — {r['sol_amount']:.5f} SOL, "
+                       f"impact {r['price_impact_pct']:.2f}%")
+        else:
+            bought += 1
+            click.echo(f"  {short}  BOUGHT — tx {r['tx_signature']} ({r['status']})")
+    if bought and not dry_run:
+        try:
+            from hf_trading_bot import notify
+            notify.notify(f"VANTRIX memecoin multi-buy — {bought}/{len(results)} placed",
+                          f"${usd_each:,.2f} each across {len(results)} tokens; "
+                          f"{bought} placed, {len(results) - bought} skipped.")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+@memecoin.command("positions")
+@click.pass_obj
+def memecoin_positions(cfg):
+    """Current memecoin holdings: on-chain balance, cost basis, and
+    unrealized P/L against a live price. Read-only — no wallet action."""
+    from hf_trading_bot import memecoin, solana_wallet
+
+    storage = _load_storage(cfg)
+    try:
+        positions = memecoin.list_positions(storage)
+    except (memecoin.MemecoinError, solana_wallet.WalletError) as e:
+        raise click.ClickException(str(e))
+    finally:
+        storage.close()
+    if not positions:
+        click.echo("No open memecoin positions.")
+        return
+    for p in positions:
+        value = f"${p.current_value_usd:,.2f}" if p.current_value_usd is not None else "n/a"
+        pnl = (f"{p.unrealized_pnl_usd:+,.2f} ({p.unrealized_pnl_pct:+.1f}%)"
+              if p.unrealized_pnl_usd is not None and p.unrealized_pnl_pct is not None
+              else "n/a (no live price)")
+        click.echo(f"{(p.symbol or '?'):<10} {p.token_address[:10]}…  "
+                   f"held {p.balance:,.4f}  cost ${p.cost_basis_usd:,.2f}  "
+                   f"value {value}  P/L {pnl}")
+
+
 @cli.command()
 @click.option("--host", default="127.0.0.1", help="Bind address for the local server.")
 @click.option("--port", default=8420, type=int, help="Port for the local server.")

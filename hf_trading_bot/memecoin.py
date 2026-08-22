@@ -234,6 +234,71 @@ def execute_sell(token_address: str, pct: float, storage, *,
             "tx_signature": sig, "status": status}
 
 
+def multi_buy(token_addresses: list[str], usd_each: float, storage, *,
+             kill_switch: bool, slippage_bps: int = 100, dry_run: bool = False,
+             env: Optional[dict] = None) -> list[dict]:
+    """Buy several tokens in sequence, spreading exposure instead of
+    concentrating it in one. Each token goes through the exact same
+    `execute_buy` — same per-trade ceiling, same cumulative wallet budget — so
+    if the budget runs out partway, the remaining tokens are cleanly refused
+    and reported, never silently skipped or force-fit. One bad token (no
+    route, guard tripped) never stops the rest of the list."""
+    results: list[dict] = []
+    for addr in token_addresses:
+        try:
+            r = execute_buy(addr, usd_each, storage, kill_switch=kill_switch,
+                            slippage_bps=slippage_bps, dry_run=dry_run, env=env)
+            r["token_address"] = addr
+            r["ok"] = True
+        except MemecoinError as e:
+            r = {"token_address": addr, "ok": False, "error": str(e)}
+        results.append(r)
+    return results
+
+
+@dataclass
+class Position:
+    token_address: str
+    symbol: Optional[str]
+    balance: float
+    cost_basis_usd: float
+    current_price_usd: Optional[float]
+    current_value_usd: Optional[float]
+    unrealized_pnl_usd: Optional[float]
+    unrealized_pnl_pct: Optional[float]
+
+
+def list_positions(storage, *, env: Optional[dict] = None) -> list[Position]:
+    """Every token this wallet currently holds a nonzero balance of, with a
+    live price (when DexScreener has one) and unrealized P/L against the
+    local cost-basis ledger. On-chain balance is the source of truth for
+    'what's held' — the ledger is only used for cost basis."""
+    from hf_trading_bot import memecoin_data
+
+    keypair = solana_wallet.load_keypair(env)
+    pub = solana_wallet.pubkey_str(keypair)
+    out: list[Position] = []
+    for addr in storage.memecoin_distinct_tokens():
+        balance = solana_wallet.get_token_balance(pub, addr, env=env)
+        if not balance or balance["amount_raw"] <= 0:
+            continue
+        cost_basis = storage.memecoin_token_net_usd(addr)
+        try:
+            token = memecoin_data.get_token(addr, env=env)
+        except memecoin_data.DexScreenerError:
+            token = None
+        price = token["price_usd"] if token else None
+        value = balance["ui_amount"] * price if price is not None else None
+        pnl = (value - cost_basis) if value is not None else None
+        pnl_pct = (pnl / cost_basis * 100) if (pnl is not None and cost_basis > 1e-9) else None
+        out.append(Position(
+            token_address=addr, symbol=(token["symbol"] if token else None),
+            balance=balance["ui_amount"], cost_basis_usd=cost_basis,
+            current_price_usd=price, current_value_usd=value,
+            unrealized_pnl_usd=pnl, unrealized_pnl_pct=pnl_pct))
+    return out
+
+
 def _safe_decimals(token_address: str, *, env: Optional[dict]) -> int:
     try:
         return solana_wallet.get_token_decimals(token_address, env=env)

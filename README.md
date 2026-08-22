@@ -423,7 +423,19 @@ hf-bot memecoin buy --token <MINT> --usd 10 --dry-run   # full preview, still no
 hf-bot memecoin buy --token <MINT> --usd 10      # real trade
 hf-bot memecoin sell --token <MINT> --pct 100    # sell all of a held position
 hf-bot memecoin history                          # every trade this bot has made
+hf-bot memecoin multi-buy --count 3 --usd-each 10          # spread across 3 trending tokens
+hf-bot memecoin multi-buy --usd-each 10 --tokens <M1>,<M2> # or name them explicitly
+hf-bot memecoin positions                        # live holdings + unrealized P/L
 ```
+
+**On "multi-token" vs. arbitrage:** true cross-DEX arbitrage on Solana is a
+speed contest against professional MEV infrastructure — not something worth
+attempting here. `multi-buy` is the honest version of "spread bets across
+several coins instead of one": it buys `--count` trending tokens (filtered by
+a minimum-liquidity floor, ranked by volume) or an explicit `--tokens` list,
+each through the exact same per-trade ceiling and cumulative wallet budget as
+a single buy. One bad token (no liquidity route, a guard trip) is reported and
+skipped — it never stops the rest of the list or bypasses the budget.
 
 **A note on testing:** the sign-and-submit path could not be exercised
 against the live Solana network while building this (this dev environment's

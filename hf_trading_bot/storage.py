@@ -733,5 +733,24 @@ class Storage:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def memecoin_distinct_tokens(self) -> list[str]:
+        """Every token this wallet has ever bought or sold through the bot
+        (excluding failed submissions) — the candidate set for a positions scan."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT token_address FROM memecoin_trades WHERE status != 'failed'"
+        ).fetchall()
+        return [r["token_address"] for r in rows]
+
+    def memecoin_token_net_usd(self, token_address: str) -> float:
+        """Net USD invested in one token (buys minus sells). Can go negative
+        if it's been fully sold at a profit — that's a realized gain, not a
+        cost basis, so callers only use this for tokens still held."""
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN side='buy' THEN usd_amount ELSE -usd_amount END), 0) AS net "
+            "FROM memecoin_trades WHERE token_address = ? AND status != 'failed'",
+            (token_address,),
+        ).fetchone()
+        return float(row["net"])
+
     def close(self) -> None:
         self._conn.close()
