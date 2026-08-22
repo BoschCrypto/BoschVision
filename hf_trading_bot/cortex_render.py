@@ -60,6 +60,28 @@ def render_html(snap: CortexSnapshot, *, mode: Mode = "static") -> str:
             'placeholder="static snapshot — run `hf-bot dashboard` to speak to APEX" />'
             '<button type="button" id="cmdsend" disabled>OFFLINE</button></div>'
         )
+    # A second, separate command surface for memecoin trading — real money on
+    # buy/sell, so it is deliberately not merged into the APEX console (which
+    # only ever queues committee work). Lives in its own static panel block
+    # (not inside the polled readouts panel) so the input never loses focus
+    # or an in-progress value to a refresh.
+    if mode == "live":
+        memecoin_cmdbar = (
+            '<div style="display:flex;gap:6px">'
+            '<input id="memecoincmdinput" type="text" '
+            'placeholder="screen | check <mint> | buy <mint> <usd> | sell <mint> <pct>" '
+            'style="flex:1;background:transparent;border:1px solid var(--border-hi);'
+            'border-radius:6px;color:var(--text);font-family:inherit;font-size:11px;'
+            'padding:7px 9px;outline:none" />'
+            '<button type="button" id="memecoincmdsend" class="study-btn" '
+            'style="margin:0">GO</button></div>'
+            '<div id="memecoincmdmsg" class="muted" style="margin-top:7px;font-size:10.5px;'
+            'line-height:1.5;min-height:1em"></div>'
+        )
+    else:
+        memecoin_cmdbar = (
+            '<div class="muted">static snapshot — run `hf-bot dashboard` to trade</div>'
+        )
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -90,6 +112,10 @@ def render_html(snap: CortexSnapshot, *, mode: Mode = "static") -> str:
         <div id="roster-rows"></div>
       </div>
       <div class="panel-block" id="readouts"></div>
+      <div class="panel-block" id="memecoin-cmd">
+        <div class="panel-title">MEMECOIN COMMAND</div>
+        {memecoin_cmdbar}
+      </div>
       <div class="disclaimer">{DISCLAIMER}</div>
       <div class="generated">generated <span id="gen-at"></span></div>
     </aside>
@@ -794,6 +820,72 @@ _APP_JS = r"""
            '</svg>';
   }
 
+  function memecoinPanel(d) {
+    var m = d.memecoin || {};
+    var live = !!window.__CORTEX_LIVE__;
+    var at = m.autotrade || {};
+    var h = '<div class="readout"><h4>Memecoin' +
+           (at.enabled ? ' <span class="autoexec" style="display:inline;margin-left:8px;'
+                        + 'padding:1px 7px">AUTOTRADE ON</span>' : '') + '</h4>';
+    if (!m.configured) {
+      h += '<div class="muted">Not configured — set SOLANA_PRIVATE_KEY in .env to see the ' +
+           'wallet, positions, and enable autotrade. See the READMEs Memecoin trading ' +
+           'section.</div>';
+      return h + '</div>';
+    }
+    var wallet = m.wallet || '';
+    h += '<div class="sub">' + wallet.slice(0, 4) + '…' + wallet.slice(-4) + ' &middot; ' +
+         (m.sol_balance != null ? m.sol_balance.toFixed(4) : '0.0000') + ' SOL</div>';
+    h += '<div class="line"><span class="muted">budget deployed</span><span>$' +
+         (m.net_deployed_usd || 0).toFixed(2) + ' / $' + (m.budget_usd || 0).toFixed(2) +
+         '</span></div>';
+    if (at.enabled) {
+      var lastRun = at.last_run_at ? new Date(at.last_run_at).toLocaleTimeString() : 'not yet';
+      h += '<div class="line"><span class="muted">cycle</span><span>every ' +
+           at.cycle_seconds + 's &middot; last ' + lastRun + '</span></div>';
+      if (at.last_report) {
+        var rep = at.last_report;
+        h += '<div class="line"><span class="muted">last result</span><span>' +
+             rep.entries + ' buy, ' + rep.exits + ' sell' +
+             (rep.errors ? ', ' + rep.errors + ' err' : '') +
+             (rep.skipped ? ' (' + esc(rep.skipped) + ')' : '') + '</span></div>';
+      }
+    } else {
+      h += '<div class="line"><span class="muted">autotrade</span><span>off — launch with ' +
+           '--memecoin-autotrade</span></div>';
+    }
+    if (live) {
+      h += '<button class="study-btn" data-memecoin-cycle="1" ' +
+           'style="margin:8px 0 0;float:none;display:block;width:100%">RUN CYCLE NOW</button>';
+    }
+    var positions = m.positions || [];
+    if (positions.length) {
+      h += '<div style="margin-top:12px;font-size:9px;letter-spacing:1.5px;color:var(--dim);' +
+           'text-transform:uppercase">Positions</div>';
+      for (var i = 0; i < positions.length; i++) {
+        var p = positions[i];
+        var pnlCls = (p.unrealized_pnl_usd || 0) >= 0 ? 'pos' : 'neg';
+        var valTxt = p.current_value_usd != null ? '$' + p.current_value_usd.toFixed(2) : 'n/a';
+        var pnlTxt = p.unrealized_pnl_pct != null
+          ? ' (' + (p.unrealized_pnl_pct >= 0 ? '+' : '') + p.unrealized_pnl_pct.toFixed(0) + '%)'
+          : '';
+        h += '<div class="price"><div class="pl"><span class="psym">' + (p.symbol || '?') +
+             '</span><span class="pval ' + pnlCls + '">' + valTxt + pnlTxt + '</span></div></div>';
+      }
+    }
+    var acts = m.activity || [];
+    if (acts.length) {
+      h += '<div style="margin-top:12px;font-size:9px;letter-spacing:1.5px;color:var(--dim);' +
+           'text-transform:uppercase">Activity</div>';
+      for (var j = 0; j < acts.length; j++) {
+        var a = acts[j];
+        h += '<div class="ev"><span class="evk">' + a.kind.toUpperCase() +
+             '</span><span class="evt">' + esc(a.detail) + '</span></div>';
+      }
+    }
+    return h + '</div>';
+  }
+
   function systemPanel(d) {
     var sys = d.system || {};
     var live = !!window.__CORTEX_LIVE__;
@@ -858,7 +950,7 @@ _APP_JS = r"""
   }
 
   function readouts(d) {
-    var h = systemPanel(d) + accountPanel(d) + pricesPanel(d) + apexConsolePanel(d) + ordersPanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
+    var h = systemPanel(d) + memecoinPanel(d) + accountPanel(d) + pricesPanel(d) + apexConsolePanel(d) + ordersPanel(d) + committeePanel(d) + memoryPanel(d) + knowledgePanel(d);
     // portfolio vs SPY
     h += '<div class="readout"><h4>Portfolio vs SPY</h4>';
     if (d.portfolio) {
@@ -959,6 +1051,24 @@ _CMD_JS = r"""
         .catch(function () { btn.disabled = false; });
       return;
     }
+    // Run a memecoin autotrade cycle right now — real trades may fire.
+    if (btn.getAttribute("data-memecoin-cycle")) {
+      if (!window.confirm("Run a memecoin cycle now? Real trades may fire (buys/sells).")) return;
+      btn.disabled = true;
+      var mmsg = document.getElementById("memecoinmsg");
+      if (mmsg) mmsg.textContent = "running…";
+      fetch("/api/memecoin/cycle", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"})
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (mmsg) mmsg.textContent = j.message || "started";
+          setTimeout(function () {
+            if (window.__CORTEX_REFRESH__) window.__CORTEX_REFRESH__();
+            btn.disabled = false;
+          }, 4000);
+        })
+        .catch(function () { btn.disabled = false; });
+      return;
+    }
     // Archive button — clean the console, no tokens, no confirm needed.
     if (btn.getAttribute("data-archive")) {
       btn.disabled = true;
@@ -1024,6 +1134,47 @@ _CMD_JS = r"""
         msg.textContent = "no live server — run `hf-bot dashboard` to dispatch commands";
       });
     setTimeout(function () { msg.className = ""; }, 6000);
+  });
+
+  // Memecoin command bar — a separate surface from APEX; real money on
+  // buy/sell, dispatched the moment you send it, same as typing the
+  // equivalent CLI command.
+  function sendMemecoinCommand() {
+    var input = document.getElementById("memecoincmdinput");
+    var out = document.getElementById("memecoincmdmsg");
+    if (!input) return;
+    var text = (input.value || "").trim();
+    if (!text) return;
+    if (out) out.textContent = "running…";
+    fetch("/api/memecoin/command", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({text: text})
+    }).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+      .then(function (res) {
+        if (!out) return;
+        if (!res.ok) { out.textContent = "error: " + (res.j.error || "command failed"); return; }
+        var j = res.j;
+        if (j.candidates) {
+          out.textContent = j.message + (j.candidates.length
+            ? " — " + j.candidates.map(function (c) { return c.symbol + " (" + c.score.toFixed(0) + ")"; }).join(", ")
+            : "");
+        } else if (j.flags) {
+          out.textContent = j.verdict + (j.flags.length ? " — " + j.flags.join("; ") : "");
+        } else {
+          out.textContent = j.message || "done";
+        }
+        input.value = "";
+        if (window.__CORTEX_REFRESH__) window.__CORTEX_REFRESH__();
+      })
+      .catch(function () {
+        if (out) out.textContent = "no live server — run `hf-bot dashboard`";
+      });
+  }
+  var mcSend = document.getElementById("memecoincmdsend");
+  if (mcSend) mcSend.addEventListener("click", sendMemecoinCommand);
+  var mcInput = document.getElementById("memecoincmdinput");
+  if (mcInput) mcInput.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter") sendMemecoinCommand();
   });
 })();
 """

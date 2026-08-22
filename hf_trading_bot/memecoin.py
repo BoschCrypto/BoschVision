@@ -380,6 +380,128 @@ def list_positions(storage, *, env: Optional[dict] = None) -> list[Position]:
     return out
 
 
+MAX_NEW_POSITIONS_PER_CYCLE = 2
+
+
+def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
+                        max_new_positions: int = MAX_NEW_POSITIONS_PER_CYCLE) -> dict:
+    """One full autonomous pass: check exits on every held position FIRST (a
+    stop-loss always gets first claim on attention and budget), then look for
+    new entries with whatever budget remains. Returns a report of every
+    action taken, skipped, or errored — never raises for a single token's
+    failure, so one bad RPC call or a token that goes illiquid never stops
+    the rest of the pass or a later cycle.
+
+    This is the function both the dashboard's background loop and a manual
+    'run once' trigger call — the loop is just this on a timer."""
+    import time as _time
+
+    from hf_trading_bot import memecoin_data
+
+    report: dict = {"exits": [], "entries": [], "errors": [], "skipped": None}
+
+    kill_switch = bool(storage.get_settings()["kill_switch_active"])
+    if kill_switch:
+        report["skipped"] = "kill switch is ON"
+        return report
+    if not is_confirmed(env):
+        report["skipped"] = f"{CONFIRM_ENV} is not set"
+        return report
+
+    try:
+        positions = list_positions(storage, env=env)
+    except (MemecoinError, solana_wallet.WalletError) as e:
+        report["errors"].append({"stage": "positions", "error": str(e)})
+        return report
+
+    # 1. Exits — protect capital and lock in gains before anything else.
+    held_addresses = {p.token_address for p in positions}
+    for p in positions:
+        try:
+            basis = storage.memecoin_position_basis(p.token_address)
+            if not basis["avg_entry_price"] or not p.current_price_usd:
+                continue
+            peak = storage.memecoin_update_peak(p.token_address, p.current_price_usd)
+            state = storage.memecoin_peak_state(p.token_address) or {}
+            hours_held = 0.0
+            if basis["first_buy_at"]:
+                from datetime import datetime, timezone
+                first = datetime.fromisoformat(basis["first_buy_at"].replace("Z", "+00:00"))
+                hours_held = (datetime.now(timezone.utc) - first).total_seconds() / 3600.0
+            try:
+                token = memecoin_data.get_token(p.token_address, env=env)
+            except memecoin_data.DexScreenerError:
+                token = None
+
+            from hf_trading_bot import memecoin_strategy
+            sig = memecoin_strategy.exit_signal(
+                entry_price_usd=basis["avg_entry_price"], current_price_usd=p.current_price_usd,
+                peak_price_usd=peak, hours_held=hours_held, token=token,
+                already_trimmed_1=bool(state.get("trimmed_1")),
+                already_trimmed_2=bool(state.get("trimmed_2")))
+            if not sig.exit:
+                continue
+            result = execute_sell(p.token_address, sig.sell_pct, storage,
+                                  kill_switch=kill_switch, env=env)
+            if sig.sell_pct >= 99.9:
+                storage.memecoin_clear_position_state(p.token_address)
+            elif abs(sig.sell_pct - memecoin_strategy.TRIM_1_SELL_PCT) < 1e-6 and not state.get("trimmed_1"):
+                storage.memecoin_mark_trimmed(p.token_address, 1)
+            elif abs(sig.sell_pct - memecoin_strategy.TRIM_2_SELL_PCT) < 1e-6 and not state.get("trimmed_2"):
+                storage.memecoin_mark_trimmed(p.token_address, 2)
+            report["exits"].append({"token_address": p.token_address, "symbol": p.symbol,
+                                    "sell_pct": sig.sell_pct, "reason": sig.reason,
+                                    "result": result})
+        except MemecoinError as e:
+            report["errors"].append({"stage": "exit", "token_address": p.token_address,
+                                     "error": str(e)})
+
+    # 2. New entries — only with whatever budget remains after exits above.
+    net = storage.memecoin_net_deployed_usd()
+    budget = budget_usd(env)
+    remaining = budget - net
+    trade_size = max_trade_usd(env)
+    if remaining < trade_size * 0.5:
+        return report
+
+    try:
+        candidates = memecoin_data.trending(limit=30, env=env)
+    except memecoin_data.DexScreenerError as e:
+        report["errors"].append({"stage": "scan", "error": str(e)})
+        return report
+
+    from hf_trading_bot import memecoin_strategy
+    picked = memecoin_data.filter_candidates(
+        candidates, min_liquidity_usd=memecoin_strategy.MIN_LIQUIDITY_FOR_ENTRY_USD,
+        limit=30, exclude=held_addresses)
+    now_ms = int(_time.time() * 1000)
+    bought = 0
+    for t in picked:
+        if bought >= max_new_positions or remaining < trade_size * 0.5:
+            break
+        try:
+            mint_info = solana_wallet.get_mint_info(t["address"], env=env)
+        except solana_wallet.WalletError as e:
+            report["errors"].append({"stage": "entry-mint-check", "token_address": t["address"],
+                                     "error": str(e)})
+            continue
+        sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms)
+        if not sig.enter:
+            continue
+        size = min(trade_size, remaining)
+        try:
+            result = execute_buy(t["address"], size, storage, kill_switch=kill_switch, env=env)
+            report["entries"].append({"token_address": t["address"], "symbol": t["symbol"],
+                                      "score": sig.score, "usd_amount": size, "result": result})
+            remaining -= size
+            bought += 1
+        except MemecoinError as e:
+            report["errors"].append({"stage": "entry-buy", "token_address": t["address"],
+                                     "error": str(e)})
+
+    return report
+
+
 def _safe_decimals(token_address: str, *, env: Optional[dict]) -> int:
     try:
         return solana_wallet.get_token_decimals(token_address, env=env)

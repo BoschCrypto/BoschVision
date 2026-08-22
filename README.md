@@ -370,6 +370,40 @@ trades 24/7. Put pairs in your `watchlist` (see `config/settings.example.yaml`),
 chart them with `hf-bot chart BTC/USD`, or trade one with `trade BTC` in the
 console.
 
+### Memecoin dashboard panel — view, command, and (opt-in) fully autonomous
+
+Everything above also lives in `hf-bot dashboard` once `SOLANA_PRIVATE_KEY` is
+set — no separate app. A **Memecoin** panel shows your wallet, budget used,
+live positions with unrealized P/L, recent activity, and (when armed)
+autotrade status. A separate command bar next to it takes:
+```
+screen                    # candidates that pass entry criteria right now
+check <mint>              # the rug-risk screen for one token
+buy <mint> <usd>          # a real buy — the typed command is the confirmation
+sell <mint> <pct>         # a real sell, same as above
+```
+
+**Fully autonomous mode** — launch with `--memecoin-autotrade` and the bot
+runs the whole playbook above with **no approval click**: every
+`--memecoin-cycle-seconds` (default 300 = 5 min) it checks every held
+position against the exit rules and executes any that trigger, then scans
+for new entries and buys up to 2 per cycle while budget remains. This is the
+biggest step in the whole feature — say so plainly: **real money moves
+without you watching.** It only starts if `HF_BOT_I_UNDERSTAND_MEMECOIN_RISK=true`
+and `SOLANA_PRIVATE_KEY` are both configured; otherwise the dashboard prints
+a loud `BLOCKED` banner and runs everything else normally. The kill switch,
+per-trade ceiling, and wallet budget all still apply every cycle — nothing
+about autonomy raises those caps.
+
+```bash
+hf-bot dashboard --open --memecoin-autotrade                       # every 5 min
+hf-bot dashboard --open --memecoin-autotrade --memecoin-cycle-seconds 900  # every 15 min
+```
+
+Without `--memecoin-autotrade`, the dashboard still shows the wallet and
+positions (refreshed on the same interval) — you get the view and the
+command bar, and trigger a cycle manually with the **RUN CYCLE NOW** button.
+
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 
 Two commands turn "what to look out for" into concrete, checkable rules —

@@ -2096,6 +2096,18 @@ def memecoin_positions(cfg):
                    "questions answer on a cheap model too. Anything decision-shaped "
                    "(buy/sell/valuation/committee) still routes to Claude. Configure "
                    "providers in .env — see `hf-bot models check`.")
+@click.option("--memecoin-autotrade", is_flag=True,
+              help="Run the memecoin strategy autonomously while this dashboard is open: "
+                   "checks exits (stop-loss/take-profit/trailing-stop/stall) and looks for "
+                   "new entries every --memecoin-cycle-seconds, with NO approval click — "
+                   "real money, real irreversible trades. Requires SOLANA_PRIVATE_KEY and "
+                   "HF_BOT_I_UNDERSTAND_MEMECOIN_RISK=true in .env; refuses to start "
+                   "without both. Still bound by the kill switch, the per-trade ceiling "
+                   "(MEMECOIN_MAX_TRADE_USD) and the wallet budget (MEMECOIN_WALLET_BUDGET_USD).")
+@click.option("--memecoin-cycle-seconds", default=300, type=int,
+              help="Seconds between autotrade cycles (default 300 = 5 min). Also the refresh "
+                   "interval for the dashboard's memecoin wallet/positions view when "
+                   "SOLANA_PRIVATE_KEY is configured, even without --memecoin-autotrade.")
 @click.option("--open", "open_browser", is_flag=True,
               help="Open the dashboard in your default browser once the server is up.")
 @click.option("--token", default=None,
@@ -2113,7 +2125,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               runner_permission_mode: str, runner_cmd: Optional[str],
               fallback_cmd: Optional[str], auto_execute: bool,
               auto_execute_max: float, committee_model: Optional[str],
-              tiered: bool, open_browser: bool,
+              tiered: bool, memecoin_autotrade: bool, memecoin_cycle_seconds: int,
+              open_browser: bool,
               token: Optional[str], auth: bool, tunnel: bool):
     """Live Agent Cortex — a HUD visualization of the 11-agent committee.
 
@@ -2239,6 +2252,214 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         while True:
             _refresh_prices()
             _time.sleep(300)   # 5 min — market data doesn't need per-poll pulls
+
+    # Memecoin wallet/positions cache, refreshed on the same cadence as
+    # autotrade cycles when a key is configured — a snapshot poll never makes
+    # a live RPC/DexScreener call directly, same reasoning as price_cache
+    # above. Real money, so every write here is best-effort: a failed refresh
+    # keeps the last good cache rather than showing a false zero.
+    memecoin_cache: dict = {"configured": False}
+    memecoin_autotrade_status: dict = {"enabled": False, "last_run_at": None,
+                                       "last_report": None, "cycle_seconds": memecoin_cycle_seconds}
+    memecoin_activity: list = []   # recent actions for the panel, newest first
+    MEMECOIN_ACTIVITY_CAP = 30
+
+    def _memecoin_log(kind: str, detail: str):
+        memecoin_activity.insert(0, {"at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                                     "kind": kind, "detail": detail})
+        del memecoin_activity[MEMECOIN_ACTIVITY_CAP:]
+
+    def _refresh_memecoin_cache():
+        from hf_trading_bot import memecoin, solana_wallet
+        try:
+            keypair = solana_wallet.load_keypair()
+            pub = solana_wallet.pubkey_str(keypair)
+            sol = solana_wallet.get_balance_sol(pub)
+            s = Storage(db_path)
+            try:
+                net = s.memecoin_net_deployed_usd()
+                positions = memecoin.list_positions(s)
+                recent = s.recent_memecoin_trades(limit=10)
+            finally:
+                s.close()
+            memecoin_cache.update({
+                "configured": True, "wallet": pub, "sol_balance": sol,
+                "net_deployed_usd": net, "budget_usd": memecoin.budget_usd(),
+                "positions": [
+                    {"token_address": p.token_address, "symbol": p.symbol,
+                     "balance": p.balance, "cost_basis_usd": p.cost_basis_usd,
+                     "current_price_usd": p.current_price_usd,
+                     "current_value_usd": p.current_value_usd,
+                     "unrealized_pnl_usd": p.unrealized_pnl_usd,
+                     "unrealized_pnl_pct": p.unrealized_pnl_pct}
+                    for p in positions],
+                "recent_trades": [
+                    {"side": t["side"], "token_address": t["token_address"],
+                     "usd_amount": t["usd_amount"], "status": t["status"],
+                     "created_at": t["created_at"]} for t in recent],
+            })
+        except Exception:  # noqa: BLE001 — best-effort; last good cache stays
+            pass
+
+    def _memecoin_refresh_loop():
+        while True:
+            _refresh_memecoin_cache()
+            _time.sleep(max(30, memecoin_cycle_seconds))
+
+    def _run_memecoin_autotrade_cycle_once():
+        from hf_trading_bot import memecoin
+        s = Storage(db_path)
+        try:
+            report = memecoin.run_autotrade_cycle(s)
+        finally:
+            s.close()
+        memecoin_autotrade_status["last_run_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        memecoin_autotrade_status["last_report"] = {
+            "skipped": report.get("skipped"),
+            "exits": len(report.get("exits", [])), "entries": len(report.get("entries", [])),
+            "errors": len(report.get("errors", []))}
+        for e in report.get("exits", []):
+            _memecoin_log("auto-sell", f"{e.get('symbol') or e['token_address'][:8]} — "
+                          f"sold {e['sell_pct']:.0f}% — {e['reason']}")
+        for e in report.get("entries", []):
+            _memecoin_log("auto-buy", f"{e.get('symbol') or e['token_address'][:8]} — "
+                          f"${e['usd_amount']:,.2f} — score {e['score']:.0f}")
+        for err in report.get("errors", []):
+            _memecoin_log("error", f"{err.get('stage')}: {err.get('error')}")
+        if report.get("exits") or report.get("entries"):
+            try:
+                from hf_trading_bot import notify
+                lines = [f"SOLD {e.get('symbol') or e['token_address'][:8]} "
+                        f"({e['sell_pct']:.0f}%) — {e['reason']}" for e in report.get("exits", [])]
+                lines += [f"BOUGHT {e.get('symbol') or e['token_address'][:8]} "
+                         f"${e['usd_amount']:,.2f}" for e in report.get("entries", [])]
+                notify.notify("VANTRIX memecoin autotrade cycle", "\n".join(lines))
+            except Exception:  # noqa: BLE001
+                pass
+        _refresh_memecoin_cache()
+        return report
+
+    def _handle_memecoin_command(text: str) -> dict:
+        """Parse and run one typed memecoin command from the dashboard's own
+        input. Real money on buy/sell — the typed command is the confirmation,
+        same as running the equivalent CLI command by hand."""
+        from hf_trading_bot import memecoin, memecoin_data, memecoin_strategy
+
+        parts = text.strip().split()
+        if not parts:
+            return {"ok": False, "error": "empty command"}
+        verb = parts[0].lower()
+
+        if verb == "screen":
+            try:
+                candidates = memecoin_data.trending(limit=20)
+            except memecoin_data.DexScreenerError as e:
+                return {"ok": False, "error": str(e)}
+            import time as _t
+            now_ms = int(_t.time() * 1000)
+            passed = []
+            for t in candidates:
+                try:
+                    from hf_trading_bot import solana_wallet as _sw
+                    mint_info = _sw.get_mint_info(t["address"])
+                except Exception:  # noqa: BLE001
+                    continue
+                sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms)
+                if sig.enter:
+                    passed.append({"symbol": t["symbol"], "address": t["address"],
+                                   "score": sig.score})
+            _memecoin_log("screen", f"{len(passed)}/{len(candidates)} candidates passed")
+            return {"ok": True, "message": f"{len(passed)} candidate(s) passed entry criteria.",
+                    "candidates": passed}
+
+        if verb == "check" and len(parts) >= 2:
+            try:
+                result = memecoin.check_token(parts[1])
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "error": str(e)}
+            return {"ok": True, "verdict": result["verdict"],
+                    "flags": [f["reason"] for f in result["flags"]]}
+
+        if verb == "buy" and len(parts) >= 3:
+            try:
+                usd = float(parts[2])
+            except ValueError:
+                return {"ok": False, "error": "usage: buy <mint> <usd>"}
+            s = Storage(db_path)
+            try:
+                settings = s.get_settings()
+                result = memecoin.execute_buy(
+                    parts[1], usd, s, kill_switch=bool(settings["kill_switch_active"]))
+            except memecoin.MemecoinError as e:
+                s.close()
+                return {"ok": False, "error": str(e)}
+            s.close()
+            _memecoin_log("buy", f"{parts[1][:8]}… — ${usd:,.2f} — tx {result['tx_signature']}")
+            _refresh_memecoin_cache()
+            try:
+                from hf_trading_bot import notify
+                notify.notify(f"VANTRIX memecoin BUY — {parts[1][:8]}…",
+                              f"${usd:,.2f} via dashboard command\ntx {result['tx_signature']}")
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": True, "message": f"Bought ${usd:,.2f} — tx {result['tx_signature']} "
+                                           f"({result['status']})"}
+
+        if verb == "sell" and len(parts) >= 3:
+            try:
+                pct = float(parts[2])
+            except ValueError:
+                return {"ok": False, "error": "usage: sell <mint> <pct>"}
+            s = Storage(db_path)
+            try:
+                settings = s.get_settings()
+                result = memecoin.execute_sell(
+                    parts[1], pct, s, kill_switch=bool(settings["kill_switch_active"]))
+                if pct >= 99.9:
+                    s.memecoin_clear_position_state(parts[1])
+            except memecoin.MemecoinError as e:
+                s.close()
+                return {"ok": False, "error": str(e)}
+            s.close()
+            _memecoin_log("sell", f"{parts[1][:8]}… — {pct:.0f}% — tx {result['tx_signature']}")
+            _refresh_memecoin_cache()
+            try:
+                from hf_trading_bot import notify
+                notify.notify(f"VANTRIX memecoin SELL — {parts[1][:8]}…",
+                              f"sold {pct:.0f}% via dashboard command\n"
+                              f"tx {result['tx_signature']}")
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": True, "message": f"Sold {pct:.0f}% — tx {result['tx_signature']} "
+                                           f"({result['status']})"}
+
+        return {"ok": False, "error": "unknown command — try: screen | check <mint> | "
+                                      "buy <mint> <usd> | sell <mint> <pct>"}
+
+    def _memecoin_autotrade_loop():
+        while True:
+            try:
+                _run_memecoin_autotrade_cycle_once()
+            except Exception as e:  # noqa: BLE001 — the loop must never die
+                _memecoin_log("error", f"cycle crashed: {type(e).__name__}: {e}")
+            _time.sleep(max(60, memecoin_cycle_seconds))
+
+    # Gate autotrade behind explicit, checkable preconditions — never start a
+    # real-money loop silently degraded. A misconfigured key/flag disables the
+    # loop with a loud banner note rather than crashing the whole dashboard.
+    memecoin_autotrade_blocked_reason = None
+    if memecoin_autotrade:
+        from hf_trading_bot import memecoin as _memecoin_check, solana_wallet as _sw_check
+        if not _memecoin_check.is_confirmed():
+            memecoin_autotrade_blocked_reason = "HF_BOT_I_UNDERSTAND_MEMECOIN_RISK is not set"
+        else:
+            try:
+                _sw_check.load_keypair()
+            except _sw_check.WalletError as e:
+                memecoin_autotrade_blocked_reason = str(e)
+    memecoin_autotrade_on = memecoin_autotrade and memecoin_autotrade_blocked_reason is None
+    if memecoin_autotrade_on:
+        memecoin_autotrade_status["enabled"] = True
 
     # Access token: required before exposing the dashboard past this machine.
     # A tunnel ALWAYS forces auth — never expose the committee without a lock.
@@ -2710,6 +2931,9 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                     payload.setdefault("system", {})
                     payload["system"]["auto_execute"] = bool(auto_exec_on)
                     payload["system"]["auto_execute_max"] = auto_execute_max
+                    payload["memecoin"] = dict(memecoin_cache)
+                    payload["memecoin"]["autotrade"] = dict(memecoin_autotrade_status)
+                    payload["memecoin"]["activity"] = list(memecoin_activity[:10])
                     self._send(200, json.dumps(payload).encode(), "application/json")
                     return
                 html = render_html(snap, mode="live").replace(
@@ -2759,6 +2983,30 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                            "message": ("Kill switch ON — trading halted." if active
                                        else "Kill switch OFF — trading enabled.")}
                     self._send(200, json.dumps(out).encode(), "application/json")
+                    return
+                # Memecoin: run an autotrade cycle right now, outside its timer.
+                # Real trades may fire — dispatched in a background thread since
+                # it can take several seconds (RPC + Jupiter + DexScreener calls).
+                if self.path.startswith("/api/memecoin/cycle"):
+                    threading.Thread(target=_run_memecoin_autotrade_cycle_once,
+                                     daemon=True).start()
+                    out = {"ok": True, "message": "Cycle started — watch Activity "
+                                                   "and Positions for the result."}
+                    self._send(200, json.dumps(out).encode(), "application/json")
+                    return
+                # Memecoin: a typed command from the dashboard's own input —
+                # "screen", "check <mint>", "buy <mint> <usd>", "sell <mint> <pct>".
+                # Runs synchronously (a few seconds, no Claude/tokens involved) and
+                # returns the result directly; real buy/sell commands place a real
+                # trade the moment they're submitted, same as typing the CLI
+                # equivalent — the typed command IS the confirmation.
+                if self.path.startswith("/api/memecoin/command"):
+                    length = int(self.headers.get("Content-Length", 0))
+                    raw = self.rfile.read(length) if length else b"{}"
+                    text = (json.loads(raw or b"{}").get("text") or "").strip()
+                    out = _handle_memecoin_command(text)
+                    code = 200 if out.get("ok") else 400
+                    self._send(code, json.dumps(out).encode(), "application/json")
                     return
                 # Archive the console — move old responses to research/committee/
                 # .md files so the dashboard stays clean. A direct, token-free
@@ -2886,6 +3134,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         else:
             runner_note += ("  · [!] --tiered set but no cheap/mid tier configured "
                             "(add keys to .env; see `hf-bot models check`)")
+    if memecoin_autotrade and memecoin_autotrade_blocked_reason:
+        runner_note += (f"\n  [!] --memecoin-autotrade BLOCKED — {memecoin_autotrade_blocked_reason}")
+    elif memecoin_autotrade_on:
+        runner_note += (f"\n  [!] MEMECOIN AUTOTRADE ON — real money, entries and exits fire "
+                        f"with no approval click, every {memecoin_cycle_seconds}s. "
+                        "Kill switch, per-trade ceiling and wallet budget still apply.")
     # The address to actually type in a browser: when bound to all interfaces,
     # localhost still works here, and other devices use this machine's LAN IP.
     local_url = f"http://127.0.0.1:{port}" if host in ("0.0.0.0", "127.0.0.1", "localhost") \
@@ -2910,6 +3164,12 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         threading.Timer(0.8, lambda: webbrowser.open(local_url)).start()
 
     threading.Thread(target=_price_loop, daemon=True).start()  # live price cache
+    # Memecoin wallet/positions view — harmless no-op if no key is configured
+    # (caught inside _refresh_memecoin_cache); always started so the panel can
+    # show real data the moment SOLANA_PRIVATE_KEY is set, without a relaunch.
+    threading.Thread(target=_memecoin_refresh_loop, daemon=True).start()
+    if memecoin_autotrade_on:
+        threading.Thread(target=_memecoin_autotrade_loop, daemon=True).start()
     tunnel_proc = _start_tunnel(port, token) if tunnel else None
     try:
         server.serve_forever()
