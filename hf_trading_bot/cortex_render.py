@@ -111,11 +111,11 @@ def render_html(snap: CortexSnapshot, *, mode: Mode = "static") -> str:
         <div class="panel-title">CORTEX <span id="live-count"></span></div>
         <div id="roster-rows"></div>
       </div>
-      <div class="panel-block" id="readouts"></div>
       <div class="panel-block" id="memecoin-cmd">
         <div class="panel-title">MEMECOIN COMMAND</div>
         {memecoin_cmdbar}
       </div>
+      <div class="panel-block" id="readouts"></div>
       <div class="disclaimer">{DISCLAIMER}</div>
       <div class="generated">generated <span id="gen-at"></span></div>
     </aside>
