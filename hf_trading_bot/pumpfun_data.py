@@ -103,6 +103,15 @@ def _normalize(raw: dict) -> Optional[dict]:
     price_raw = _first(raw, "price_usd", "usd_price", "price")
     price_usd = (float(price_raw) if price_raw is not None
                 else (market_cap_usd / TOTAL_SUPPLY if market_cap_usd is not None else None))
+    # Whether the creator bothered to attach ANY social link at creation —
+    # not what the link says, just whether it exists. A free, hard-to-fake
+    # minor signal: a coin with zero effort put into looking legitimate is a
+    # weaker bet than one with some, without this code trying to judge social
+    # media hype (which is exactly the mechanism coordinated pump-and-dump
+    # shilling uses — see README's social-media section for why that's
+    # deliberately NOT something this bot chases).
+    has_social_links = bool(_first(raw, "twitter") or _first(raw, "telegram")
+                            or _first(raw, "website"))
     return {
         "address": address,
         "symbol": _first(raw, "symbol", "ticker"),
@@ -110,6 +119,7 @@ def _normalize(raw: dict) -> Optional[dict]:
         "created_at_ms": created_at_ms,
         "market_cap_usd": market_cap_usd,
         "price_usd": price_usd,
+        "has_social_links": has_social_links,
         "sol_raised": float(sol_raised) / 1_000_000_000.0 if sol_raised and
                       float(sol_raised) > 1000 else (float(sol_raised) if sol_raised else None),
         "migrated": complete,

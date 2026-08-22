@@ -604,7 +604,9 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
                 except pumpfun_data.PumpFunError:
                     fresh = None
                 if fresh and fresh.get("market_cap_usd") is not None:
-                    t = dict(t, market_cap_usd=fresh["market_cap_usd"])
+                    t = dict(t, market_cap_usd=fresh["market_cap_usd"],
+                            price_usd=fresh.get("price_usd"),
+                            has_social_links=fresh.get("has_social_links"))
             sig = memecoin_strategy.pumpfun_entry_signal(t, mint_info, buyer_stats=buyer_stats)
         else:
             sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms)

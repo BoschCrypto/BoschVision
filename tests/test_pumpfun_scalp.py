@@ -221,6 +221,33 @@ def test_pumpfun_momentum_missing_data_scores_zero():
     assert result["score"] == 0.0
 
 
+def test_pumpfun_momentum_social_links_add_a_minor_bonus():
+    coin = {"created_at_ms": int(time.time() * 1000)}
+    without = memecoin_strategy.pumpfun_momentum_score(coin)
+    with_links = memecoin_strategy.pumpfun_momentum_score(dict(coin, has_social_links=True))
+    assert with_links["score"] == pytest.approx(
+        without["score"] + memecoin_strategy.SOCIAL_LINKS_BONUS)
+
+
+def test_pumpfun_momentum_social_links_false_adds_nothing():
+    coin = {"created_at_ms": int(time.time() * 1000), "has_social_links": False}
+    result = memecoin_strategy.pumpfun_momentum_score(coin)
+    assert not any("social" in c["reason"] for c in result["components"])
+
+
+def test_normalize_has_social_links_true_when_any_link_present():
+    assert pumpfun_data._normalize({"mint": "M1", "twitter": "https://x.com/foo"}
+                                   )["has_social_links"] is True
+    assert pumpfun_data._normalize({"mint": "M1", "telegram": "https://t.me/foo"}
+                                   )["has_social_links"] is True
+    assert pumpfun_data._normalize({"mint": "M1", "website": "https://foo.io"}
+                                   )["has_social_links"] is True
+
+
+def test_normalize_has_social_links_false_when_none_present():
+    assert pumpfun_data._normalize({"mint": "M1"})["has_social_links"] is False
+
+
 def test_pumpfun_entry_signal_red_flag_blocks():
     hot_mint = dict(CLEAN_MINT, mint_authority="Creator")
     coin = {"created_at_ms": int(time.time() * 1000), "sol_raised": 30.0}

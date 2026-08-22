@@ -549,6 +549,17 @@ reduced weight rather than being ripped out — it may yet prove itself once
 the subscription fix has more live runtime, but market cap is the signal
 this project actually has evidence for.
 
+**Deliberately not implemented: following social media for new coin drops.**
+Coordinated Twitter/Telegram hype is the mechanism a pump-and-dump
+manufactures fake demand with in the first place — a bot that chases
+"trending" coins gets more exploitable, not more informed, and meaningful
+social-platform API access isn't free either. What's used instead: a flat
+`SOCIAL_LINKS_BONUS` (5 points) for whether the creator attached ANY
+social/website link at pump.fun creation — not what it says, just whether
+it exists. Free (same `get_coin()` fetch that already retrieves market
+cap), hard to fake, and deliberately small — a tie-breaker, not a driver
+of entries.
+
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 
 Two commands turn "what to look out for" into concrete, checkable rules —

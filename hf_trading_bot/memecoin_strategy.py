@@ -286,6 +286,10 @@ SCALP_MIN_ENTRY_SCORE = 50.0
 # Market cap gets the heaviest single weight for exactly that reason.
 MARKET_CAP_FULL_SCORE_USD = 10_000.0
 
+# A flat, minor tie-breaker — NOT a social-hype signal. See
+# pumpfun_momentum_score's docstring for why.
+SOCIAL_LINKS_BONUS = 5.0
+
 
 def pumpfun_momentum_score(coin: dict, *, buyer_stats: Optional[dict] = None) -> dict:
     """Freshness(25) + market cap(35) + buyer diversity(25) + bonding-curve
@@ -298,7 +302,17 @@ def pumpfun_momentum_score(coin: dict, *, buyer_stats: Optional[dict] = None) ->
     same source in the same block) — raw SOL-raised alone can't make that
     distinction. Market cap crossing a real threshold is a blunter but
     more reliable confirmation of the same thing: a coin that's actually
-    attracting money, whoever it's coming from."""
+    attracting money, whoever it's coming from.
+
+    A fifth, deliberately small, flat SOCIAL_LINKS_BONUS rewards a coin
+    whose creator attached ANY social/website link at creation — not what
+    it says, just whether it exists. This is intentionally NOT a
+    social-hype signal: coordinated Twitter/Telegram shilling is the
+    mechanism a pump-and-dump manufactures fake demand with in the first
+    place, and chasing what's "trending" would make this bot more
+    exploitable, not less. Presence of a link is just a weak, hard-to-fake
+    "some effort was made" check, worth a few points, not a driver of
+    entries on its own."""
     components: list[dict] = []
     score = 0.0
 
@@ -338,6 +352,13 @@ def pumpfun_momentum_score(coin: dict, *, buyer_stats: Optional[dict] = None) ->
                           f"{sol_raised:.2f} SOL raised on the bonding curve so far"})
     else:
         components.append({"points": 0.0, "reason": "no bonding-curve progress data available"})
+
+    # See the function docstring for why this is a flat bonus, not a
+    # social-hype signal.
+    if coin.get("has_social_links"):
+        score += SOCIAL_LINKS_BONUS
+        components.append({"points": SOCIAL_LINKS_BONUS,
+                           "reason": "creator attached a social/website link"})
 
     return {"score": round(min(100.0, score), 1), "components": components}
 

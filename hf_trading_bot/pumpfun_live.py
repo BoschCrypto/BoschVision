@@ -133,8 +133,8 @@ class LiveFeed:
     def _record(self, mint: str) -> None:
         coin = {"address": mint, "symbol": None, "name": None,
                "created_at_ms": int(time.time() * 1000), "market_cap_usd": None,
-               "price_usd": None, "sol_raised": None, "migrated": False,
-               "source": "pumpfun_live"}
+               "price_usd": None, "has_social_links": None, "sol_raised": None,
+               "migrated": False, "source": "pumpfun_live"}
         with self._lock:
             self._recent.append(coin)
             self._status["detections"] += 1

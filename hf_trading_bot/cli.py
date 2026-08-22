@@ -2569,7 +2569,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
                         else:
                             if fresh and fresh.get("market_cap_usd") is not None:
                                 t = dict(t, market_cap_usd=fresh["market_cap_usd"],
-                                        price_usd=fresh.get("price_usd"))
+                                        price_usd=fresh.get("price_usd"),
+                                        has_social_links=fresh.get("has_social_links"))
                                 mc_line = f"market cap: fetched ${fresh['market_cap_usd']:,.0f}"
                             else:
                                 mc_line = "market cap: fetch returned no data for this mint"
