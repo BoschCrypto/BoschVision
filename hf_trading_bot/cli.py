@@ -1750,6 +1750,54 @@ def memecoin_check(token_address):
               "a token can pass every check here and still be worthless.")
 
 
+@memecoin.command("screen")
+@click.option("--limit", default=20, type=int, help="How many trending tokens to evaluate.")
+@click.option("--min-score", "min_score", default=None, type=float,
+              help="Entry score threshold (default from memecoin_strategy).")
+@click.option("--show-all", is_flag=True, help="Show every token evaluated, not just passes.")
+def memecoin_screen(limit, min_score, show_all):
+    """Scan trending tokens against the entry criteria: the risk screen (any
+    red flag disqualifies) plus a momentum score from price/volume/buy-sell
+    pressure. Read-only — no wallet touched. A PASS means the tape and
+    structural facts currently support looking further — it is never a buy
+    signal by itself, and momentum reverses without warning."""
+    import time
+
+    from hf_trading_bot import memecoin_data, memecoin_strategy, solana_wallet
+
+    threshold = min_score if min_score is not None else memecoin_strategy.MIN_ENTRY_SCORE
+    try:
+        candidates = memecoin_data.trending(limit=limit)
+    except memecoin_data.DexScreenerError as e:
+        raise click.ClickException(str(e))
+
+    now_ms = int(time.time() * 1000)
+    shown = 0
+    for t in candidates:
+        try:
+            mint_info = solana_wallet.get_mint_info(t["address"])
+        except solana_wallet.WalletError as e:
+            if show_all:
+                click.echo(f"{(t['symbol'] or '?'):<10} {t['address'][:10]}…  "
+                          f"ERROR reading mint: {e}")
+            continue
+        sig = memecoin_strategy.entry_signal(t, mint_info, now_ms=now_ms, min_score=threshold)
+        if not sig.enter and not show_all:
+            continue
+        shown += 1
+        mark = "PASS" if sig.enter else "no "
+        click.echo(f"[{mark}] {(t['symbol'] or '?'):<10} {t['address'][:10]}…  "
+                  f"score {sig.score:.0f}/{threshold:.0f}")
+        for r in sig.reasons[:4]:
+            click.echo(f"       {r}")
+    if shown == 0:
+        click.echo("No candidates passed the entry criteria this scan "
+                   "(try --show-all to see why each was rejected, or --limit higher).")
+    click.echo("\nA PASS means current conditions support looking further — never a "
+              "buy signal by itself. Confirm with `memecoin check` and `memecoin quote` "
+              "before trading.")
+
+
 @memecoin.command("quote")
 @click.option("--token", "token_address", required=True, help="Token mint address to buy.")
 @click.option("--usd", "usd_amount", required=True, type=float)
@@ -1809,9 +1857,12 @@ def memecoin_buy(cfg, token_address, usd_amount, slippage_bps, dry_run):
 @click.option("--token", "token_address", required=True, help="Token mint address to sell.")
 @click.option("--pct", required=True, type=float, help="Percent of held balance to sell (0-100].")
 @click.option("--slippage-bps", default=150, type=int, help="Max slippage, in basis points.")
+@click.option("--mark-trim", "mark_trim", default=None, type=click.Choice(["1", "2"]),
+              help="Record this as take-profit trim #1 or #2, so `positions` "
+                   "won't keep recommending the same trim again.")
 @click.option("--dry-run", is_flag=True, help="Preview only — sign and send nothing.")
 @click.pass_obj
-def memecoin_sell(cfg, token_address, pct, slippage_bps, dry_run):
+def memecoin_sell(cfg, token_address, pct, slippage_bps, mark_trim, dry_run):
     """Sell PCT% of the held balance of TOKEN back to SOL."""
     from hf_trading_bot import memecoin
 
@@ -1822,6 +1873,13 @@ def memecoin_sell(cfg, token_address, pct, slippage_bps, dry_run):
             token_address, pct, storage,
             kill_switch=bool(settings["kill_switch_active"]),
             slippage_bps=slippage_bps, dry_run=dry_run)
+        if not dry_run and not result.get("dry_run"):
+            if pct >= 99.9:
+                # A full exit — clear peak/trim tracking so a later re-entry
+                # into this token starts clean, not carrying the old trade's state.
+                storage.memecoin_clear_position_state(token_address)
+            elif mark_trim:
+                storage.memecoin_mark_trimmed(token_address, int(mark_trim))
     except memecoin.MemecoinError as e:
         storage.close()
         raise click.ClickException(str(e))
@@ -1931,21 +1989,50 @@ def memecoin_multi_buy(cfg, count, usd_each, tokens_csv, min_liquidity, slippage
 @memecoin.command("positions")
 @click.pass_obj
 def memecoin_positions(cfg):
-    """Current memecoin holdings: on-chain balance, cost basis, and
-    unrealized P/L against a live price. Read-only — no wallet action."""
-    from hf_trading_bot import memecoin, solana_wallet
+    """Current memecoin holdings: on-chain balance, cost basis, unrealized
+    P/L, and an exit-rule recommendation for each. Read-only — no wallet
+    action; recommendations are printed, never acted on automatically.
+
+    The trailing-stop and take-profit rules are only as accurate as how often
+    you run this — each run ratchets the tracked peak price upward and checks
+    the exit rules against it. Running it more often catches a reversal
+    sooner."""
+    from hf_trading_bot import memecoin, memecoin_data, memecoin_strategy, solana_wallet
 
     storage = _load_storage(cfg)
     try:
         positions = memecoin.list_positions(storage)
+        rows = []
+        for p in positions:
+            basis = storage.memecoin_position_basis(p.token_address)
+            entry_price = basis["avg_entry_price"]
+            exit_rec = None
+            if entry_price and p.current_price_usd:
+                peak = storage.memecoin_update_peak(p.token_address, p.current_price_usd)
+                state = storage.memecoin_peak_state(p.token_address) or {}
+                hours_held = 0.0
+                if basis["first_buy_at"]:
+                    from datetime import datetime, timezone
+                    first = datetime.fromisoformat(basis["first_buy_at"].replace("Z", "+00:00"))
+                    hours_held = (datetime.now(timezone.utc) - first).total_seconds() / 3600.0
+                try:
+                    token = memecoin_data.get_token(p.token_address)
+                except memecoin_data.DexScreenerError:
+                    token = None
+                exit_rec = memecoin_strategy.exit_signal(
+                    entry_price_usd=entry_price, current_price_usd=p.current_price_usd,
+                    peak_price_usd=peak, hours_held=hours_held, token=token,
+                    already_trimmed_1=bool(state.get("trimmed_1")),
+                    already_trimmed_2=bool(state.get("trimmed_2")))
+            rows.append((p, entry_price, exit_rec))
     except (memecoin.MemecoinError, solana_wallet.WalletError) as e:
         raise click.ClickException(str(e))
     finally:
         storage.close()
-    if not positions:
+    if not rows:
         click.echo("No open memecoin positions.")
         return
-    for p in positions:
+    for p, entry_price, exit_rec in rows:
         value = f"${p.current_value_usd:,.2f}" if p.current_value_usd is not None else "n/a"
         pnl = (f"{p.unrealized_pnl_usd:+,.2f} ({p.unrealized_pnl_pct:+.1f}%)"
               if p.unrealized_pnl_usd is not None and p.unrealized_pnl_pct is not None
@@ -1953,6 +2040,12 @@ def memecoin_positions(cfg):
         click.echo(f"{(p.symbol or '?'):<10} {p.token_address[:10]}…  "
                    f"held {p.balance:,.4f}  cost ${p.cost_basis_usd:,.2f}  "
                    f"value {value}  P/L {pnl}")
+        if exit_rec is None:
+            click.echo("    (no entry price / live price on file — can't evaluate exit rules)")
+        elif exit_rec.exit:
+            click.echo(f"    >>> SUGGESTED ACTION: sell {exit_rec.sell_pct:.0f}% — {exit_rec.reason}")
+        else:
+            click.echo(f"    hold — {exit_rec.reason}")
 
 
 @cli.command()

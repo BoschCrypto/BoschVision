@@ -194,6 +194,14 @@ CREATE TABLE IF NOT EXISTS order_proposals (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS memecoin_position_state (
+    token_address TEXT PRIMARY KEY,
+    peak_price_usd REAL NOT NULL,
+    trimmed_1 INTEGER NOT NULL DEFAULT 0,   -- take-profit trim #1 already fired
+    trimmed_2 INTEGER NOT NULL DEFAULT 0,   -- take-profit trim #2 already fired
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS memecoin_trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     side TEXT NOT NULL,                -- buy | sell
@@ -740,6 +748,66 @@ class Storage:
             "SELECT DISTINCT token_address FROM memecoin_trades WHERE status != 'failed'"
         ).fetchall()
         return [r["token_address"] for r in rows]
+
+    def memecoin_position_basis(self, token_address: str) -> dict[str, Any]:
+        """Volume-weighted average entry price and first-buy timestamp for a
+        token, from confirmed buys only. {"avg_entry_price": float|None,
+        "first_buy_at": str|None}."""
+        rows = self._conn.execute(
+            "SELECT usd_amount, price_usd, created_at FROM memecoin_trades "
+            "WHERE token_address = ? AND side = 'buy' AND status != 'failed' "
+            "AND price_usd IS NOT NULL ORDER BY created_at ASC",
+            (token_address,),
+        ).fetchall()
+        if not rows:
+            return {"avg_entry_price": None, "first_buy_at": None}
+        total_cost = sum(r["usd_amount"] for r in rows)
+        total_qty = sum(r["usd_amount"] / r["price_usd"] for r in rows if r["price_usd"] > 0)
+        avg_price = (total_cost / total_qty) if total_qty > 0 else None
+        return {"avg_entry_price": avg_price, "first_buy_at": rows[0]["created_at"]}
+
+    def memecoin_peak_state(self, token_address: str) -> Optional[dict[str, Any]]:
+        row = self._conn.execute(
+            "SELECT * FROM memecoin_position_state WHERE token_address = ?",
+            (token_address,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def memecoin_update_peak(self, token_address: str, current_price_usd: float) -> float:
+        """Ratchet the tracked peak price upward and return it. Never lowers
+        the stored peak — a trailing stop needs the true high-water mark, and
+        this is only as accurate as how often the caller checks."""
+        existing = self.memecoin_peak_state(token_address)
+        new_peak = max(current_price_usd, existing["peak_price_usd"] if existing else 0.0)
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT INTO memecoin_position_state (token_address, peak_price_usd, updated_at) "
+            "VALUES (?,?,?) ON CONFLICT(token_address) DO UPDATE SET "
+            "peak_price_usd=excluded.peak_price_usd, updated_at=excluded.updated_at",
+            (token_address, new_peak, now),
+        )
+        self._conn.commit()
+        return new_peak
+
+    def memecoin_mark_trimmed(self, token_address: str, level: int) -> None:
+        if level not in (1, 2):
+            raise ValueError("level must be 1 or 2")
+        col = f"trimmed_{level}"
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            f"INSERT INTO memecoin_position_state (token_address, peak_price_usd, {col}, updated_at) "
+            f"VALUES (?, 0, 1, ?) ON CONFLICT(token_address) DO UPDATE SET "
+            f"{col}=1, updated_at=excluded.updated_at",
+            (token_address, now),
+        )
+        self._conn.commit()
+
+    def memecoin_clear_position_state(self, token_address: str) -> None:
+        """Called after a full exit so a later re-entry into the same token
+        starts with a clean peak/trim state, not the prior trade's."""
+        self._conn.execute(
+            "DELETE FROM memecoin_position_state WHERE token_address = ?", (token_address,))
+        self._conn.commit()
 
     def memecoin_token_net_usd(self, token_address: str) -> float:
         """Net USD invested in one token (buys minus sells). Can go negative

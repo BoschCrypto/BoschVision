@@ -52,11 +52,29 @@ def _normalize(pair: dict) -> dict:
     base = pair.get("baseToken") or {}
     liq = pair.get("liquidity") or {}
     vol = pair.get("volume") or {}
+    chg = pair.get("priceChange") or {}
+    txns = pair.get("txns") or {}
+    txns_h1 = txns.get("h1") or {}
+    txns_h24 = txns.get("h24") or {}
+
+    def _f(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
     return {
         "address": base.get("address"),
         "symbol": base.get("symbol"),
         "name": base.get("name"),
         "price_usd": float(pair["priceUsd"]) if pair.get("priceUsd") else None,
+        "price_change_h1_pct": _f(chg.get("h1")),
+        "price_change_h6_pct": _f(chg.get("h6")),
+        "price_change_h24_pct": _f(chg.get("h24")),
+        "buys_h1": int(txns_h1.get("buys") or 0),
+        "sells_h1": int(txns_h1.get("sells") or 0),
+        "buys_h24": int(txns_h24.get("buys") or 0),
+        "sells_h24": int(txns_h24.get("sells") or 0),
         "liquidity_usd": float(liq.get("usd") or 0),
         "volume_24h_usd": float(vol.get("h24") or 0),
         "fdv_usd": float(pair["fdv"]) if pair.get("fdv") else None,

@@ -370,6 +370,70 @@ trades 24/7. Put pairs in your `watchlist` (see `config/settings.example.yaml`),
 chart them with `hf-bot chart BTC/USD`, or trade one with `trade BTC` in the
 console.
 
+### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
+
+Two commands turn "what to look out for" into concrete, checkable rules —
+built entirely from free data already in use (DexScreener's momentum fields,
+Solana's own mint-account state). No social/Twitter signal, no paid data.
+
+**What to look out for (the risk screen, `memecoin check`):**
+- Mint or freeze authority not revoked — the creator can mint unlimited
+  supply, or freeze your wallet's tokens outright. Either is disqualifying.
+- Liquidity under $5k (red) or under $20k (yellow) — thin liquidity means
+  high slippage and possibly no way to sell back out.
+- 24h volume more than ~20x liquidity — often wash trading, not real demand.
+- A pool under 24h old — unproven.
+
+**What signifies good momentum (`memecoin screen`):** a 0-100 score from —
+- **Acceleration**, not just size: the 1h price move outpacing the 6h
+  average pace means fresh buying, not an old move you're late to.
+- **Buy/sell pressure**: the ratio of buys to sells in the last hour (needs
+  at least 10 transactions to be readable at all).
+- **Liquidity depth** and a **volume/liquidity ratio in a healthy range**
+  (active, not wash-trading-shaped).
+
+A token only shows as a `screen` PASS if it has **zero red risk flags** and
+its momentum score clears the threshold (default 60/100). Run it:
+```bash
+hf-bot memecoin screen                    # trending tokens that pass entry criteria
+hf-bot memecoin screen --show-all         # see every candidate and why each did/didn't pass
+```
+
+**When to enter:** only on a `screen` PASS, and only after independently
+confirming with `memecoin check` (the full risk detail) and `memecoin quote`
+(actual price impact for your size) — `screen` is a filter, not an
+instruction.
+
+**When to exit (`memecoin positions`) — checked in this order:**
+1. **Stop-loss: -35% from entry.** Wider than an equity stop on purpose —
+   memecoins routinely swing 20-30% intraday with no signal in it; a tighter
+   stop would exit on noise. Capital protection always outranks the rest.
+2. **Take-profit trim #1 at +100%:** sell half, de-risk the trade.
+3. **Take-profit trim #2 at +300%:** sell half of what's left.
+4. **Trailing stop:** once a position has been up 50%+ at its peak, exit the
+   remainder if price gives back 30% from that peak — protects gains already
+   made without capping the upside before then.
+5. **Momentum-stall exit:** held 6h+ with the 1h move negative and sell
+   pressure exceeding buy pressure — the move this was betting on is over.
+
+```bash
+hf-bot memecoin positions   # live holdings + a suggested action for each, with why
+```
+`positions` is what tracks the peak price and updates it every time you run
+the command — **the trailing stop is only as accurate as how often you check
+it.** Nothing here executes automatically; every suggested action is
+something you then run `memecoin sell` for yourself. Pass `--mark-trim 1` or
+`--mark-trim 2` on a `sell` matching a take-profit trim so `positions` doesn't
+keep recommending the same trim again; selling 100% clears all tracked state
+for that token automatically.
+
+**The honest limit of all of this:** every signal above describes what a
+token has *just* done. None of it predicts what happens next, and momentum
+reverses without warning. This tooling exists to make the mechanical part —
+catching the same rug pattern twice, forgetting a stop-loss, holding a dead
+token out of hope — disciplined and automatic to *check*. It does not, and
+cannot, tell you which token wins.
+
 ### Memecoin trading (pump.fun / Solana)
 
 A separate, opt-in feature for trading Solana memecoins (pump.fun-style
