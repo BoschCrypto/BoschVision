@@ -635,7 +635,10 @@ separately:**
   is safe from a double-spend, unlike `WalletError` (which can occur
   *after* submission, e.g. a timeout waiting for confirmation, where
   blindly retrying could buy/sell twice). `_with_jupiter_retry()` retries
-  only that one specific, provably-safe failure mode (0.5s, then 1.5s),
+  only that one specific, provably-safe failure mode (1s, 3s, then 5s —
+  widened after live testing showed the first, shorter attempt (0.5s/1.5s)
+  wasn't enough; this looks like a longer-lived local DNS resolution issue
+  for that one domain specifically, not a millisecond blip),
   used by `execute_buy`/`execute_sell` calls in `run_autotrade_cycle`,
   `run_exit_check`, and `multi_buy`.
 

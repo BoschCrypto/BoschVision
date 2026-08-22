@@ -466,7 +466,7 @@ def _get_mint_info_for_fresh_candidate(address: str, *, env: Optional[dict]) -> 
     raise last_error
 
 
-_JUPITER_RETRY_DELAYS_S = (0.5, 1.5)
+_JUPITER_RETRY_DELAYS_S = (1.0, 3.0, 5.0)
 
 
 def _with_jupiter_retry(fn, *args, **kwargs):
