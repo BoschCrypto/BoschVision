@@ -442,6 +442,29 @@ def list_positions(storage, *, env: Optional[dict] = None) -> list[Position]:
 
 MAX_NEW_POSITIONS_PER_CYCLE = 2
 
+# A brief, bounded retry for ONE specific failure mode: PumpPortal's
+# subscribeNewToken can notify of a new mint before that mint's account is
+# necessarily visible yet via our own RPC node's getAccountInfo -- a real
+# race condition introduced by detecting coins faster than a single RPC
+# call can confirm them, not a sign the mint doesn't exist. Total added
+# delay is small and bounded; a genuinely nonexistent/malformed mint still
+# fails after this, just not on the very first millisecond.
+_MINT_INFO_RETRY_DELAYS_S = (0.5, 1.0)
+
+
+def _get_mint_info_for_fresh_candidate(address: str, *, env: Optional[dict]) -> dict:
+    last_error: solana_wallet.WalletError = None
+    for delay in (0.0,) + _MINT_INFO_RETRY_DELAYS_S:
+        if delay:
+            time.sleep(delay)
+        try:
+            return solana_wallet.get_mint_info(address, env=env)
+        except solana_wallet.WalletError as e:
+            last_error = e
+            if "no on-chain account" not in str(e):
+                raise   # a different failure mode -- retrying won't help
+    raise last_error
+
 
 def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) -> dict:
     """Check every held position against its exit rule and sell if
@@ -644,7 +667,8 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
         if bought >= max_new_positions or remaining < trade_size * 0.5:
             break
         try:
-            mint_info = solana_wallet.get_mint_info(t["address"], env=env)
+            mint_info = (_get_mint_info_for_fresh_candidate(t["address"], env=env) if scalp
+                        else solana_wallet.get_mint_info(t["address"], env=env))
         except solana_wallet.WalletError as e:
             report["errors"].append({"stage": "entry-mint-check", "token_address": t["address"],
                                      "error": str(e)})

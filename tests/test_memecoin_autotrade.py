@@ -179,6 +179,49 @@ def test_exit_check_jupiter_network_error_does_not_stop_other_positions(storage,
     assert len(report["exits"]) == 1 and report["exits"][0]["token_address"] == "GOOD"
 
 
+# --- _get_mint_info_for_fresh_candidate: the PumpPortal-speed race fix -----
+
+def test_get_mint_info_for_fresh_candidate_retries_on_missing_account(monkeypatch):
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)   # no real delay in tests
+    calls = []
+
+    def flaky(address, env=None):
+        calls.append(address)
+        if len(calls) < 2:
+            raise solana_wallet.WalletError(f"no on-chain account found for mint {address}")
+        return {"mint_authority": None, "freeze_authority": None}
+    monkeypatch.setattr(solana_wallet, "get_mint_info", flaky)
+
+    result = memecoin._get_mint_info_for_fresh_candidate("M1", env={})
+    assert result == {"mint_authority": None, "freeze_authority": None}
+    assert len(calls) == 2
+
+
+def test_get_mint_info_for_fresh_candidate_gives_up_after_retries_exhausted(monkeypatch):
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)
+
+    def always_missing(address, env=None):
+        raise solana_wallet.WalletError(f"no on-chain account found for mint {address}")
+    monkeypatch.setattr(solana_wallet, "get_mint_info", always_missing)
+
+    with pytest.raises(solana_wallet.WalletError, match="no on-chain account"):
+        memecoin._get_mint_info_for_fresh_candidate("M1", env={})
+
+
+def test_get_mint_info_for_fresh_candidate_does_not_retry_other_errors(monkeypatch):
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)
+    calls = []
+
+    def boom(address, env=None):
+        calls.append(address)
+        raise solana_wallet.WalletError("unexpected mint account shape: 'info'")
+    monkeypatch.setattr(solana_wallet, "get_mint_info", boom)
+
+    with pytest.raises(solana_wallet.WalletError, match="unexpected mint account shape"):
+        memecoin._get_mint_info_for_fresh_candidate("M1", env={})
+    assert len(calls) == 1   # no retry for a non-race-condition failure
+
+
 def test_cycle_entry_buy_jupiter_network_error_recorded_not_raised(storage, monkeypatch):
     storage.set_kill_switch(False)
     monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
