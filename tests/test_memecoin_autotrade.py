@@ -662,6 +662,82 @@ def test_with_jupiter_retry_does_not_retry_other_errors(monkeypatch):
     assert len(calls) == 1   # MemecoinError/WalletError must never be retried here
 
 
+# --- _with_read_retry: safe because nothing here can have already landed --
+
+def test_with_read_retry_succeeds_on_second_attempt(monkeypatch):
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) < 2:
+            raise solana_wallet.WalletError(
+                "Solana RPC unreachable (https://x): [Errno 11001] getaddrinfo failed")
+        return ["position"]
+
+    assert memecoin._with_read_retry(flaky) == ["position"]
+    assert len(calls) == 2
+
+
+def test_with_read_retry_gives_up_after_retries_exhausted(monkeypatch):
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)
+
+    def always_fails():
+        raise solana_wallet.WalletError("Solana RPC unreachable: getaddrinfo failed")
+
+    with pytest.raises(solana_wallet.WalletError, match="unreachable"):
+        memecoin._with_read_retry(always_fails)
+
+
+def test_with_read_retry_does_not_retry_non_wallet_errors(monkeypatch):
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)
+    calls = []
+
+    def boom():
+        calls.append(1)
+        raise memecoin.MemecoinError("something unrelated")
+
+    with pytest.raises(memecoin.MemecoinError):
+        memecoin._with_read_retry(boom)
+    assert len(calls) == 1
+
+
+def test_exit_check_retries_a_transient_positions_failure(storage, monkeypatch):
+    # Real failure seen in live testing: "positions: Solana RPC unreachable
+    # ... getaddrinfo failed" on a transient DNS blip. Every hit meant NO
+    # held position got checked against its exit rule for that whole
+    # cycle -- the exact risk-critical gap this check exists to avoid, and
+    # unlike a buy/sell submission, a plain positions read can always be
+    # retried safely (nothing can have already landed on-chain).
+    storage.set_kill_switch(False)
+    calls = []
+
+    def flaky_list_positions(s, env=None):
+        calls.append(1)
+        if len(calls) < 2:
+            raise solana_wallet.WalletError(
+                "Solana RPC unreachable (https://x): [Errno 11001] getaddrinfo failed")
+        return []
+    monkeypatch.setattr(memecoin, "list_positions", flaky_list_positions)
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    assert report["errors"] == []
+    assert report["held_addresses"] == set()
+    assert len(calls) == 2
+
+
+def test_exit_check_reports_positions_error_after_retries_exhausted(storage, monkeypatch):
+    storage.set_kill_switch(False)
+
+    def always_fails(s, env=None):
+        raise solana_wallet.WalletError("Solana RPC unreachable: getaddrinfo failed")
+    monkeypatch.setattr(memecoin, "list_positions", always_fails)
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    assert report["errors"][0]["stage"] == "positions"
+    assert report["held_addresses"] is None
+
+
 def test_cycle_entry_buy_jupiter_network_error_recorded_not_raised(storage, monkeypatch):
     monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)   # no real delay in tests
     storage.set_kill_switch(False)

@@ -705,6 +705,30 @@ def _with_jupiter_retry(fn, *args, **kwargs):
     raise last_error
 
 
+_READ_RETRY_DELAYS_S = (1.0, 2.0)
+
+
+def _with_read_retry(fn, *args, **kwargs):
+    """Retry a pure-READ Solana RPC call (position/balance checks) on any
+    WalletError -- unlike execute_buy/execute_sell's sign-and-submit path,
+    nothing here can have already landed on-chain, so a blind retry can
+    never cause a double-spend the way retrying a WalletError after
+    sign_and_submit could. Live testing hit 'positions: Solana RPC
+    unreachable ... getaddrinfo failed' repeatedly on a transient DNS
+    blip -- every hit meant NO position got checked against its exit rule
+    for that whole cycle, the exact risk-critical gap run_exit_check
+    exists to avoid."""
+    last_error = None
+    for delay in (0.0,) + _READ_RETRY_DELAYS_S:
+        if delay:
+            time.sleep(delay)
+        try:
+            return fn(*args, **kwargs)
+        except solana_wallet.WalletError as e:
+            last_error = e
+    raise last_error
+
+
 def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False,
                    pumpportal_feed=None) -> dict:
     """Check every held position against its exit rule and sell if
@@ -746,7 +770,7 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False,
         return report
 
     try:
-        positions = list_positions(storage, env=env)
+        positions = _with_read_retry(list_positions, storage, env=env)
     except (MemecoinError, solana_wallet.WalletError) as e:
         report["errors"].append({"stage": "positions", "error": str(e)})
         return report

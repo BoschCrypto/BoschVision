@@ -788,6 +788,17 @@ separately:**
   per-cycle cost that grows with that history — not a problem at normal
   scale, but a free public RPC that's already 429ing on everything else is
   a sign it's time for a paid one (Helius, QuickNode), not more throttling.
+- **A transient DNS blip on the positions check silently skipped a whole
+  cycle's worth of exit protection.** Live testing hit `positions: Solana
+  RPC unreachable (...): [Errno 11001] getaddrinfo failed` repeatedly —
+  even on a paid Helius endpoint, a one-off DNS resolution hiccup can
+  still happen. Unlike `execute_buy`/`execute_sell`'s sign-and-submit
+  path, nothing about a plain balance/positions READ can have already
+  landed on-chain, so retrying it is always safe (no double-spend risk
+  the way blindly retrying a submission would have). `run_exit_check()`
+  now retries the whole positions fetch (`_with_read_retry()`, two extra
+  attempts) before giving up and reporting the error — a transient blip
+  no longer means an entire cycle's held positions go unchecked.
 
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 
