@@ -474,10 +474,17 @@ def test_cycle_enters_on_passing_candidate(storage, monkeypatch):
     monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
     monkeypatch.setattr(memecoin, "execute_buy", fake_execute_buy)
 
-    report = memecoin.run_autotrade_cycle(
-        storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25",
-                          MEMECOIN_WALLET_BUDGET_USD="50"))
-    assert buy_calls == [("NEW1", 25.0)]
+    env = dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25", MEMECOIN_WALLET_BUDGET_USD="50")
+    report = memecoin.run_autotrade_cycle(storage, env=env)
+    # Size is score-scaled, not flat -- this candidate's momentum score is
+    # well above the entry threshold but not a perfect 100, so it should
+    # land strictly between the configured floor and the $25 ceiling.
+    assert len(buy_calls) == 1
+    assert buy_calls[0][0] == "NEW1"
+    assert memecoin.DEFAULT_MIN_TRADE_USD < buy_calls[0][1] < 25.0
+    expected = memecoin.size_for_score(report["entries"][0]["score"],
+                                       memecoin_strategy.MIN_ENTRY_SCORE, env=env)
+    assert buy_calls[0][1] == pytest.approx(expected)
     assert report["entries"][0]["token_address"] == "NEW1"
 
 
@@ -559,15 +566,18 @@ def test_cycle_stops_entries_when_budget_exhausted_mid_cycle(storage, monkeypatc
                         lambda token, usd, s, **k: {"tx_signature": "sig", "status": "confirmed",
                                                     "sol_amount": 0.1, "usd_amount": usd})
 
-    # Budget covers one full $30 trade plus a reduced $15 final buy from the
-    # leftover — the cycle uses remaining budget rather than stranding it, but
-    # never exceeds the total.
-    report = memecoin.run_autotrade_cycle(
-        storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="30",
-                          MEMECOIN_WALLET_BUDGET_USD="45"),
-        max_new_positions=5)
+    # Size is score-scaled (see size_for_score), so each buy here lands well
+    # under the $30 ceiling -- the cycle keeps buying against the $45 budget
+    # until what's left can't clear the "worth trying" threshold, but never
+    # exceeds the total.
+    env = dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="30", MEMECOIN_WALLET_BUDGET_USD="45")
+    report = memecoin.run_autotrade_cycle(storage, env=env, max_new_positions=5)
     assert len(report["entries"]) == 2
-    assert sum(e["usd_amount"] for e in report["entries"]) == pytest.approx(45.0)
+    total = sum(e["usd_amount"] for e in report["entries"])
+    assert total < 45.0
+    per_buy = memecoin.size_for_score(report["entries"][0]["score"],
+                                      memecoin_strategy.MIN_ENTRY_SCORE, env=env)
+    assert total == pytest.approx(per_buy * 2)
 
 
 def test_cycle_scalp_mode_uses_pumpfun_discovery_not_dexscreener(storage, monkeypatch):
@@ -592,10 +602,13 @@ def test_cycle_scalp_mode_uses_pumpfun_discovery_not_dexscreener(storage, monkey
                         {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.1,
                          "usd_amount": usd})
 
-    report = memecoin.run_autotrade_cycle(
-        storage, env=dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25",
-                          MEMECOIN_WALLET_BUDGET_USD="50"), scalp=True)
-    assert buy_calls == [("PF1", 25.0)]
+    env = dict(CONFIRMED_ENV, MEMECOIN_MAX_TRADE_USD="25", MEMECOIN_WALLET_BUDGET_USD="50")
+    report = memecoin.run_autotrade_cycle(storage, env=env, scalp=True)
+    assert len(buy_calls) == 1
+    assert buy_calls[0][0] == "PF1"
+    expected = memecoin.size_for_score(report["entries"][0]["score"],
+                                       memecoin_strategy.SCALP_MIN_ENTRY_SCORE, env=env)
+    assert buy_calls[0][1] == pytest.approx(expected)
     assert report["entries"][0]["token_address"] == "PF1"
 
 

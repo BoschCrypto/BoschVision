@@ -63,6 +63,55 @@ def test_lamports_and_usd_roundtrip():
     assert memecoin.usd_for_lamports(lam, sol_price_usd=150.0) == pytest.approx(150.0)
 
 
+# --- score-scaled sizing -------------------------------------------------
+
+def test_min_trade_usd_default_and_override():
+    assert memecoin.min_trade_usd({}) == memecoin.DEFAULT_MIN_TRADE_USD
+    assert memecoin.min_trade_usd({"MEMECOIN_MIN_TRADE_USD": "5"}) == 5.0
+
+
+def test_size_for_score_at_threshold_is_the_floor():
+    env = {"MEMECOIN_MIN_TRADE_USD": "10", "MEMECOIN_MAX_TRADE_USD": "25"}
+    assert memecoin.size_for_score(60.0, 60.0, env=env) == pytest.approx(10.0)
+
+
+def test_size_for_score_at_100_is_the_ceiling():
+    env = {"MEMECOIN_MIN_TRADE_USD": "10", "MEMECOIN_MAX_TRADE_USD": "25"}
+    assert memecoin.size_for_score(100.0, 60.0, env=env) == pytest.approx(25.0)
+
+
+def test_size_for_score_scales_linearly_between_floor_and_ceiling():
+    env = {"MEMECOIN_MIN_TRADE_USD": "10", "MEMECOIN_MAX_TRADE_USD": "30"}
+    # Halfway between the 60 threshold and a perfect 100 -> halfway between
+    # the $10 floor and the $30 ceiling.
+    assert memecoin.size_for_score(80.0, 60.0, env=env) == pytest.approx(20.0)
+
+
+def test_size_for_score_never_exceeds_the_configured_ceiling_even_over_100():
+    env = {"MEMECOIN_MIN_TRADE_USD": "10", "MEMECOIN_MAX_TRADE_USD": "25"}
+    assert memecoin.size_for_score(500.0, 60.0, env=env) == pytest.approx(25.0)
+
+
+def test_size_for_score_never_drops_below_the_floor_even_under_threshold():
+    # A caller should never pass a below-threshold score in practice (only
+    # candidates that already cleared entry reach this), but the function
+    # must not extrapolate into something smaller than the floor if it does.
+    env = {"MEMECOIN_MIN_TRADE_USD": "10", "MEMECOIN_MAX_TRADE_USD": "25"}
+    assert memecoin.size_for_score(0.0, 60.0, env=env) == pytest.approx(10.0)
+
+
+def test_size_for_score_handles_a_min_score_of_100_without_dividing_by_zero():
+    env = {"MEMECOIN_MIN_TRADE_USD": "10", "MEMECOIN_MAX_TRADE_USD": "25"}
+    assert memecoin.size_for_score(100.0, 100.0, env=env) == pytest.approx(25.0)
+
+
+def test_size_for_score_falls_back_to_ceiling_when_floor_exceeds_it():
+    # A misconfigured MEMECOIN_MIN_TRADE_USD above the max ceiling must not
+    # size a trade larger than the ceiling the rest of the system enforces.
+    env = {"MEMECOIN_MIN_TRADE_USD": "40", "MEMECOIN_MAX_TRADE_USD": "25"}
+    assert memecoin.size_for_score(100.0, 60.0, env=env) == pytest.approx(25.0)
+
+
 def test_token_amount_from_raw():
     assert memecoin.token_amount_from_raw(1_500_000, 6) == 1.5
 

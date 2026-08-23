@@ -30,6 +30,7 @@ from hf_trading_bot import jupiter, rugcheck, solana_wallet
 CONFIRM_ENV = "HF_BOT_I_UNDERSTAND_MEMECOIN_RISK"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 DEFAULT_MAX_TRADE_USD = 25.0
+DEFAULT_MIN_TRADE_USD = 10.0   # size floor for a candidate that only just cleared entry
 DEFAULT_BUDGET_USD = 50.0
 DEFAULT_SELL_SLIPPAGE_BPS = 150   # a normal trim -- price sensitivity matters, no rush
 # Live testing: a position down -66% (a -15% stop-loss can't be a hard
@@ -85,6 +86,34 @@ def min_sol_reserve(env: Optional[dict] = None) -> float:
         return max(0.0, float(_env(env).get("MEMECOIN_MIN_SOL_RESERVE", DEFAULT_MIN_SOL_RESERVE)))
     except (TypeError, ValueError):
         return DEFAULT_MIN_SOL_RESERVE
+
+
+def min_trade_usd(env: Optional[dict] = None) -> float:
+    try:
+        return float(_env(env).get("MEMECOIN_MIN_TRADE_USD", DEFAULT_MIN_TRADE_USD))
+    except (TypeError, ValueError):
+        return DEFAULT_MIN_TRADE_USD
+
+
+def size_for_score(score: float, min_score: float, *, env: Optional[dict] = None) -> float:
+    """Scale trade size linearly with entry-signal strength: a candidate that
+    only just cleared `min_score` gets `min_trade_usd()`, one at a perfect
+    100 gets the full `max_trade_usd()` ceiling, and everything between is a
+    straight line. A candidate that FAILS to enter never reaches this
+    function at all — this only distinguishes degrees of conviction among
+    candidates that already passed every risk/threshold gate.
+
+    Deliberately conservative: scores this early (thin market-cap/buyer data
+    on a coin seconds old) are noisy, so this scales exposure, it does not
+    amplify it — the ceiling here is the same MEMECOIN_MAX_TRADE_USD that
+    already bounded every trade before this existed."""
+    ceiling = max_trade_usd(env)
+    floor = min(min_trade_usd(env), ceiling)
+    span = 100.0 - min_score
+    if span <= 0:
+        return ceiling
+    frac = max(0.0, min(1.0, (score - min_score) / span))
+    return floor + frac * (ceiling - floor)
 
 
 def budget_usd(env: Optional[dict] = None) -> float:
@@ -872,7 +901,9 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
             report["errors"].append({"stage": "entry-rugcheck-veto", "token_address": t["address"],
                                      "error": "; ".join(rc_red)})
             continue
-        size = min(trade_size, remaining)
+        min_score_used = (memecoin_strategy.SCALP_MIN_ENTRY_SCORE if scalp
+                         else memecoin_strategy.MIN_ENTRY_SCORE)
+        size = min(size_for_score(sig.score, min_score_used, env=env), remaining)
         try:
             result = _with_jupiter_retry(execute_buy, t["address"], size, storage,
                                          kill_switch=kill_switch, env=env)

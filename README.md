@@ -777,6 +777,22 @@ signed:**
   (buys minus sells) can never exceed it.
 - A live SOL balance check, `MEMECOIN_MIN_SOL_RESERVE` (default 0.02 SOL).
 
+**Trade size scales with conviction, not a flat amount.** Every autotrade
+candidate that clears the entry gate already has an entry-signal score (the
+momentum/market-cap/buyer-diversity composite `entry_signal()` or
+`pumpfun_entry_signal()` computes) — that score used to be a pure pass/fail
+gate and nothing else, so a candidate that barely cleared the threshold got
+exactly the same dollar size as one that scored near-perfect. Sizing now
+scales linearly between `MEMECOIN_MIN_TRADE_USD` (a candidate right at the
+entry threshold) and `MEMECOIN_MAX_TRADE_USD` (a perfect 100 score) —
+`memecoin.size_for_score()`. Two things this does **not** do: it never lets
+a candidate in that would otherwise fail the entry/RugCheck gates (scaling
+only decides *how much*, never *whether*), and it never raises exposure
+above the existing `MEMECOIN_MAX_TRADE_USD` ceiling. Scalp-mode scores in
+particular are built from very thin, seconds-old data, so treat this as
+sizing conservatism, not as the bot getting more confident than the
+underlying signal actually warrants.
+
 **Why the live balance check exists.** Live testing produced a real
 `entry-buy: Solana RPC error ... custom program error: 0x1 ...
 'Transfer: insufficient lamports 236352768, need 260603976'` — the wallet's
