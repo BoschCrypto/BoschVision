@@ -288,6 +288,16 @@ def scalp_exit_signal(**kwargs) -> ExitSignal:
 
 SCALP_MIN_ENTRY_SCORE = 50.0
 
+# A coin at age zero has no buyer-diversity data yet (PumpPortal hasn't
+# seen a trade), often no RugCheck report yet (not indexed), and possibly
+# no market cap either -- meaning a high score that early is measuring
+# almost nothing but freshness itself, the one component that's HIGHEST
+# at age zero by design. Requiring a short minimum age gives the signals
+# that actually confirm real, distributed demand time to populate before
+# betting on them -- fewer candidates pass, but the ones that do carry
+# more actual evidence, not just recency.
+SCALP_MIN_AGE_S = 15.0
+
 # Live-tested against Photon's own Memescope: a coin already carrying $10k+
 # market cap in its first minute consistently showed dozens to hundreds of
 # holders, a far more direct "this is real" signal than buyer-diversity
@@ -375,6 +385,7 @@ def pumpfun_momentum_score(coin: dict, *, buyer_stats: Optional[dict] = None) ->
 
 def pumpfun_entry_signal(coin: dict, mint_info: dict, *,
                          min_score: float = SCALP_MIN_ENTRY_SCORE,
+                         min_age_s: float = SCALP_MIN_AGE_S,
                          buyer_stats: Optional[dict] = None) -> EntrySignal:
     """The pump.fun-native equivalent of entry_signal(): mint/freeze
     authority is still checked (memecoin.pumpfun_risk_flags — the only
@@ -388,6 +399,16 @@ def pumpfun_entry_signal(coin: dict, mint_info: dict, *,
                            reasons=["a red risk flag is present — never enter regardless "
                                    "of momentum"],
                            risk_flags=flags)
+    created_at_ms = coin.get("created_at_ms")
+    if created_at_ms is not None:
+        import time as _time
+        age_s = max(0.0, (_time.time() * 1000 - created_at_ms) / 1000.0)
+        if age_s < min_age_s:
+            return EntrySignal(
+                enter=False, score=0.0,
+                reasons=[f"only {age_s:.0f}s old — too fresh for buyer-diversity/RugCheck "
+                        f"data to have caught up yet (needs {min_age_s:.0f}s)"],
+                risk_flags=flags)
     m = pumpfun_momentum_score(coin, buyer_stats=buyer_stats)
     reasons = [c["reason"] for c in m["components"] if c["points"] > 0]
     enter = m["score"] >= min_score

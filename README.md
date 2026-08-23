@@ -610,6 +610,22 @@ buying. Two free integrations fix that:
   wallets combined** hold ≥35% (`RUGCHECK_TOP5_HOLDER_RED_PCT`) — this costs
   no extra API calls, since RugCheck's report already returns the full
   holder list; it was previously discarded down to a single number.
+  A second field was sitting in the same report, also fetched and also
+  never read: `lp_locked_pct`. An unlocked (or barely-locked) LP is the
+  classic rug-pull mechanism — the creator can pull liquidity and walk
+  away regardless of how distributed the token *holders* look, and no
+  holder-concentration check can see that. `rugcheck_flags()` now flags
+  red below 50% locked (`RUGCHECK_LP_LOCKED_RED_BELOW_PCT`) and yellow
+  below 80% (`RUGCHECK_LP_LOCKED_YELLOW_BELOW_PCT`) — again, no extra cost.
+- **A minimum age before a scalp candidate is even considered.** The
+  freshness component of the momentum score is *highest* at age zero — but
+  a coin that young has no buyer-diversity data yet (PumpPortal hasn't
+  seen a trade) and is often not RugCheck-indexed yet either, meaning a
+  high score that early is measuring almost nothing but recency, not real
+  confirming evidence. `pumpfun_entry_signal()` now rejects anything
+  younger than `SCALP_MIN_AGE_S` (15 seconds) outright, before scoring —
+  fewer candidates pass, but the ones that do have had time for the
+  signals that actually distinguish organic demand from noise to show up.
 
 Both are genuinely free and neither requires an API key to function (an
 optional `RUGCHECK_API_KEY` just raises RugCheck's rate limit). Like the live

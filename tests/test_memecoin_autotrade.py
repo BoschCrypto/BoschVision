@@ -830,7 +830,7 @@ def test_cycle_scalp_mode_uses_pumpfun_discovery_not_dexscreener(storage, monkey
 
     from hf_trading_bot import pumpfun_data
     import time as _t
-    coin = {"address": "PF1", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000),
+    coin = {"address": "PF1", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000) - 20_000,
            "sol_raised": 30.0, "market_cap_usd": 4000, "migrated": False, "source": "pumpfun"}
     monkeypatch.setattr(pumpfun_data, "list_new_coins", lambda limit=30, env=None: [coin])
     monkeypatch.setattr(solana_wallet, "get_mint_info",
@@ -862,7 +862,7 @@ def test_cycle_scalp_entries_use_wider_slippage_than_normal_entries(storage, mon
 
     from hf_trading_bot import pumpfun_data
     import time as _t
-    coin = {"address": "PF1", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000),
+    coin = {"address": "PF1", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000) - 20_000,
            "sol_raised": 30.0, "market_cap_usd": 4000, "migrated": False, "source": "pumpfun"}
     monkeypatch.setattr(pumpfun_data, "list_new_coins", lambda limit=30, env=None: [coin])
     monkeypatch.setattr(solana_wallet, "get_mint_info",
@@ -901,7 +901,7 @@ def test_cycle_scalp_mode_uses_live_candidates_when_given(storage, monkeypatch):
     # market_cap_usd is set explicitly so this candidate clears the entry
     # score threshold AND so run_autotrade_cycle doesn't attempt a live
     # pumpfun_data.get_coin() enrichment fetch (real network in this test).
-    live_coin = {"address": "LIVE1", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000),
+    live_coin = {"address": "LIVE1", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000) - 20_000,
                 "sol_raised": 30.0, "market_cap_usd": 10_000, "migrated": False,
                 "source": "pumpfun_live"}
     report = memecoin.run_autotrade_cycle(
@@ -948,7 +948,7 @@ def test_cycle_merges_pumpportal_new_coins_into_live_candidates(storage, monkeyp
                 "sol_raised": 1.0, "market_cap_usd": None, "migrated": False,
                 "source": "pumpfun_live"}
     pp_coin = {"address": "FROM_PUMPPORTAL", "symbol": "P", "name": "P Coin",
-              "created_at_ms": now_ms, "market_cap_usd": 10_000, "price_usd": None,
+              "created_at_ms": now_ms - 20_000, "market_cap_usd": 10_000, "price_usd": None,
               "has_social_links": None, "sol_raised": None, "migrated": False,
               "source": "pumpportal"}
     feed = _FakePumpPortalFeed(new_coins=[pp_coin])
@@ -979,10 +979,10 @@ def test_cycle_pumpportal_candidates_deduplicated_by_address(storage, monkeypatc
     now_ms = int(_t.time() * 1000)
     # Same address from both sources -- the live-feed version (with market
     # cap already set) must win, not be duplicated into two entries.
-    live_coin = {"address": "SAME", "symbol": "L", "created_at_ms": now_ms,
+    live_coin = {"address": "SAME", "symbol": "L", "created_at_ms": now_ms - 20_000,
                 "sol_raised": 1.0, "market_cap_usd": 10_000, "migrated": False,
                 "source": "pumpfun_live"}
-    pp_dupe = {"address": "SAME", "symbol": "P", "name": None, "created_at_ms": now_ms,
+    pp_dupe = {"address": "SAME", "symbol": "P", "name": None, "created_at_ms": now_ms - 20_000,
               "market_cap_usd": None, "price_usd": None, "has_social_links": None,
               "sol_raised": None, "migrated": False, "source": "pumpportal"}
     feed = _FakePumpPortalFeed(new_coins=[pp_dupe])
@@ -1017,7 +1017,7 @@ def test_cycle_fetches_market_cap_when_live_candidate_lacks_one(storage, monkeyp
                          "usd_amount": usd})
 
     import time as _t
-    live_coin = {"address": "LIVE2", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000),
+    live_coin = {"address": "LIVE2", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000) - 20_000,
                 "sol_raised": 2.0, "market_cap_usd": None, "migrated": False,
                 "source": "pumpfun_live"}
     report = memecoin.run_autotrade_cycle(
@@ -1046,7 +1046,7 @@ def test_cycle_skips_market_cap_fetch_when_candidate_already_has_one(storage, mo
                                                     "sol_amount": 0.1, "usd_amount": usd})
 
     import time as _t
-    live_coin = {"address": "LIVE3", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000),
+    live_coin = {"address": "LIVE3", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000) - 20_000,
                 "sol_raised": 2.0, "market_cap_usd": 10_000, "migrated": False,
                 "source": "pumpfun_live"}
     memecoin.run_autotrade_cycle(

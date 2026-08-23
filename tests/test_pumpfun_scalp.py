@@ -182,7 +182,7 @@ def test_pumpfun_momentum_market_cap_scores_higher_than_no_market_cap():
     # The signal live-testing actually validated (Photon's own >=$10k
     # Memescope filter) -- a coin already carrying real market cap should
     # score meaningfully higher than an otherwise-identical one with none.
-    coin_base = {"created_at_ms": int(time.time() * 1000)}
+    coin_base = {"created_at_ms": int(time.time() * 1000) - 20_000}
     no_mc = memecoin_strategy.pumpfun_momentum_score(coin_base)
     with_mc = memecoin_strategy.pumpfun_momentum_score(
         dict(coin_base, market_cap_usd=10_000))
@@ -237,7 +237,7 @@ def test_pumpfun_momentum_missing_data_scores_zero():
 
 
 def test_pumpfun_momentum_social_links_add_a_minor_bonus():
-    coin = {"created_at_ms": int(time.time() * 1000)}
+    coin = {"created_at_ms": int(time.time() * 1000) - 20_000}
     without = memecoin_strategy.pumpfun_momentum_score(coin)
     with_links = memecoin_strategy.pumpfun_momentum_score(dict(coin, has_social_links=True))
     assert with_links["score"] == pytest.approx(
@@ -245,7 +245,7 @@ def test_pumpfun_momentum_social_links_add_a_minor_bonus():
 
 
 def test_pumpfun_momentum_social_links_false_adds_nothing():
-    coin = {"created_at_ms": int(time.time() * 1000), "has_social_links": False}
+    coin = {"created_at_ms": int(time.time() * 1000) - 20_000, "has_social_links": False}
     result = memecoin_strategy.pumpfun_momentum_score(coin)
     assert not any("social" in c["reason"] for c in result["components"])
 
@@ -265,13 +265,13 @@ def test_normalize_has_social_links_false_when_none_present():
 
 def test_pumpfun_entry_signal_red_flag_blocks():
     hot_mint = dict(CLEAN_MINT, mint_authority="Creator")
-    coin = {"created_at_ms": int(time.time() * 1000), "sol_raised": 30.0}
+    coin = {"created_at_ms": int(time.time() * 1000) - 20_000, "sol_raised": 30.0}
     sig = memecoin_strategy.pumpfun_entry_signal(coin, hot_mint)
     assert sig.enter is False
 
 
 def test_pumpfun_entry_signal_passes_fresh_clean_coin_with_market_cap():
-    coin = {"created_at_ms": int(time.time() * 1000), "sol_raised": 30.0,
+    coin = {"created_at_ms": int(time.time() * 1000) - 20_000, "sol_raised": 30.0,
            "market_cap_usd": 10_000}
     sig = memecoin_strategy.pumpfun_entry_signal(coin, CLEAN_MINT)
     assert sig.enter is True
@@ -298,6 +298,54 @@ def test_pumpfun_entry_signal_uses_market_cap_to_clear_threshold():
     with_mc = memecoin_strategy.pumpfun_entry_signal(coin_with_mc, CLEAN_MINT)
     assert without.enter is False
     assert with_mc.enter is True
+
+
+# --- pumpfun_entry_signal: minimum age gate --------------------------------
+# A coin at age zero has no buyer-diversity data yet and often isn't
+# RugCheck-indexed yet either -- a high score that early is measuring almost
+# nothing but freshness, the one component that's HIGHEST at age zero.
+
+def test_pumpfun_entry_signal_rejects_a_coin_younger_than_min_age():
+    now_ms = int(time.time() * 1000)
+    # Excellent stats on every OTHER axis -- market cap alone would clear
+    # the entry score comfortably -- but it's only 2 seconds old.
+    coin = {"created_at_ms": now_ms - 2_000, "sol_raised": 30.0, "market_cap_usd": 10_000}
+    sig = memecoin_strategy.pumpfun_entry_signal(coin, CLEAN_MINT)
+    assert sig.enter is False
+    assert any("too fresh" in r for r in sig.reasons)
+
+
+def test_pumpfun_entry_signal_allows_a_coin_right_at_the_min_age():
+    now_ms = int(time.time() * 1000)
+    coin = {"created_at_ms": now_ms - int(memecoin_strategy.SCALP_MIN_AGE_S * 1000) - 1_000,
+           "sol_raised": 30.0, "market_cap_usd": 10_000}
+    sig = memecoin_strategy.pumpfun_entry_signal(coin, CLEAN_MINT)
+    assert sig.enter is True
+
+
+def test_pumpfun_entry_signal_min_age_is_overridable():
+    now_ms = int(time.time() * 1000)
+    coin = {"created_at_ms": now_ms - 2_000, "sol_raised": 30.0, "market_cap_usd": 10_000}
+    sig = memecoin_strategy.pumpfun_entry_signal(coin, CLEAN_MINT, min_age_s=1.0)
+    assert sig.enter is True
+
+
+def test_pumpfun_entry_signal_skips_age_gate_when_no_timestamp_available():
+    # Missing data must never block -- same rule as every other input here.
+    coin = {"sol_raised": 30.0, "market_cap_usd": 10_000}
+    sig = memecoin_strategy.pumpfun_entry_signal(coin, CLEAN_MINT)
+    assert sig.enter is True
+
+
+def test_pumpfun_entry_signal_red_flag_checked_before_age_gate():
+    # A structurally bad coin should be rejected for the mint/freeze
+    # authority reason, not silently reclassified as "too fresh."
+    hot_mint = dict(CLEAN_MINT, mint_authority="Creator")
+    now_ms = int(time.time() * 1000)
+    coin = {"created_at_ms": now_ms, "sol_raised": 30.0, "market_cap_usd": 10_000}
+    sig = memecoin_strategy.pumpfun_entry_signal(coin, hot_mint)
+    assert sig.enter is False
+    assert any("red risk flag" in r for r in sig.reasons)
 
 
 def test_pumpfun_risk_flags_only_checks_authorities():

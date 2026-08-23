@@ -96,6 +96,15 @@ RUGCHECK_SCORE_RED_THRESHOLD = 80.0   # RugCheck's own 0-100 composite; higher =
 # extra RugCheck calls; the top-5 aggregate comes from the same report.
 RUGCHECK_TOP5_HOLDER_RED_PCT = 35.0
 
+# RugCheck's report already carries lp_locked_pct (has been fetched all
+# along) but nothing ever read it -- an unlocked/barely-locked LP is the
+# classic rug-pull mechanism (the dev pulls liquidity and walks away)
+# regardless of how distributed the token HOLDERS look, so holder-
+# concentration checks alone can't see it. Two tiers, same reasoning as
+# the holder-concentration thresholds above.
+RUGCHECK_LP_LOCKED_RED_BELOW_PCT = 50.0
+RUGCHECK_LP_LOCKED_YELLOW_BELOW_PCT = 80.0
+
 
 class MemecoinError(RuntimeError):
     pass
@@ -334,11 +343,13 @@ def rugcheck_flags(token_address: str, *, env: Optional[dict] = None) -> list[di
     real-world call volume well under RugCheck's free-tier rate limit, and
     matches what this is for: a last check before money moves).
 
-    Fills the one real gap pumpfun_risk_flags() has no visibility into: a
-    single wallet (often funded from the same source as several others in
-    the same block) holding an outsized share of supply — the textbook
-    bundled/insider-launch pattern — plus the same pattern spread across
-    several wallets instead of one (see RUGCHECK_TOP5_HOLDER_RED_PCT).
+    Fills gaps pumpfun_risk_flags() has no visibility into: a single wallet
+    (often funded from the same source as several others in the same
+    block) holding an outsized share of supply — the textbook bundled/
+    insider-launch pattern — the same pattern spread across several
+    wallets instead of one (see RUGCHECK_TOP5_HOLDER_RED_PCT), and an
+    unlocked/barely-locked LP the creator could pull regardless of how
+    distributed the holders look (RUGCHECK_LP_LOCKED_RED_BELOW_PCT).
     RugCheck being unreachable, or a coin not indexed yet, returns no
     flags — never a reason to block OR to enter; it is one more input, not
     a requirement."""
@@ -366,6 +377,14 @@ def rugcheck_flags(token_address: str, *, env: Optional[dict] = None) -> list[di
     if score is not None and score >= RUGCHECK_SCORE_RED_THRESHOLD:
         flags.append({"level": "red", "reason":
                      f"RugCheck composite risk score {score:.0f}/100 is very high"})
+    lp_locked = report.get("lp_locked_pct")
+    if lp_locked is not None and lp_locked < RUGCHECK_LP_LOCKED_RED_BELOW_PCT:
+        flags.append({"level": "red", "reason":
+                     f"RugCheck: only {lp_locked:.1f}% of the LP is locked — the creator "
+                     f"can pull liquidity regardless of how holders are distributed"})
+    elif lp_locked is not None and lp_locked < RUGCHECK_LP_LOCKED_YELLOW_BELOW_PCT:
+        flags.append({"level": "yellow", "reason":
+                     f"RugCheck: only {lp_locked:.1f}% of the LP is locked"})
     return flags
 
 

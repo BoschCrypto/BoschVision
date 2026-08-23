@@ -184,6 +184,41 @@ def test_rugcheck_flags_clean_report_yields_no_flags(monkeypatch):
     assert memecoin.rugcheck_flags("MINT1") == []
 
 
+def test_rugcheck_flags_red_on_mostly_unlocked_lp(monkeypatch):
+    # An unlocked LP is the classic rug-pull mechanism -- the creator can
+    # walk away with liquidity regardless of how distributed the token
+    # HOLDERS look, so holder-concentration checks alone can't catch it.
+    monkeypatch.setattr(memecoin.rugcheck, "get_report",
+                        lambda addr, env=None: {"score": 5, "top_holder_pct": 3.0,
+                                               "lp_locked_pct": 12.0, "risks": []})
+    flags = memecoin.rugcheck_flags("MINT1")
+    assert any(f["level"] == "red" and "LP is locked" in f["reason"] for f in flags)
+
+
+def test_rugcheck_flags_yellow_on_partially_locked_lp(monkeypatch):
+    monkeypatch.setattr(memecoin.rugcheck, "get_report",
+                        lambda addr, env=None: {"score": 5, "top_holder_pct": 3.0,
+                                               "lp_locked_pct": 65.0, "risks": []})
+    flags = memecoin.rugcheck_flags("MINT1")
+    assert flags == [{"level": "yellow",
+                      "reason": "RugCheck: only 65.0% of the LP is locked"}]
+
+
+def test_rugcheck_flags_no_flag_when_lp_well_locked(monkeypatch):
+    monkeypatch.setattr(memecoin.rugcheck, "get_report",
+                        lambda addr, env=None: {"score": 5, "top_holder_pct": 3.0,
+                                               "lp_locked_pct": 95.0, "risks": []})
+    assert memecoin.rugcheck_flags("MINT1") == []
+
+
+def test_rugcheck_flags_no_flag_when_lp_locked_pct_missing(monkeypatch):
+    # A report shape without this field must not crash or false-flag.
+    monkeypatch.setattr(memecoin.rugcheck, "get_report",
+                        lambda addr, env=None: {"score": 5, "top_holder_pct": 3.0,
+                                               "risks": []})
+    assert memecoin.rugcheck_flags("MINT1") == []
+
+
 def test_rugcheck_flags_no_report_yields_no_flags(monkeypatch):
     monkeypatch.setattr(memecoin.rugcheck, "get_report", lambda addr, env=None: None)
     assert memecoin.rugcheck_flags("MINT1") == []
