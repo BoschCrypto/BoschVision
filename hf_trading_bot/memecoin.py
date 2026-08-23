@@ -42,6 +42,19 @@ DEFAULT_SELL_SLIPPAGE_BPS = 150   # a normal trim -- price sensitivity matters, 
 # bleeding value -- see run_exit_check.
 EMERGENCY_EXIT_SLIPPAGE_BPS = 2500
 
+# Live testing: even a routine (non-emergency) take-profit trim on a
+# pump.fun bonding-curve position was rejected at the normal 150bps --
+# {'code': -32002, ... 'InstructionError': [3, {'Custom': 6001}] ...
+# 'Program JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4 failed: custom
+# program error: 0x1771'} -- the inner pump.fun SellV2 CPI actually
+# succeeded; it's Jupiter's own Route instruction enforcing its
+# slippage-derived minimum-out at the very end that rejected it. The
+# position was eventually trimmed on a later exit-check pass (a fresh
+# quote 10s on), but 150bps -- sized for an established DexScreener pair
+# -- is too tight for ANY pump.fun bonding-curve exit, not just a crash.
+# Wider than the normal default, narrower than the true emergency ceiling.
+SCALP_SELL_SLIPPAGE_BPS = 500     # 5% -- scalp-mode non-emergency exits only
+
 DEFAULT_BUY_SLIPPAGE_BPS = 100    # 1% -- fine for an established DexScreener pair
 # Live testing: a scalp-mode BUY on a pump.fun bonding-curve coin (still
 # seconds/minutes old, trading directly against the bonding curve, not a
@@ -94,6 +107,25 @@ def max_trade_usd(env: Optional[dict] = None) -> float:
 def buy_slippage_bps(env: Optional[dict] = None, *, scalp: bool = False) -> int:
     key = "MEMECOIN_SCALP_BUY_SLIPPAGE_BPS" if scalp else "MEMECOIN_BUY_SLIPPAGE_BPS"
     default = SCALP_BUY_SLIPPAGE_BPS if scalp else DEFAULT_BUY_SLIPPAGE_BPS
+    try:
+        return int(_env(env).get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def sell_slippage_bps(env: Optional[dict] = None, *, scalp: bool = False,
+                      urgent: bool = False) -> int:
+    """`urgent` (a stop-loss or trailing-stop exit) always wins regardless
+    of `scalp` -- getting out at a worse price during a real crash beats
+    repeatedly failing to get out at all. Otherwise scalp-mode's bonding-
+    curve exits get a wider default than an established DexScreener pair
+    needs -- see SCALP_SELL_SLIPPAGE_BPS."""
+    if urgent:
+        key, default = "MEMECOIN_EMERGENCY_EXIT_SLIPPAGE_BPS", EMERGENCY_EXIT_SLIPPAGE_BPS
+    elif scalp:
+        key, default = "MEMECOIN_SCALP_SELL_SLIPPAGE_BPS", SCALP_SELL_SLIPPAGE_BPS
+    else:
+        key, default = "MEMECOIN_SELL_SLIPPAGE_BPS", DEFAULT_SELL_SLIPPAGE_BPS
     try:
         return int(_env(env).get(key, default))
     except (TypeError, ValueError):
@@ -687,11 +719,13 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) 
             # exit while the position keeps bleeding value is worse than
             # accepting a bad fill. Widen slippage specifically for the two
             # downside-protection exit reasons; take-profit trims and stall
-            # exits aren't emergencies and keep the tighter default.
+            # exits aren't emergencies. But even THOSE need more room in
+            # scalp mode than an established pair does — see
+            # sell_slippage_bps()/SCALP_SELL_SLIPPAGE_BPS.
             urgent = sig.reason.startswith("stop-loss") or sig.reason.startswith("trailing stop")
-            sell_slippage_bps = EMERGENCY_EXIT_SLIPPAGE_BPS if urgent else DEFAULT_SELL_SLIPPAGE_BPS
+            slippage_for_sell = sell_slippage_bps(env, scalp=scalp, urgent=urgent)
             result = _with_jupiter_retry(execute_sell, p.token_address, sig.sell_pct, storage,
-                                         kill_switch=kill_switch, slippage_bps=sell_slippage_bps,
+                                         kill_switch=kill_switch, slippage_bps=slippage_for_sell,
                                          env=env)
             trim1_pct = (memecoin_strategy.SCALP_TRIM_1_SELL_PCT if scalp
                         else memecoin_strategy.TRIM_1_SELL_PCT)

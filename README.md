@@ -463,6 +463,21 @@ riskier profile:
   non-scalp entries (established pairs via DexScreener) keep the tighter
   default. Both are overridable via `MEMECOIN_BUY_SLIPPAGE_BPS` /
   `MEMECOIN_SCALP_BUY_SLIPPAGE_BPS` if 0x1771 still shows up on buys.
+- **And the same thing on a routine exit, not just a crash.** Live testing
+  hit 0x1771 a third time — on an ordinary take-profit trim, no stop-loss
+  involved, at the normal 150bps exit tolerance. The raw error showed the
+  inner pump.fun `SellV2` call actually succeeding; it's Jupiter's own
+  `Route` instruction enforcing its slippage-derived minimum-out at the
+  very end that rejected the whole simulated transaction. The position
+  traded fine on the next exit-check pass 10 seconds later (a fresh quote
+  cleared it), but 150bps — sized for an established pair — turned out too
+  tight for ANY pump.fun bonding-curve exit, not only an emergency one.
+  Non-emergency scalp-mode exits now use `SCALP_SELL_SLIPPAGE_BPS` (500bps
+  = 5%): wider than the 150bps normal default, narrower than the 2500bps
+  emergency ceiling. A stop-loss or trailing-stop still always gets the
+  emergency tolerance regardless of mode — urgency wins over everything.
+  Configurable via `MEMECOIN_SELL_SLIPPAGE_BPS` /
+  `MEMECOIN_SCALP_SELL_SLIPPAGE_BPS` / `MEMECOIN_EMERGENCY_EXIT_SLIPPAGE_BPS`.
 
 ```bash
 hf-bot memecoin newcoins                                   # test the feed first

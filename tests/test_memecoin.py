@@ -105,6 +105,26 @@ def test_size_for_score_handles_a_min_score_of_100_without_dividing_by_zero():
     assert memecoin.size_for_score(100.0, 100.0, env=env) == pytest.approx(25.0)
 
 
+def test_sell_slippage_bps_defaults():
+    assert memecoin.sell_slippage_bps({}) == memecoin.DEFAULT_SELL_SLIPPAGE_BPS
+    assert memecoin.sell_slippage_bps({}, scalp=True) == memecoin.SCALP_SELL_SLIPPAGE_BPS
+    assert memecoin.sell_slippage_bps({}, urgent=True) == memecoin.EMERGENCY_EXIT_SLIPPAGE_BPS
+
+
+def test_sell_slippage_bps_urgent_wins_over_scalp():
+    # A crash is a crash regardless of mode -- urgency always takes priority.
+    assert (memecoin.sell_slippage_bps({}, scalp=True, urgent=True)
+           == memecoin.EMERGENCY_EXIT_SLIPPAGE_BPS)
+
+
+def test_sell_slippage_bps_overrides_are_independent():
+    env = {"MEMECOIN_SELL_SLIPPAGE_BPS": "200", "MEMECOIN_SCALP_SELL_SLIPPAGE_BPS": "700",
+          "MEMECOIN_EMERGENCY_EXIT_SLIPPAGE_BPS": "3000"}
+    assert memecoin.sell_slippage_bps(env) == 200
+    assert memecoin.sell_slippage_bps(env, scalp=True) == 700
+    assert memecoin.sell_slippage_bps(env, urgent=True) == 3000
+
+
 def test_buy_slippage_bps_defaults():
     assert memecoin.buy_slippage_bps({}) == memecoin.DEFAULT_BUY_SLIPPAGE_BPS
     assert memecoin.buy_slippage_bps({}, scalp=True) == memecoin.SCALP_BUY_SLIPPAGE_BPS
