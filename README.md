@@ -464,6 +464,27 @@ riskier profile:
   25%) specifically — getting out at a worse price beats repeatedly failing
   to get out while the position keeps bleeding value. Take-profit trims
   keep the normal tolerance; they're not emergencies.
+- **What actually closes most of that gap: PumpPortal's live price, not a
+  faster poll.** The 10-second interval above isn't a hard limit either —
+  it's how often the exit check bothered to look, because the DexScreener
+  REST poll it used has a real per-request cost. But every trade on
+  PumpPortal's already-open WebSocket stream (open for buyer-diversity
+  scoring regardless) carries `marketCapSol` — a free, push-based price
+  tick on every single buy or sell, no extra API call. `run_exit_check()`
+  now prefers that live price for a held scalp position over the
+  DexScreener poll whenever a recent-enough trade tick exists
+  (`MEMECOIN_PUMPPORTAL_PRICE_MAX_AGE_S`, default 30s), and pins the
+  position so it never ages out of PumpPortal's normal 3-minute tracking
+  window while held — a real hold routinely outlives that window, and
+  silently losing price updates partway through one would be worse than
+  not having this at all. Because reading that price now costs nothing,
+  `--memecoin-exit-check-seconds` can safely drop to 1-2s in scalp mode
+  instead of the 10s default — the position still only trades on a real
+  Jupiter quote/sign/submit when a rule actually fires, this just makes
+  the check itself near-instant. Falls back to the DexScreener price
+  silently whenever PumpPortal has nothing fresh (an illiquid mint, a
+  disconnected feed) — this can only make a check more current, never
+  less informed.
 - **The same thing happens on the way IN, not just the way out.** Live
   testing hit `custom program error: 0x1771` (Anchor error 6001, the same
   slippage-tolerance code as the sell-side failure above) on a scalp-mode
@@ -493,15 +514,22 @@ riskier profile:
 
 ```bash
 hf-bot memecoin newcoins                                   # test the feed first
-hf-bot dashboard --open --memecoin-autotrade --memecoin-scalp --memecoin-cycle-seconds 90
+hf-bot dashboard --open --memecoin-autotrade --memecoin-scalp \
+                  --memecoin-cycle-seconds 90 --memecoin-exit-check-seconds 2
 ```
 
-A short cycle actually matters for scalping — **the free public Solana RPC
-will rate-limit at 60-120s cycles**; a paid RPC (Helius, QuickNode) is
-recommended for scalp mode specifically. Everything else stays the same: the
-kill switch, `MEMECOIN_MAX_TRADE_USD`, and `MEMECOIN_WALLET_BUDGET_USD` all
-still apply exactly as before — scalp mode changes *what* gets bought and
-*when* it gets sold, never *how much* the bot is allowed to risk in total.
+A short entry cycle actually matters for scalping — **the free public Solana
+RPC will rate-limit at 60-120s cycles**; a paid RPC (Helius, QuickNode) is
+recommended for scalp mode specifically. The exit-check interval is a
+separate knob: 2s is safe in scalp mode specifically because a held
+position's price comes from PumpPortal's already-open, rate-limit-free
+trade stream, not a fresh poll every check (see "What actually closes most
+of that gap" above) — this is NOT safe to set that low in non-scalp mode,
+where every check still costs a real DexScreener request. Everything else
+stays the same: the kill switch, `MEMECOIN_MAX_TRADE_USD`, and
+`MEMECOIN_WALLET_BUDGET_USD` all still apply exactly as before — scalp mode
+changes *what* gets bought and *when* it gets sold, never *how much* the
+bot is allowed to risk in total.
 
 ### Live feed — real-time detection, not polling (`--memecoin-live`)
 

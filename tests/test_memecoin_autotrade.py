@@ -184,6 +184,153 @@ def test_exit_check_take_profit_trim_uses_normal_slippage(storage, monkeypatch):
     assert calls == [memecoin.DEFAULT_SELL_SLIPPAGE_BPS]
 
 
+class _FakeExitPumpPortalFeed:
+    """Minimal stand-in for pumpportal_live.PumpPortalFeed's read/pin side --
+    just enough to test run_exit_check's live-price preference without a
+    real WebSocket."""
+    def __init__(self, reading=None):
+        self._reading = reading
+        self.pinned: list[str] = []
+        self.unpinned: list[str] = []
+
+    def pin(self, mint):
+        self.pinned.append(mint)
+
+    def unpin(self, mint):
+        self.unpinned.append(mint)
+
+    def last_market_cap_sol(self, mint):
+        return self._reading
+
+
+# --- run_exit_check + PumpPortal live price (scalp mode only) --------------
+# Live testing: a position gapped past its trailing-stop zone straight into
+# a much worse stop-loss between two 10-second DexScreener polls.
+# PumpPortal already pushes a price (marketCapSol) on every single trade,
+# free, with no extra API call -- these confirm run_exit_check actually
+# prefers that fresher price over the poll baseline when it's available.
+
+def test_exit_check_prefers_fresh_pumpportal_price_in_scalp_mode(storage, monkeypatch):
+    from hf_trading_bot import pumpfun_data
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    # The DexScreener-derived price is only +5% -- not enough to trigger
+    # ANY scalp exit rule on its own (trim-1 needs +15%).
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=1.05)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    monkeypatch.setattr(pumpfun_data, "TOTAL_SUPPLY", 10)
+    monkeypatch.setattr(memecoin, "get_sol_price_usd", lambda env=None: 2.0)
+    # market_cap_sol=6.0 * sol_price=2.0 / TOTAL_SUPPLY=10 -> price 1.20 = +20%
+    feed = _FakeExitPumpPortalFeed(reading={"market_cap_sol": 6.0, "age_s": 1.0})
+
+    def fake_execute_sell(token, pct, s, *, kill_switch, slippage_bps=None, env=None, **k):
+        return {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.05,
+               "usd_amount": 5.0}
+    monkeypatch.setattr(memecoin, "execute_sell", fake_execute_sell)
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV, scalp=True,
+                                     pumpportal_feed=feed)
+    assert report["exits"][0]["reason"].startswith("take-profit")
+    assert "20.0" in report["exits"][0]["reason"]
+
+
+def test_exit_check_ignores_a_stale_pumpportal_reading(storage, monkeypatch):
+    from hf_trading_bot import pumpfun_data
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=1.05)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    monkeypatch.setattr(pumpfun_data, "TOTAL_SUPPLY", 10)
+    monkeypatch.setattr(memecoin, "get_sol_price_usd", lambda env=None: 2.0)
+    # Same math as above (would read as +20%), but far older than the
+    # default 30s max age -- must be ignored in favor of the DexScreener
+    # price (+5%, no exit).
+    feed = _FakeExitPumpPortalFeed(reading={"market_cap_sol": 6.0, "age_s": 999.0})
+
+    def boom(*a, **k):
+        raise AssertionError("no exit should fire off a stale PumpPortal reading")
+    monkeypatch.setattr(memecoin, "execute_sell", boom)
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV, scalp=True,
+                                     pumpportal_feed=feed)
+    assert report["exits"] == []
+
+
+def test_exit_check_falls_back_when_pumpportal_has_no_reading_yet(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=2.5)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    feed = _FakeExitPumpPortalFeed(reading=None)   # never traded since we started watching
+
+    def fake_execute_sell(token, pct, s, *, kill_switch, slippage_bps=None, env=None, **k):
+        return {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.05,
+               "usd_amount": 5.0}
+    monkeypatch.setattr(memecoin, "execute_sell", fake_execute_sell)
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV, scalp=True,
+                                     pumpportal_feed=feed)
+    assert report["exits"][0]["reason"].startswith("take-profit")   # DexScreener's +150%
+
+
+def test_exit_check_ignores_pumpportal_feed_outside_scalp_mode(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=1.05)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    feed = _FakeExitPumpPortalFeed(reading={"market_cap_sol": 6.0, "age_s": 1.0})
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV, scalp=False,
+                                     pumpportal_feed=feed)
+    assert report["exits"] == []
+    assert feed.pinned == []   # never even consulted outside scalp mode
+
+
+def test_exit_check_pins_held_positions_in_scalp_mode(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    # A small gain, no exit rule triggered -- pin() should still happen on
+    # every tick a position is held, not only right before a sell.
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=1.02)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    feed = _FakeExitPumpPortalFeed(reading=None)
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV, scalp=True,
+                                     pumpportal_feed=feed)
+    assert report["exits"] == []
+    assert feed.pinned == ["M1"]
+
+
+def test_exit_check_unpins_on_full_exit(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=0.5)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    feed = _FakeExitPumpPortalFeed(reading=None)
+
+    def fake_execute_sell(token, pct, s, *, kill_switch, slippage_bps=None, env=None, **k):
+        return {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.05,
+               "usd_amount": 5.0}
+    monkeypatch.setattr(memecoin, "execute_sell", fake_execute_sell)
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV, scalp=True,
+                                     pumpportal_feed=feed)
+    assert report["exits"][0]["sell_pct"] == 100.0   # stop-loss: full exit
+    assert feed.unpinned == ["M1"]
+
+
 def test_exit_check_scalp_trim_uses_scalp_slippage_not_the_normal_default(storage, monkeypatch):
     """Live testing: a routine take-profit trim on a pump.fun bonding-curve
     position was rejected (custom program error 0x1771 / Anchor 6001) at

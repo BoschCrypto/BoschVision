@@ -2260,7 +2260,11 @@ def memecoin_positions(cfg):
                    "has to stay slow to respect RugCheck/pump.fun's free-tier rate limits, but "
                    "checking your own handful of held positions costs nothing on those limits, "
                    "so there's no reason a stop-loss should wait a full entry cycle to fire. "
-                   "Only runs when --memecoin-autotrade is on.")
+                   "In --memecoin-scalp mode, a held position's price comes from PumpPortal's "
+                   "own already-open trade stream (free, no rate limit, always running "
+                   "alongside scalp mode) rather than a DexScreener poll -- 1-2s is safe here "
+                   "and reacts far faster than the 10s default. Only runs when "
+                   "--memecoin-autotrade is on.")
 @click.option("--memecoin-scalp", is_flag=True,
               help="Switch --memecoin-autotrade to the scalp profile: entries come from "
                    "pump.fun's own brand-new-coin feed (pumpfun_data — an UNOFFICIAL API, "
@@ -2529,7 +2533,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         from hf_trading_bot import memecoin
         s = Storage(db_path)
         try:
-            report = memecoin.run_exit_check(s, scalp=memecoin_scalp)
+            report = memecoin.run_exit_check(s, scalp=memecoin_scalp,
+                                             pumpportal_feed=memecoin_pumpportal_feed)
         finally:
             s.close()
         memecoin_autotrade_status["last_exit_check_at"] = (

@@ -65,6 +65,12 @@ DEFAULT_BUY_SLIPPAGE_BPS = 100    # 1% -- fine for an established DexScreener pa
 # much wider entry tolerance than an established pair does.
 SCALP_BUY_SLIPPAGE_BPS = 1000     # 10% -- scalp-mode entries only
 
+# How stale a PumpPortal trade tick can be before run_exit_check ignores it
+# and falls back to the DexScreener poll instead -- an illiquid mint can
+# legitimately go quiet for a while, and a very old reading is worse than
+# no reading at all if it's mistaken for "current."
+DEFAULT_PUMPPORTAL_PRICE_MAX_AGE_S = 30.0
+
 # Live testing: a buy sized against the internal USD budget ledger was
 # submitted for simulation and rejected with "insufficient lamports" --
 # the wallet's real spendable SOL was thinner than the ledger assumed,
@@ -136,6 +142,14 @@ def sell_slippage_bps(env: Optional[dict] = None, *, scalp: bool = False,
         return int(_env(env).get(key, default))
     except (TypeError, ValueError):
         return default
+
+
+def pumpportal_price_max_age_s(env: Optional[dict] = None) -> float:
+    try:
+        return max(0.0, float(_env(env).get("MEMECOIN_PUMPPORTAL_PRICE_MAX_AGE_S",
+                                            DEFAULT_PUMPPORTAL_PRICE_MAX_AGE_S)))
+    except (TypeError, ValueError):
+        return DEFAULT_PUMPPORTAL_PRICE_MAX_AGE_S
 
 
 def min_sol_reserve(env: Optional[dict] = None) -> float:
@@ -672,7 +686,8 @@ def _with_jupiter_retry(fn, *args, **kwargs):
     raise last_error
 
 
-def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) -> dict:
+def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False,
+                   pumpportal_feed=None) -> dict:
     """Check every held position against its exit rule and sell if
     triggered. This is the risk-critical half of run_autotrade_cycle,
     factored out so it can run on its own, much faster cadence than entry
@@ -683,13 +698,23 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) 
     short independent loop; run_autotrade_cycle calls it too, for its own
     exits section, so there is exactly one implementation of this logic.
 
+    `pumpportal_feed` (scalp mode only): when given, a held position's
+    price prefers PumpPortal's live trade stream over the DexScreener poll
+    baseline whenever a recent-enough trade tick is available — live
+    testing showed a position gap past its trailing-stop zone straight
+    into a much worse stop-loss between two 10-second polls, and
+    PumpPortal already pushes a price (marketCapSol) on every single
+    trade, free, no extra API call. Falls back to the DexScreener price
+    silently whenever PumpPortal has nothing fresh — this can only make
+    a check more current, never less informed.
+
     Same never-raises-for-one-token contract as run_autotrade_cycle.
     `held_addresses` in the report is the set of currently-held token
     addresses on success, or None if the positions fetch itself failed
     (already recorded in `errors`) — callers building an entry list from
     this need to know the difference between "no positions" and "couldn't
     find out."""
-    from hf_trading_bot import memecoin_data, memecoin_strategy
+    from hf_trading_bot import memecoin_data, memecoin_strategy, pumpfun_data
 
     report: dict = {"exits": [], "errors": [], "skipped": None, "held_addresses": None}
 
@@ -713,7 +738,16 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) 
             basis = storage.memecoin_position_basis(p.token_address)
             if not basis["avg_entry_price"] or not p.current_price_usd:
                 continue
-            peak = storage.memecoin_update_peak(p.token_address, p.current_price_usd)
+            current_price_usd = p.current_price_usd
+            if scalp and pumpportal_feed is not None:
+                pumpportal_feed.pin(p.token_address)
+                reading = pumpportal_feed.last_market_cap_sol(p.token_address)
+                if reading is not None and reading["age_s"] <= pumpportal_price_max_age_s(env):
+                    sol_price = get_sol_price_usd(env=env)
+                    live_price = (reading["market_cap_sol"] * sol_price) / pumpfun_data.TOTAL_SUPPLY
+                    if live_price > 0:
+                        current_price_usd = live_price
+            peak = storage.memecoin_update_peak(p.token_address, current_price_usd)
             state = storage.memecoin_peak_state(p.token_address) or {}
             hours_held = 0.0
             if basis["first_buy_at"]:
@@ -727,7 +761,7 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) 
 
             exit_fn = memecoin_strategy.scalp_exit_signal if scalp else memecoin_strategy.exit_signal
             sig = exit_fn(
-                entry_price_usd=basis["avg_entry_price"], current_price_usd=p.current_price_usd,
+                entry_price_usd=basis["avg_entry_price"], current_price_usd=current_price_usd,
                 peak_price_usd=peak, hours_held=hours_held, token=token,
                 already_trimmed_1=bool(state.get("trimmed_1")),
                 already_trimmed_2=bool(state.get("trimmed_2")))
@@ -759,6 +793,8 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) 
                         else memecoin_strategy.TRIM_2_SELL_PCT)
             if sig.sell_pct >= 99.9:
                 storage.memecoin_clear_position_state(p.token_address)
+                if pumpportal_feed is not None:
+                    pumpportal_feed.unpin(p.token_address)
             elif abs(sig.sell_pct - trim1_pct) < 1e-6 and not state.get("trimmed_1"):
                 storage.memecoin_mark_trimmed(p.token_address, 1)
             elif abs(sig.sell_pct - trim2_pct) < 1e-6 and not state.get("trimmed_2"):
@@ -889,7 +925,7 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
 
     report: dict = {"exits": [], "entries": [], "errors": [], "skipped": None}
 
-    exit_report = run_exit_check(storage, env=env, scalp=scalp)
+    exit_report = run_exit_check(storage, env=env, scalp=scalp, pumpportal_feed=pumpportal_feed)
     report["exits"] = exit_report["exits"]
     report["errors"].extend(exit_report["errors"])
     if exit_report["skipped"] is not None:

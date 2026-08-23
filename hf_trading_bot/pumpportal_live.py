@@ -2,7 +2,7 @@
 built on the same on-chain pump.fun program events pumpfun_live.py already
 watches via raw Solana RPC.
 
-This module does TWO jobs now, not one:
+This module does THREE jobs now, not two:
 
 1. BUYER DIVERSITY per candidate mint (the original purpose). The single
    most-cited real-scalper signal the strategy was missing is not "how much
@@ -30,6 +30,21 @@ This module does TWO jobs now, not one:
    pumpfun_live.LiveFeed's detections — not a replacement, since that RPC
    feed is what's actually been verified end-to-end; this fills its
    detection gap rather than trusting an unverified feed alone.
+
+3. LIVE PRICE for currently-held positions (added after a live position
+   was gapped past its trailing-stop zone straight into a much worse
+   stop-loss between two 10-second polls). Every subscribeTokenTrade
+   message -- buy AND sell -- carries `marketCapSol`, the token's market
+   cap in SOL at that instant: a free, push-based price tick with no
+   per-request cost, since the WebSocket is already open for buyer-
+   diversity tracking. `pin()`/`last_market_cap_sol()` expose this for a
+   held position specifically -- see pin()'s docstring for why a normal
+   tracked mint isn't enough (it expires after PUMPPORTAL_WATCH_TTL_S,
+   which a real hold routinely outlives). run_exit_check() prefers this
+   over the slower DexScreener poll when it's available and falls back
+   silently when it isn't -- same "missing feed never blocks a trade"
+   rule as everywhere else in this file. This module still never touches
+   a private key or places a trade; it only supplies a price.
 
 Honesty notes, stated plainly rather than glossed over:
 1. PumpPortal is an unofficial third-party service (not Solana Foundation,
@@ -109,16 +124,21 @@ def watch_ttl_s(env: Optional[dict] = None) -> float:
 
 
 class PumpPortalFeed:
-    """Tracks per-mint buyer diversity AND new-coin creations via
-    PumpPortal's free WebSocket feed. Purely observational — never touches
-    a private key, never places a trade. buyer_stats()/recent_new_coins()/
-    status() are the non-blocking read side other code polls; they never
-    touch the network themselves."""
+    """Tracks per-mint buyer diversity, new-coin creations, AND live price
+    for pinned (held) positions via PumpPortal's free WebSocket feed.
+    Purely observational — never touches a private key, never places a
+    trade. buyer_stats()/recent_new_coins()/last_market_cap_sol()/status()
+    are the non-blocking read side other code polls; they never touch the
+    network themselves."""
 
     def __init__(self, env: Optional[dict] = None):
         self._env = env
         self._lock = threading.Lock()
-        self._watched: dict[str, dict] = {}   # mint -> {"buyers": set, "buy_count": int, "first_seen": float}
+        # mint -> {"buyers": set, "buy_count": int, "first_seen": float,
+        #          "pinned": bool, "last_market_cap_sol": float|None,
+        #          "last_trade_at": float|None}
+        self._watched: dict[str, dict] = {}
+        self._needs_resubscribe = False
         self._status: dict = {"connected": False, "mints_tracked": 0, "trades_seen": 0,
                               "creations_seen": 0, "last_error": None, "started_at": None}
         self._stop = threading.Event()
@@ -184,8 +204,74 @@ class PumpPortalFeed:
         with self._lock:
             if mint in self._watched or len(self._watched) >= self._max_watched_mints:
                 return False
-            self._watched[mint] = {"buyers": set(), "buy_count": 0, "first_seen": time.time()}
+            self._watched[mint] = {"buyers": set(), "buy_count": 0, "first_seen": time.time(),
+                                   "pinned": False, "last_market_cap_sol": None,
+                                   "last_trade_at": None}
             return True
+
+    def pin(self, mint: str) -> None:
+        """Guarantee `mint` keeps receiving trade events for as long as it's
+        held, regardless of the normal creation-tracking cap or
+        PUMPPORTAL_WATCH_TTL_S (default 180s) -- a scalp position is very
+        often held longer than that TTL, and silently losing live price
+        updates partway through a hold would fall back to the much
+        coarser/slower DexScreener poll with no visible warning. Idempotent
+        and cheap; call it every exit-check tick for every held position.
+        A pinned mint is exempt from the tracking cap on purpose: capacity
+        limits exist to bound how many CANDIDATES get watched, never to
+        risk dropping a position real money is already in."""
+        with self._lock:
+            w = self._watched.get(mint)
+            if w is None:
+                self._watched[mint] = {"buyers": set(), "buy_count": 0, "first_seen": time.time(),
+                                       "pinned": True, "last_market_cap_sol": None,
+                                       "last_trade_at": None}
+                self._needs_resubscribe = True
+            elif not w.get("pinned"):
+                w["pinned"] = True
+
+    def unpin(self, mint: str) -> None:
+        """Release the pin once a position is fully closed -- the mint then
+        ages out through the normal TTL like any other tracked candidate,
+        instead of being watched forever."""
+        with self._lock:
+            w = self._watched.get(mint)
+            if w is not None:
+                w["pinned"] = False
+
+    def last_market_cap_sol(self, mint: str) -> Optional[dict]:
+        """The most recent trade's marketCapSol for `mint`, with its age --
+        None if this mint has never traded since we started watching it
+        (including: never pinned/tracked at all). Callers should treat a
+        stale reading (a large age_s) the same as no reading: this only
+        ticks on real trade activity, so a currently-illiquid mint can
+        legitimately go quiet for a while."""
+        with self._lock:
+            w = self._watched.get(mint)
+            if w is None or w.get("last_market_cap_sol") is None:
+                return None
+            return {"market_cap_sol": w["last_market_cap_sol"],
+                   "age_s": max(0.0, time.time() - w["last_trade_at"])}
+
+    def _record_price(self, mint: str, market_cap_sol) -> None:
+        if market_cap_sol is None:
+            return
+        try:
+            market_cap_sol = float(market_cap_sol)
+        except (TypeError, ValueError):
+            return
+        with self._lock:
+            w = self._watched.get(mint)
+            if w is None:
+                return
+            w["last_market_cap_sol"] = market_cap_sol
+            w["last_trade_at"] = time.time()
+
+    def _pop_needs_resubscribe(self) -> bool:
+        with self._lock:
+            flag = self._needs_resubscribe
+            self._needs_resubscribe = False
+            return flag
 
     def _record_buy(self, mint: str, trader: Optional[str]) -> None:
         with self._lock:
@@ -201,7 +287,7 @@ class PumpPortalFeed:
         now = time.time()
         with self._lock:
             expired = [m for m, w in self._watched.items()
-                      if now - w["first_seen"] > self._watch_ttl_s]
+                      if not w.get("pinned") and now - w["first_seen"] > self._watch_ttl_s]
             for m in expired:
                 del self._watched[m]
         return expired
@@ -236,6 +322,12 @@ class PumpPortalFeed:
                 if self._stop.is_set():
                     return
                 expired = self._pop_expired()
+                # A pin() call from another thread (run_exit_check, adding a
+                # held position that wasn't already tracked) sets this flag
+                # so the new mint gets subscribed on the next message here,
+                # rather than waiting for the next create/expiry event to
+                # incidentally trigger a resend.
+                needs_resub = self._pop_needs_resubscribe()
                 if expired:
                     for mint in expired:
                         try:
@@ -243,6 +335,7 @@ class PumpPortalFeed:
                                                       "keys": [mint]}))
                         except Exception:  # noqa: BLE001 — best-effort, never fatal
                             pass
+                if expired or needs_resub:
                     # Belt-and-suspenders against the same additive-vs-replace
                     # ambiguity noted in _handle_message: if subscribeTokenTrade
                     # actually replaces the server-side key list rather than
@@ -292,5 +385,10 @@ class PumpPortalFeed:
                                               "keys": self.tracked_mints()}))
                 except Exception:  # noqa: BLE001 — best-effort, never fatal
                     pass
-        elif tx_type == "buy":
-            self._record_buy(mint, msg.get("traderPublicKey"))
+        elif tx_type in ("buy", "sell"):
+            if tx_type == "buy":
+                self._record_buy(mint, msg.get("traderPublicKey"))
+            # Every trade -- buy or sell -- carries marketCapSol, a live
+            # price tick regardless of direction; a held position's price
+            # should update on a sell just as much as a buy.
+            self._record_price(mint, msg.get("marketCapSol"))

@@ -170,6 +170,124 @@ def test_pop_expired_evicts_old_mints_and_returns_them():
     assert f.buyer_stats("FRESH") is not None
 
 
+# --- pin/unpin/last_market_cap_sol: live price for held positions ----------
+# A scalp position is very often held longer than PUMPPORTAL_WATCH_TTL_S
+# (default 180s) -- these fix the real bug where a held position would
+# silently stop receiving trade updates once its normal tracking window
+# expired, with no visible warning that price monitoring had gone stale.
+
+def test_pin_adds_a_brand_new_mint_and_flags_a_resubscribe():
+    f = pumpportal_live.PumpPortalFeed()
+    assert f.buyer_stats("HELD1") is None
+    f.pin("HELD1")
+    assert f.buyer_stats("HELD1") is not None
+    assert f._pop_needs_resubscribe() is True
+
+
+def test_pin_survives_the_max_watched_mints_cap():
+    # A held position must never fail to get a tracking slot because
+    # scanning already filled the candidate cap -- capacity limits are for
+    # candidates, never for money already deployed.
+    f = pumpportal_live.PumpPortalFeed(env={"PUMPPORTAL_MAX_WATCHED_MINTS": "1"})
+    f._track("CANDIDATE")
+    f.pin("HELD1")
+    assert f.buyer_stats("HELD1") is not None
+
+
+def test_pinned_mint_is_exempt_from_ttl_expiry():
+    f = pumpportal_live.PumpPortalFeed()
+    f.pin("HELD1")
+    f._watched["HELD1"]["first_seen"] = time.time() - f._watch_ttl_s - 1
+    expired = f._pop_expired()
+    assert "HELD1" not in expired
+    assert f.buyer_stats("HELD1") is not None
+
+
+def test_unpin_lets_the_mint_expire_normally_again():
+    f = pumpportal_live.PumpPortalFeed()
+    f.pin("HELD1")
+    f.unpin("HELD1")
+    f._watched["HELD1"]["first_seen"] = time.time() - f._watch_ttl_s - 1
+    expired = f._pop_expired()
+    assert expired == ["HELD1"]
+
+
+def test_pin_on_already_tracked_mint_does_not_reset_its_state():
+    f = pumpportal_live.PumpPortalFeed()
+    f._track("M1")
+    f._record_buy("M1", "walletA")
+    f.pin("M1")
+    stats = f.buyer_stats("M1")
+    assert stats["buy_count"] == 1   # not wiped out by pin()
+
+
+def test_pop_needs_resubscribe_clears_after_reading():
+    f = pumpportal_live.PumpPortalFeed()
+    f.pin("HELD1")
+    assert f._pop_needs_resubscribe() is True
+    assert f._pop_needs_resubscribe() is False
+
+
+def test_last_market_cap_sol_none_before_any_trade():
+    f = pumpportal_live.PumpPortalFeed()
+    f.pin("HELD1")
+    assert f.last_market_cap_sol("HELD1") is None
+
+
+def test_last_market_cap_sol_none_for_unwatched_mint():
+    f = pumpportal_live.PumpPortalFeed()
+    assert f.last_market_cap_sol("UNKNOWN") is None
+
+
+def test_record_price_captures_market_cap_and_age():
+    f = pumpportal_live.PumpPortalFeed()
+    f.pin("HELD1")
+    f._record_price("HELD1", 42.5)
+    reading = f.last_market_cap_sol("HELD1")
+    assert reading["market_cap_sol"] == 42.5
+    assert reading["age_s"] < 1.0
+
+
+def test_record_price_ignores_non_numeric_values():
+    f = pumpportal_live.PumpPortalFeed()
+    f.pin("HELD1")
+    f._record_price("HELD1", "not-a-number")
+    assert f.last_market_cap_sol("HELD1") is None
+
+
+def test_record_price_on_untracked_mint_is_a_noop():
+    f = pumpportal_live.PumpPortalFeed()
+    f._record_price("NEVER_TRACKED", 10.0)
+    assert f.last_market_cap_sol("NEVER_TRACKED") is None
+
+
+def test_handle_message_sell_also_records_price():
+    # A held position's price should update on a sell just as much as a
+    # buy -- both carry marketCapSol, and a sell is just as much a real
+    # price tick.
+    f = pumpportal_live.PumpPortalFeed()
+    ws = _FakeWS()
+    f.pin("M1")
+    asyncio.run(f._handle_message(
+        json.dumps({"txType": "sell", "mint": "M1", "traderPublicKey": "walletA",
+                   "marketCapSol": 88.0}), ws))
+    reading = f.last_market_cap_sol("M1")
+    assert reading["market_cap_sol"] == 88.0
+    # A sell must not be counted as a buy for buyer-diversity purposes.
+    assert f.buyer_stats("M1")["buy_count"] == 0
+
+
+def test_handle_message_buy_also_records_price():
+    f = pumpportal_live.PumpPortalFeed()
+    ws = _FakeWS()
+    f.pin("M1")
+    asyncio.run(f._handle_message(
+        json.dumps({"txType": "buy", "mint": "M1", "traderPublicKey": "walletA",
+                   "marketCapSol": 55.0}), ws))
+    assert f.last_market_cap_sol("M1")["market_cap_sol"] == 55.0
+    assert f.buyer_stats("M1")["buy_count"] == 1
+
+
 # --- _handle_message (async, but no network) --------------------------------
 
 class _FakeWS:
@@ -263,3 +381,47 @@ def test_subscribe_once_sends_subscribe_new_token_and_widens_ping_timeout(monkey
     assert captured["kwargs"].get("ping_timeout") == pumpportal_live._PING_TIMEOUT_S
     assert any("subscribeNewToken" in s for s in captured["sent"])
     assert f.status()["connected"] is True
+
+
+def test_subscribe_once_resubscribes_a_pinned_mint_on_the_next_message(monkeypatch):
+    # pin() runs on a different thread (run_exit_check) than the async
+    # WebSocket loop -- it can only set a flag, not send over the socket
+    # directly. The loop must pick that flag up and resubscribe on the very
+    # next message it processes, not wait for an unrelated create/expiry
+    # event to incidentally trigger one.
+    captured = {}
+
+    class FakeWS:
+        def __init__(self):
+            self.sent = []
+            # A "buy" on an unrelated, already-tracked mint -- deliberately
+            # NOT a "create" or an expiry event, neither of which would
+            # prove the flag-driven path works (both already trigger their
+            # own resubscribe for unrelated reasons).
+            self._messages = iter(['{"txType": "buy", "mint": "ALREADY_TRACKED", '
+                                   '"traderPublicKey": "w1"}'])
+        async def send(self, msg):
+            self.sent.append(msg)
+        def __aiter__(self):
+            return self
+        async def __anext__(self):
+            try:
+                return next(self._messages)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    @asynccontextmanager
+    async def fake_connect(url, **kwargs):
+        ws = FakeWS()
+        yield ws
+        captured["sent"] = ws.sent
+
+    import websockets
+    monkeypatch.setattr(websockets, "connect", fake_connect)
+    f = pumpportal_live.PumpPortalFeed()
+    f._track("ALREADY_TRACKED")
+    f.pin("HELD1")   # simulates a pin() call from run_exit_check's thread
+    asyncio.run(f._subscribe_once())
+    subscribe_sends = [s for s in captured["sent"] if "subscribeTokenTrade" in s]
+    assert subscribe_sends, "pinning must trigger a resubscribe on the next message"
+    assert "HELD1" in subscribe_sends[-1]
