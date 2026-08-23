@@ -8,7 +8,10 @@ real pump.fun scalpers: a bundled/insider launch, where one wallet (or a
 handful funded from the same source in the same block) holds an outsized
 share of supply while looking, on-chain, like normal early trading. RugCheck
 computes exactly that — top-holder concentration and LP-lock status — from
-a service built for this.
+a service built for this. Both the single largest holder AND the combined
+top 5 are surfaced (see _holder_concentration), since a bundle split across
+several wallets each individually under a red threshold is the same
+insider pattern, just spread thin enough to dodge a single-holder check.
 
 BE HONEST ABOUT THE LIMITS:
 1. This is RugCheck's own official API (not scraped), but it is a small
@@ -99,7 +102,8 @@ def _normalize(raw: dict) -> dict:
     except (TypeError, ValueError):
         score = None
 
-    top_holder_pct = _extract_top_holder_pct(_first(raw, "topHolders", "top_holders", default=[]))
+    top_holder_pct, top5_holders_pct = _holder_concentration(
+        _first(raw, "topHolders", "top_holders", default=[]))
 
     lp_locked_pct = _first(raw, "lpLockedPct", "lp_locked_pct")
     if lp_locked_pct is None:
@@ -117,14 +121,28 @@ def _normalize(raw: dict) -> dict:
             for r in (_first(raw, "risks", default=[]) or []) if isinstance(r, dict)]
 
     return {"score": score, "top_holder_pct": top_holder_pct,
+           "top5_holders_pct": top5_holders_pct,
            "lp_locked_pct": lp_locked_pct, "risks": risks}
 
 
-def _extract_top_holder_pct(holders: Any) -> Optional[float]:
+_TOP_N_FOR_AGGREGATE = 5
+
+
+def _holder_concentration(holders: Any) -> tuple[Optional[float], Optional[float]]:
+    """Returns (top_holder_pct, top5_holders_pct) -- the single largest
+    holder's share, and the combined share of the top 5. Both prefer
+    non-LP/pool holders (the pool itself legitimately holds a lot; a
+    bundled/insider launch is about real wallets), falling back to all
+    holders only if none are marked non-LP.
+
+    The single-top-holder check alone misses a bundle deliberately split
+    across several wallets, each individually under a red threshold but
+    collectively holding a large share -- the same insider pattern, just
+    spread thin enough to dodge a single-holder check. This costs no extra
+    API calls: RugCheck already returns the full holder list, this was
+    previously just discarded down to a single number."""
     if not isinstance(holders, list) or not holders:
-        return None
-    # Prefer non-LP/pool holders — a real wallet's outsized share is the
-    # bundled/insider signal; the pool itself legitimately holds a lot.
+        return None, None
     non_lp_pcts, all_pcts = [], []
     for h in holders:
         if not isinstance(h, dict):
@@ -140,4 +158,7 @@ def _extract_top_holder_pct(holders: Any) -> Optional[float]:
         if not h.get("isLp") and not h.get("is_lp"):
             non_lp_pcts.append(pct)
     pool = non_lp_pcts or all_pcts
-    return max(pool) if pool else None
+    if not pool:
+        return None, None
+    pool_sorted = sorted(pool, reverse=True)
+    return pool_sorted[0], sum(pool_sorted[:_TOP_N_FOR_AGGREGATE])

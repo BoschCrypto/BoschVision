@@ -574,6 +574,14 @@ buying. Two free integrations fix that:
   vetoes the buy even after the momentum score already cleared. This is the
   one check that can actually see a bundled/insider launch; the on-chain
   mint/freeze-authority check alone can't.
+  A single-holder check alone still misses one pattern: a bundle
+  deliberately split across several wallets, each individually under the
+  20% red threshold, collectively holding a large share of supply — the
+  same insider pattern, just spread thin enough to dodge a single-wallet
+  check. `rugcheck_flags()` now also flags red when the **top 5 non-pool
+  wallets combined** hold ≥35% (`RUGCHECK_TOP5_HOLDER_RED_PCT`) — this costs
+  no extra API calls, since RugCheck's report already returns the full
+  holder list; it was previously discarded down to a single number.
 
 Both are genuinely free and neither requires an API key to function (an
 optional `RUGCHECK_API_KEY` just raises RugCheck's rate limit). Like the live

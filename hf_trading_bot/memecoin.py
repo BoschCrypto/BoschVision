@@ -83,6 +83,12 @@ DEFAULT_MIN_SOL_RESERVE = 0.02
 RUGCHECK_TOP_HOLDER_RED_PCT = 20.0
 RUGCHECK_TOP_HOLDER_YELLOW_PCT = 10.0
 RUGCHECK_SCORE_RED_THRESHOLD = 80.0   # RugCheck's own 0-100 composite; higher = riskier
+# A single-holder check alone misses a bundle deliberately split across
+# several wallets, each individually under the red threshold above, but
+# collectively holding a large share of supply -- the same insider pattern,
+# just spread thin enough to dodge a single-holder check. This costs no
+# extra RugCheck calls; the top-5 aggregate comes from the same report.
+RUGCHECK_TOP5_HOLDER_RED_PCT = 35.0
 
 
 class MemecoinError(RuntimeError):
@@ -317,9 +323,11 @@ def rugcheck_flags(token_address: str, *, env: Optional[dict] = None) -> list[di
     Fills the one real gap pumpfun_risk_flags() has no visibility into: a
     single wallet (often funded from the same source as several others in
     the same block) holding an outsized share of supply — the textbook
-    bundled/insider-launch pattern. RugCheck being unreachable, or a coin
-    not indexed yet, returns no flags — never a reason to block OR to enter;
-    it is one more input, not a requirement."""
+    bundled/insider-launch pattern — plus the same pattern spread across
+    several wallets instead of one (see RUGCHECK_TOP5_HOLDER_RED_PCT).
+    RugCheck being unreachable, or a coin not indexed yet, returns no
+    flags — never a reason to block OR to enter; it is one more input, not
+    a requirement."""
     try:
         report = rugcheck.get_report(token_address, env=env)
     except rugcheck.RugCheckError:
@@ -335,6 +343,11 @@ def rugcheck_flags(token_address: str, *, env: Optional[dict] = None) -> list[di
     elif top is not None and top >= RUGCHECK_TOP_HOLDER_YELLOW_PCT:
         flags.append({"level": "yellow", "reason":
                      f"RugCheck: top non-pool holder owns {top:.1f}% of supply"})
+    top5 = report.get("top5_holders_pct")
+    if top5 is not None and top5 >= RUGCHECK_TOP5_HOLDER_RED_PCT:
+        flags.append({"level": "red", "reason":
+                     f"RugCheck: the top 5 non-pool wallets combined hold {top5:.1f}% of "
+                     f"supply — a bundled launch split across several wallets"})
     score = report.get("score")
     if score is not None and score >= RUGCHECK_SCORE_RED_THRESHOLD:
         flags.append({"level": "red", "reason":

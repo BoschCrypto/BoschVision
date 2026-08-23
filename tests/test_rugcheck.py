@@ -33,6 +33,7 @@ def test_get_report_normalizes_score_and_top_holder(monkeypatch):
     report = rugcheck.get_report("MINT1")
     assert report["score"] == 72
     assert report["top_holder_pct"] == 22.5   # excludes the LP holder
+    assert report["top5_holders_pct"] == pytest.approx(25.6)   # 22.5 + 3.1, LP excluded
     assert report["lp_locked_pct"] == 95.0
     assert report["risks"][0]["name"] == "Mint authority"
 
@@ -43,10 +44,23 @@ def test_get_report_top_holder_falls_back_to_all_when_no_non_lp_marked(monkeypat
                         lambda req, timeout=None: _Resp(raw))
     report = rugcheck.get_report("MINT1")
     assert report["top_holder_pct"] == 40.0
+    assert report["top5_holders_pct"] == 50.0   # falls back to all holders too
+
+
+def test_get_report_top5_holders_pct_caps_at_five_wallets(monkeypatch):
+    # A bundle spread across many small wallets, none individually alarming,
+    # but only the top 5 should count toward the aggregate.
+    raw = {"topHolders": [{"address": f"w{i}", "pct": 8.0, "isLp": False} for i in range(10)]}
+    monkeypatch.setattr(rugcheck.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Resp(raw))
+    report = rugcheck.get_report("MINT1")
+    assert report["top_holder_pct"] == 8.0
+    assert report["top5_holders_pct"] == pytest.approx(40.0)   # 5 * 8.0, not 10 * 8.0
 
 
 def test_get_report_handles_missing_fields():
     assert rugcheck._normalize({}) == {"score": None, "top_holder_pct": None,
+                                       "top5_holders_pct": None,
                                        "lp_locked_pct": None, "risks": []}
 
 
@@ -133,6 +147,26 @@ def test_rugcheck_flags_yellow_on_moderate_concentration(monkeypatch):
                                                "lp_locked_pct": 90, "risks": []})
     flags = memecoin.rugcheck_flags("MINT1")
     assert flags[0]["level"] == "yellow"
+
+
+def test_rugcheck_flags_red_on_bundled_launch_split_across_wallets(monkeypatch):
+    # No single wallet crosses the 20% red threshold, but the top 5
+    # combined hold well over a third of supply -- the same insider
+    # pattern, just spread thin enough to dodge the single-holder check.
+    monkeypatch.setattr(memecoin.rugcheck, "get_report",
+                        lambda addr, env=None: {"score": 10, "top_holder_pct": 18.0,
+                                               "top5_holders_pct": 42.0,
+                                               "lp_locked_pct": 90, "risks": []})
+    flags = memecoin.rugcheck_flags("MINT1")
+    assert any(f["level"] == "red" and "top 5" in f["reason"] for f in flags)
+
+
+def test_rugcheck_flags_no_flag_when_top5_missing_from_report(monkeypatch):
+    # A report shape without the new field must not crash or false-flag.
+    monkeypatch.setattr(memecoin.rugcheck, "get_report",
+                        lambda addr, env=None: {"score": 10, "top_holder_pct": 5.0,
+                                               "lp_locked_pct": 90, "risks": []})
+    assert memecoin.rugcheck_flags("MINT1") == []
 
 
 def test_rugcheck_flags_red_on_high_composite_score(monkeypatch):
