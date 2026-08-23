@@ -641,6 +641,16 @@ separately:**
   for that one domain specifically, not a millisecond blip),
   used by `execute_buy`/`execute_sell` calls in `run_autotrade_cycle`,
   `run_exit_check`, and `multi_buy`.
+- **Mint-check rate limiting.** The same live-testing round that surfaced
+  more real candidates than ever also tripped a NEW problem: "Solana RPC
+  HTTP 429: Too Many Requests" on `entry-mint-check`. With PumpPortal
+  merged in, a single cycle can put dozens of candidates through a
+  getAccountInfo call, back to back, with no spacing — the exact class of
+  problem `pumpfun_live.py`'s `getTransaction` throttle already exists to
+  avoid, just on a different RPC call. `_rate_limited_get_mint_info()`
+  applies the same fix here (`MEMECOIN_MINT_CHECK_MIN_INTERVAL_S`, default
+  0.35s ~= 3/sec, same default as the live feed's throttle) — raise it if
+  429s persist on your RPC plan.
 
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 

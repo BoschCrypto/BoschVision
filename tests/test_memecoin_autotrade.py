@@ -15,6 +15,18 @@ def storage(tmp_path):
     s.close()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    # _rate_limited_get_mint_info, _get_mint_info_for_fresh_candidate, and
+    # _with_jupiter_retry all call time.sleep() for real-world rate
+    # limiting/backoff -- none of that should ever cost real wall-clock
+    # time in tests, and the rate limiter's last-call timestamp is shared
+    # module state, so without this tests would end up throttling each
+    # other based on unrelated prior tests' timing.
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)
+    monkeypatch.setattr(memecoin, "_last_mint_check_at", 0.0)
+
+
 def test_cycle_skips_when_kill_switch_on(storage):
     storage.set_kill_switch(True)
     report = memecoin.run_autotrade_cycle(storage, env=CONFIRMED_ENV)
@@ -178,6 +190,36 @@ def test_exit_check_jupiter_network_error_does_not_stop_other_positions(storage,
     report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
     assert len(report["errors"]) == 1 and report["errors"][0]["token_address"] == "BAD"
     assert len(report["exits"]) == 1 and report["exits"][0]["token_address"] == "GOOD"
+
+
+# --- _rate_limited_get_mint_info: avoid tripping Solana RPC's rate limit ---
+
+def test_mint_check_min_interval_default_and_override():
+    assert memecoin.mint_check_min_interval_s({}) == memecoin.DEFAULT_MINT_CHECK_MIN_INTERVAL_S
+    assert memecoin.mint_check_min_interval_s({"MEMECOIN_MINT_CHECK_MIN_INTERVAL_S": "1.0"}) == 1.0
+
+
+def test_mint_check_min_interval_invalid_falls_back_to_default():
+    assert memecoin.mint_check_min_interval_s(
+        {"MEMECOIN_MINT_CHECK_MIN_INTERVAL_S": "garbage"}
+    ) == memecoin.DEFAULT_MINT_CHECK_MIN_INTERVAL_S
+
+
+def test_rate_limited_get_mint_info_spaces_out_calls(monkeypatch):
+    # Real bug found in live testing: merging PumpPortal's detections put
+    # enough candidates through mint-info checks in one cycle to trip
+    # Helius's rate limit ("Solana RPC HTTP 429: Too Many Requests").
+    monkeypatch.setattr(memecoin, "_last_mint_check_at", 0.0)
+    monkeypatch.setattr(solana_wallet, "get_mint_info",
+                        lambda address, env=None: {"mint_authority": None,
+                                                    "freeze_authority": None})
+    sleeps = []
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: sleeps.append(s))
+
+    memecoin._rate_limited_get_mint_info("M1", env={"MEMECOIN_MINT_CHECK_MIN_INTERVAL_S": "1.0"})
+    memecoin._rate_limited_get_mint_info("M2", env={"MEMECOIN_MINT_CHECK_MIN_INTERVAL_S": "1.0"})
+    # First call has nothing to wait on; the second must be throttled.
+    assert sleeps and sleeps[-1] > 0
 
 
 # --- enrich_candidates_with_market_cap: parallel, not sequential -----------

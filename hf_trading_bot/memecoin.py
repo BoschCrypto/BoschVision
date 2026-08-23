@@ -20,6 +20,7 @@ exposed elsewhere — they only bound what THIS CODE will voluntarily spend.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -442,6 +443,41 @@ def list_positions(storage, *, env: Optional[dict] = None) -> list[Position]:
 
 MAX_NEW_POSITIONS_PER_CYCLE = 2
 
+# Merging PumpPortal's detections in (see run_autotrade_cycle) can put
+# dozens of candidates through mint-info checks in one cycle -- each one a
+# getAccountInfo call to the same Solana RPC endpoint. Calling that many in
+# quick succession with no spacing tripped Helius's rate limit in live
+# testing ("Solana RPC HTTP 429: Too Many Requests"), the same class of
+# problem pumpfun_live.py's getTransaction throttle already exists to
+# avoid -- same fix, applied here. A simple shared last-call timestamp
+# under a lock is enough since this loop is sequential within one cycle;
+# the lock only matters if a manual "run cycle now" trigger and the
+# background loop ever overlap.
+DEFAULT_MINT_CHECK_MIN_INTERVAL_S = 0.35   # ~3/sec ceiling, matching pumpfun_live.py's default
+_mint_check_lock = threading.Lock()
+_last_mint_check_at = 0.0
+
+
+def mint_check_min_interval_s(env: Optional[dict] = None) -> float:
+    e = env if env is not None else os.environ
+    try:
+        return max(0.0, float(e.get("MEMECOIN_MINT_CHECK_MIN_INTERVAL_S",
+                                    DEFAULT_MINT_CHECK_MIN_INTERVAL_S)))
+    except (TypeError, ValueError):
+        return DEFAULT_MINT_CHECK_MIN_INTERVAL_S
+
+
+def _rate_limited_get_mint_info(address: str, *, env: Optional[dict] = None) -> dict:
+    global _last_mint_check_at
+    min_interval = mint_check_min_interval_s(env)
+    with _mint_check_lock:
+        wait = min_interval - (time.monotonic() - _last_mint_check_at)
+        if wait > 0:
+            time.sleep(wait)
+        _last_mint_check_at = time.monotonic()
+    return solana_wallet.get_mint_info(address, env=env)
+
+
 # A brief, bounded retry for ONE specific failure mode: PumpPortal's
 # subscribeNewToken can notify of a new mint before that mint's account is
 # necessarily visible yet via our own RPC node's getAccountInfo -- a real
@@ -458,7 +494,7 @@ def _get_mint_info_for_fresh_candidate(address: str, *, env: Optional[dict]) -> 
         if delay:
             time.sleep(delay)
         try:
-            return solana_wallet.get_mint_info(address, env=env)
+            return _rate_limited_get_mint_info(address, env=env)
         except solana_wallet.WalletError as e:
             last_error = e
             if "no on-chain account" not in str(e):
@@ -759,7 +795,7 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
             break
         try:
             mint_info = (_get_mint_info_for_fresh_candidate(t["address"], env=env) if scalp
-                        else solana_wallet.get_mint_info(t["address"], env=env))
+                        else _rate_limited_get_mint_info(t["address"], env=env))
         except solana_wallet.WalletError as e:
             report["errors"].append({"stage": "entry-mint-check", "token_address": t["address"],
                                      "error": str(e)})
