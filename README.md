@@ -625,22 +625,29 @@ separately:**
   all of them up front with bounded concurrency (5 workers by default —
   not unlimited, since blasting pump.fun's free-tier API at once would
   likely trip its own rate limit) before the scoring loop runs at all.
-- **Safe retry on a Jupiter network blip.** Live testing showed real,
-  already-passing candidates hitting "Jupiter unreachable: [Errno 11001]
-  getaddrinfo failed" at the exact moment of buy/sell execution — a
-  genuinely missed trade each time, not just log noise. `jupiter.py`'s
-  `quote()`/`swap_transaction()` (the only calls that can raise
-  `JupiterError`) both happen strictly before anything is signed or
-  broadcast, so a `JupiterError` means no money has moved yet — retrying
-  is safe from a double-spend, unlike `WalletError` (which can occur
-  *after* submission, e.g. a timeout waiting for confirmation, where
-  blindly retrying could buy/sell twice). `_with_jupiter_retry()` retries
-  only that one specific, provably-safe failure mode (1s, 3s, then 5s —
-  widened after live testing showed the first, shorter attempt (0.5s/1.5s)
-  wasn't enough; this looks like a longer-lived local DNS resolution issue
-  for that one domain specifically, not a millisecond blip),
-  used by `execute_buy`/`execute_sell` calls in `run_autotrade_cycle`,
-  `run_exit_check`, and `multi_buy`.
+- **Safe retry on a Jupiter network blip** (`_with_jupiter_retry()`).
+  `jupiter.py`'s `quote()`/`swap_transaction()` (the only calls that can
+  raise `JupiterError`) both happen strictly before anything is signed or
+  broadcast, so a `JupiterError` means no money has moved yet — retrying is
+  safe from a double-spend, unlike `WalletError` (which can occur *after*
+  submission, e.g. a timeout waiting for confirmation, where blindly
+  retrying could buy/sell twice). Used by `execute_buy`/`execute_sell`
+  calls in `run_autotrade_cycle`, `run_exit_check`, and `multi_buy`. Still
+  worth having even after the real cause below was found — an actual
+  transient blip can still happen.
+- **The real cause of the persistent "Jupiter unreachable: [Errno 11001]
+  getaddrinfo failed"**: not a network blip, not a retry-window problem —
+  `quote-api.jup.ag/v6` (the endpoint this bot originally used) was
+  **deprecated by Jupiter and had its DNS records fully removed**. No
+  retry window, however wide, was ever going to fix a hostname that no
+  longer resolves anywhere. A plain `nslookup quote-api.jup.ag` outside
+  the bot confirmed it before this was diagnosed as a domain migration
+  rather than a router/DNS-relay issue. Fixed by updating
+  `DEFAULT_BASE_URL` to the current `api.jup.ag/swap/v1` — the query
+  params, request body, and response field names (`outAmount`,
+  `priceImpactPct`, `swapTransaction`) are unchanged, so this was a
+  one-line fix once identified. Override via `JUPITER_BASE_URL` in `.env`
+  if Jupiter migrates domains again.
 - **Mint-check rate limiting.** The same live-testing round that surfaced
   more real candidates than ever also tripped a NEW problem: "Solana RPC
   HTTP 429: Too Many Requests" on `entry-mint-check`. With PumpPortal

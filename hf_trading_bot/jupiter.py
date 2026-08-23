@@ -5,6 +5,16 @@ Two calls, in order: `quote()` asks "what would I get", `swap_transaction()`
 turns that quote into an unsigned transaction for solana_wallet to sign. This
 module never touches a private key and never submits anything — it only
 builds what a wallet later signs.
+
+Base URL history, since this has already bitten a live run once: the old
+`quote-api.jup.ag/v6` endpoint was deprecated (Jupiter's own DevRel
+announced it alongside Price V2 and Token V1) and its DNS records were
+fully removed — live testing hit this as a persistent "Jupiter unreachable:
+getaddrinfo failed" that no retry could fix, because there was nothing
+listening at that hostname anymore, not a transient network blip. The
+current endpoint is `api.jup.ag/swap/v1` — same query params, request
+body, and response field names (outAmount, priceImpactPct,
+swapTransaction) as the old v6 API, so only the base URL changed here.
 """
 from __future__ import annotations
 
@@ -15,7 +25,7 @@ import urllib.request
 from typing import Optional
 
 SOL_MINT = "So11111111111111111111111111111111111111112"
-DEFAULT_BASE_URL = "https://quote-api.jup.ag/v6"
+DEFAULT_BASE_URL = "https://api.jup.ag/swap/v1"
 _TIMEOUT = 20
 _HEADERS = {
     # A default urllib User-Agent (or none at all) can trip Cloudflare-style
