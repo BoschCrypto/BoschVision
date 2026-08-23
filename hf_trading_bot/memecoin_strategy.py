@@ -244,7 +244,17 @@ def exit_signal(*, entry_price_usd: float, current_price_usd: float,
 
 SCALP_STOP_LOSS_PCT = -15.0
 SCALP_TRIM_1_GAIN_PCT = 15.0
-SCALP_TRIM_1_SELL_PCT = 50.0
+# Live testing: a position trimmed 50% at +20.3% then let the remaining
+# half ride was later stopped out at -31.3% from entry -- the trailing
+# stop (activates at +20%, exits on a 15% pullback from peak) should have
+# protected most of that remaining half, but a single move between one
+# 10-second exit-check and the next can jump straight from the trailing
+# zone into stop-loss territory, the same periodic-checking gap already
+# documented for stop-loss itself. Blended, that trade netted roughly -5%
+# despite two "successful" green exits. Selling MORE at the first trim
+# reduces how much stays exposed to that gap, at the cost of some upside
+# if the coin keeps running after the trim.
+SCALP_TRIM_1_SELL_PCT = 75.0
 SCALP_TRIM_2_GAIN_PCT = 40.0
 SCALP_TRIM_2_SELL_PCT = 50.0
 SCALP_TRAIL_ACTIVATE_GAIN_PCT = 20.0

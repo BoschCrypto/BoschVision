@@ -435,8 +435,20 @@ riskier profile:
   increase in risk, not a smaller version of the normal screen; it is what
   trading a coin this early means.
 - **Exits are tight:** stop-loss **-15%** (vs -35%), first trim at **+15%**
-  (vs +100%), trailing stop after +20%, and a **30-minute** stall exit (vs
-  6h) — if it hasn't moved by then, out regardless.
+  sells **75%** of the position (vs +100%/50%), trailing stop after +20%,
+  and a **30-minute** stall exit (vs 6h) — if it hasn't moved by then, out
+  regardless.
+- **The first trim sells most of the position, not half.** Live testing
+  produced a trade that trimmed 50% at +20.3%, let the other half ride, and
+  later stopped it out at -31.3% from entry — blended, roughly a **-5% net
+  loss** despite two "successful" green exits in the log. The trailing stop
+  (activates at +20%, exits on a 15% pullback from peak) should have
+  protected most of that remaining half, but the same periodic-checking gap
+  documented below for stop-loss applies to it too: a big enough move
+  between one 10-second check and the next can jump straight past the
+  trailing zone. Trimming 75% up front instead of 50% means less stays
+  exposed to that gap — the tradeoff is giving up more upside on a coin
+  that keeps running after the trim.
 - **The -15% stop-loss is a check-and-react rule, not a hard limit.** Live
   testing produced a real, sobering example: a position hit the exit-check
   loop already down -66.4% — the price gapped down between one 10-second

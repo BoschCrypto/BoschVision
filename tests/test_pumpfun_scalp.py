@@ -116,6 +116,21 @@ def test_scalp_stop_loss_is_tighter_than_swing():
     # (both negative; "tighter" means closer to zero, less room to fall)
 
 
+def test_scalp_first_trim_sells_most_of_the_position():
+    # Live testing: trimming only 50% at the first take-profit left too
+    # much exposed to the remaining half getting stopped out later --
+    # netting roughly -5% overall despite the trim itself being a "win".
+    # The first trim should de-risk the trade, not just half of it.
+    assert memecoin_strategy.SCALP_TRIM_1_SELL_PCT >= 75.0
+
+
+def test_scalp_exit_signal_first_trim_sells_75_percent():
+    sig = memecoin_strategy.scalp_exit_signal(
+        entry_price_usd=1.0, current_price_usd=1.20, peak_price_usd=1.20, hours_held=0.1)
+    assert sig.exit is True and "take-profit" in sig.reason
+    assert sig.sell_pct == memecoin_strategy.SCALP_TRIM_1_SELL_PCT == 75.0
+
+
 def test_scalp_exit_signal_stop_loss():
     sig = memecoin_strategy.scalp_exit_signal(
         entry_price_usd=1.0, current_price_usd=0.83, peak_price_usd=1.0, hours_held=0.1)
