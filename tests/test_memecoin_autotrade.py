@@ -315,6 +315,52 @@ def test_rate_limited_get_mint_info_spaces_out_calls(monkeypatch):
     assert sleeps and sleeps[-1] > 0
 
 
+def test_rate_limited_solana_call_shares_budget_with_mint_checks(monkeypatch):
+    # Real bug found in live testing: list_positions() called
+    # get_token_balance() once per distinct token ever traded, every
+    # 10-second exit-check tick, completely unthrottled -- a SEPARATE
+    # source of "Solana RPC HTTP 429" alongside the already-throttled
+    # mint-info checks. Both call types must draw from the SAME budget,
+    # since they hit the same RPC endpoint's real rate limit.
+    monkeypatch.setattr(memecoin, "_last_mint_check_at", 0.0)
+    monkeypatch.setattr(solana_wallet, "get_mint_info",
+                        lambda address, env=None: {"mint_authority": None,
+                                                    "freeze_authority": None})
+    monkeypatch.setattr(solana_wallet, "get_token_balance",
+                        lambda pub, mint, env=None: None)
+    sleeps = []
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: sleeps.append(s))
+
+    env = {"MEMECOIN_MINT_CHECK_MIN_INTERVAL_S": "1.0"}
+    memecoin._rate_limited_get_mint_info("M1", env=env)
+    memecoin._rate_limited_solana_call(solana_wallet.get_token_balance, "PUB", "M2", env=env)
+    # The balance call right after a mint-info check must be throttled too
+    # -- proof they share one clock, not two independent ones.
+    assert sleeps and sleeps[-1] > 0
+
+
+def test_list_positions_routes_balance_checks_through_the_shared_throttle(storage, monkeypatch):
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="A",
+                                  sol_amount=0.1, usd_amount=10, price_usd=1,
+                                  tx_signature="s1", status="confirmed")
+    monkeypatch.setattr(solana_wallet, "load_keypair", lambda env=None: object())
+    monkeypatch.setattr(solana_wallet, "pubkey_str", lambda kp: "PUB")
+    monkeypatch.setattr(memecoin, "_last_mint_check_at", 0.0)
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)
+
+    calls = []
+
+    def fake_call(fn, *args, env=None, **kwargs):
+        calls.append(fn)
+        return fn(*args, env=env, **kwargs)
+    monkeypatch.setattr(memecoin, "_rate_limited_solana_call", fake_call)
+    monkeypatch.setattr(solana_wallet, "get_token_balance",
+                        lambda pub, mint, env=None: None)
+
+    memecoin.list_positions(storage)
+    assert calls == [solana_wallet.get_token_balance]
+
+
 # --- enrich_candidates_with_market_cap: parallel, not sequential -----------
 
 def test_enrich_skips_candidates_that_already_have_market_cap(monkeypatch):

@@ -13,6 +13,16 @@ def storage(tmp_path):
     s.close()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    # list_positions() now routes get_token_balance() through the shared
+    # Solana RPC throttle (_rate_limited_solana_call) -- same reasoning as
+    # test_memecoin_autotrade.py's fixture of the same name: don't let
+    # cross-test module state make these tests slow or order-dependent.
+    monkeypatch.setattr(memecoin.time, "sleep", lambda s: None)
+    monkeypatch.setattr(memecoin, "_last_mint_check_at", 0.0)
+
+
 # --- filter_candidates (pure) -----------------------------------------
 
 def _row(addr, liq, vol):

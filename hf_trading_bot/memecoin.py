@@ -551,7 +551,7 @@ def list_positions(storage, *, env: Optional[dict] = None) -> list[Position]:
     pub = solana_wallet.pubkey_str(keypair)
     out: list[Position] = []
     for addr in storage.memecoin_distinct_tokens():
-        balance = solana_wallet.get_token_balance(pub, addr, env=env)
+        balance = _rate_limited_solana_call(solana_wallet.get_token_balance, pub, addr, env=env)
         if not balance or balance["amount_raw"] <= 0:
             continue
         cost_basis = storage.memecoin_token_net_usd(addr)
@@ -597,7 +597,16 @@ def mint_check_min_interval_s(env: Optional[dict] = None) -> float:
         return DEFAULT_MINT_CHECK_MIN_INTERVAL_S
 
 
-def _rate_limited_get_mint_info(address: str, *, env: Optional[dict] = None) -> dict:
+def _rate_limited_solana_call(fn, *args, env: Optional[dict] = None, **kwargs):
+    """Throttle any Solana RPC call through the SAME shared budget as every
+    other one -- live testing showed a 429 not just on mint-info checks but
+    on the plain positions fetch too (list_positions() called
+    get_token_balance() once per distinct token ever traded, every single
+    10-second exit-check tick, completely unthrottled). Two independent
+    throttles that each individually stay under ~3/sec can still blow past
+    the RPC provider's real combined limit if they're hitting the same
+    endpoint -- one shared clock avoids that regardless of which call type
+    is making the requests."""
     global _last_mint_check_at
     min_interval = mint_check_min_interval_s(env)
     with _mint_check_lock:
@@ -605,7 +614,11 @@ def _rate_limited_get_mint_info(address: str, *, env: Optional[dict] = None) -> 
         if wait > 0:
             time.sleep(wait)
         _last_mint_check_at = time.monotonic()
-    return solana_wallet.get_mint_info(address, env=env)
+    return fn(*args, env=env, **kwargs)
+
+
+def _rate_limited_get_mint_info(address: str, *, env: Optional[dict] = None) -> dict:
+    return _rate_limited_solana_call(solana_wallet.get_mint_info, address, env=env)
 
 
 # A brief, bounded retry for ONE specific failure mode: PumpPortal's

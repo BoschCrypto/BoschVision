@@ -730,6 +730,20 @@ separately:**
   applies the same fix here (`MEMECOIN_MINT_CHECK_MIN_INTERVAL_S`, default
   0.35s ~= 3/sec, same default as the live feed's throttle) — raise it if
   429s persist on your RPC plan.
+- **The SAME 429 later showed up on `positions`, not just entries.**
+  `list_positions()` calls `get_token_balance()` once per distinct token
+  ever traded — every single 10-second exit-check tick, forever, completely
+  unthrottled. Two independently-throttled call types can each individually
+  stay under ~3/sec and still blow past the RPC provider's real combined
+  limit, since both hit the same endpoint. `_rate_limited_get_mint_info()`
+  is now `_rate_limited_solana_call()`, a generic wrapper both mint-info
+  checks AND position balance checks route through — one shared clock,
+  one shared budget, `MEMECOIN_MINT_CHECK_MIN_INTERVAL_S` still controls it.
+  Worth knowing: this call is still one per token *ever* traded, not just
+  currently held ones, so a wallet with a long trade history pays a fixed
+  per-cycle cost that grows with that history — not a problem at normal
+  scale, but a free public RPC that's already 429ing on everything else is
+  a sign it's time for a paid one (Helius, QuickNode), not more throttling.
 
 ### Memecoin trading playbook — entry/exit criteria (`memecoin screen` / `positions`)
 
