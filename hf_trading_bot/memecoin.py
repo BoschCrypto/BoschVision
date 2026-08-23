@@ -41,6 +41,18 @@ DEFAULT_SELL_SLIPPAGE_BPS = 150   # a normal trim -- price sensitivity matters, 
 # bleeding value -- see run_exit_check.
 EMERGENCY_EXIT_SLIPPAGE_BPS = 2500
 
+# Live testing: a buy sized against the internal USD budget ledger was
+# submitted for simulation and rejected with "insufficient lamports" --
+# the wallet's real spendable SOL was thinner than the ledger assumed,
+# because the ledger tracks a virtual "net USD deployed" figure, not the
+# live wallet balance. Fees, new-token-account rent, and SOL price drift
+# all eat into real SOL without ever touching that ledger. This reserve is
+# checked against the LIVE balance right before a buy is signed, so a
+# doomed transaction is refused with a clear error instead of attempted
+# and rejected during simulation (no funds move either way, but a clean
+# refusal beats an opaque RPC error).
+DEFAULT_MIN_SOL_RESERVE = 0.02
+
 # A single wallet (excluding the LP itself) holding this much of supply is
 # the textbook bundled/insider-launch pattern real pump.fun scalpers flag —
 # see rugcheck_flags() below.
@@ -66,6 +78,13 @@ def max_trade_usd(env: Optional[dict] = None) -> float:
         return float(_env(env).get("MEMECOIN_MAX_TRADE_USD", DEFAULT_MAX_TRADE_USD))
     except (TypeError, ValueError):
         return DEFAULT_MAX_TRADE_USD
+
+
+def min_sol_reserve(env: Optional[dict] = None) -> float:
+    try:
+        return max(0.0, float(_env(env).get("MEMECOIN_MIN_SOL_RESERVE", DEFAULT_MIN_SOL_RESERVE)))
+    except (TypeError, ValueError):
+        return DEFAULT_MIN_SOL_RESERVE
 
 
 def budget_usd(env: Optional[dict] = None) -> float:
@@ -317,6 +336,15 @@ def execute_buy(token_address: str, usd_amount: float, storage, *,
 
     keypair = solana_wallet.load_keypair(env)
     pub = solana_wallet.pubkey_str(keypair)
+
+    reserve = min_sol_reserve(env)
+    sol_balance = solana_wallet.get_balance_sol(pub, env=env)
+    if sol_balance - preview.sol_amount < reserve:
+        raise MemecoinError(
+            f"insufficient SOL: wallet has {sol_balance:.4f} SOL, this buy needs "
+            f"~{preview.sol_amount:.4f} SOL plus a {reserve:.4f} SOL reserve for "
+            f"fees/rent (short by {reserve - (sol_balance - preview.sol_amount):.4f} SOL)")
+
     tx_b64 = jupiter.swap_transaction(preview.quote, pub, env=env)
     sig = solana_wallet.sign_and_submit(tx_b64, keypair, env=env)
     status = _await_confirmation(sig, env=env)

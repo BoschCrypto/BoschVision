@@ -200,6 +200,7 @@ def test_execute_buy_records_trade_on_success(storage, monkeypatch):
                             usd_amount=10.0, price_impact_pct=0.5, quote={"outAmount": "1000000"}))
     monkeypatch.setattr(solana_wallet, "load_keypair", lambda env=None: object())
     monkeypatch.setattr(solana_wallet, "pubkey_str", lambda kp: "PUBKEY")
+    monkeypatch.setattr(solana_wallet, "get_balance_sol", lambda pub, env=None: 1.0)
     monkeypatch.setattr(jupiter, "swap_transaction", lambda q, pub, env=None: "b64tx")
     monkeypatch.setattr(solana_wallet, "sign_and_submit", lambda tx, kp, env=None: "SIG123")
     monkeypatch.setattr(solana_wallet, "get_signature_status",
@@ -210,6 +211,56 @@ def test_execute_buy_records_trade_on_success(storage, monkeypatch):
                                   env={"HF_BOT_I_UNDERSTAND_MEMECOIN_RISK": "true"})
     assert result["status"] == "confirmed"
     assert storage.memecoin_net_deployed_usd() == 10.0
+
+
+def test_execute_buy_blocked_when_live_balance_too_thin(storage, monkeypatch):
+    """Live testing: a buy sized against the USD budget ledger was submitted
+    and rejected mid-simulation with "insufficient lamports" -- the wallet's
+    real SOL was thinner than the ledger assumed. This must be caught before
+    any transaction is built, not surfaced as a raw RPC error."""
+    monkeypatch.setattr(memecoin, "preview_buy",
+                        lambda *a, **k: memecoin.TradePreview(
+                            side="buy", token_address="MINT", sol_amount=0.05,
+                            usd_amount=10.0, price_impact_pct=0.5, quote={"outAmount": "1000000"}))
+    monkeypatch.setattr(solana_wallet, "load_keypair", lambda env=None: object())
+    monkeypatch.setattr(solana_wallet, "pubkey_str", lambda kp: "PUBKEY")
+    monkeypatch.setattr(solana_wallet, "get_balance_sol", lambda pub, env=None: 0.06)
+
+    def boom(*a, **k):
+        raise AssertionError("must not build/sign a transaction once the balance check fails")
+    monkeypatch.setattr(jupiter, "swap_transaction", boom)
+
+    with pytest.raises(memecoin.MemecoinError, match="insufficient SOL"):
+        memecoin.execute_buy("MINT", 10.0, storage, kill_switch=False,
+                             env={"HF_BOT_I_UNDERSTAND_MEMECOIN_RISK": "true"})
+    assert storage.memecoin_net_deployed_usd() == 0.0
+
+
+def test_execute_buy_raised_reserve_blocks_an_otherwise_sufficient_balance(storage, monkeypatch):
+    """A balance that clears the default reserve should still be blocked once
+    MEMECOIN_MIN_SOL_RESERVE is raised past what's left over -- confirms the
+    reserve is actually read from env, not just the hardcoded default."""
+    monkeypatch.setattr(memecoin, "preview_buy",
+                        lambda *a, **k: memecoin.TradePreview(
+                            side="buy", token_address="MINT", sol_amount=0.05,
+                            usd_amount=10.0, price_impact_pct=0.5, quote={"outAmount": "1000000"}))
+    monkeypatch.setattr(solana_wallet, "load_keypair", lambda env=None: object())
+    monkeypatch.setattr(solana_wallet, "pubkey_str", lambda kp: "PUBKEY")
+    monkeypatch.setattr(solana_wallet, "get_balance_sol", lambda pub, env=None: 0.10)
+
+    def boom(*a, **k):
+        raise AssertionError("must not build/sign a transaction once the balance check fails")
+    monkeypatch.setattr(jupiter, "swap_transaction", boom)
+
+    with pytest.raises(memecoin.MemecoinError, match="insufficient SOL"):
+        memecoin.execute_buy("MINT", 10.0, storage, kill_switch=False,
+                             env={"HF_BOT_I_UNDERSTAND_MEMECOIN_RISK": "true",
+                                  "MEMECOIN_MIN_SOL_RESERVE": "0.06"})
+
+
+def test_min_sol_reserve_default_and_override():
+    assert memecoin.min_sol_reserve({}) == memecoin.DEFAULT_MIN_SOL_RESERVE
+    assert memecoin.min_sol_reserve({"MEMECOIN_MIN_SOL_RESERVE": "0.05"}) == 0.05
 
 
 def test_execute_buy_over_budget_blocked(storage, monkeypatch):

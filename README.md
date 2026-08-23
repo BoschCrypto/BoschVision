@@ -775,6 +775,23 @@ signed:**
 - A per-trade ceiling, `MEMECOIN_MAX_TRADE_USD`.
 - A cumulative wallet budget, `MEMECOIN_WALLET_BUDGET_USD` — net USD deployed
   (buys minus sells) can never exceed it.
+- A live SOL balance check, `MEMECOIN_MIN_SOL_RESERVE` (default 0.02 SOL).
+
+**Why the live balance check exists.** Live testing produced a real
+`entry-buy: Solana RPC error ... custom program error: 0x1 ...
+'Transfer: insufficient lamports 236352768, need 260603976'` — the wallet's
+actual on-chain SOL was thinner than what `MEMECOIN_MAX_TRADE_USD` and
+`MEMECOIN_WALLET_BUDGET_USD` assumed was available. Those two caps are a
+**virtual USD ledger** (buys minus sells recorded in the local database),
+not a live wallet balance — real SOL also drains for transaction fees and
+new-associated-token-account rent on every trade, none of which that ledger
+tracks. Every buy now calls the wallet's real balance right before signing
+and refuses cleanly (`MemecoinError: insufficient SOL: ...`) if what would
+be left over after the trade dips under the reserve — instead of building
+and submitting a transaction that Solana's own simulation was always going
+to reject. Raise `MEMECOIN_MIN_SOL_RESERVE` if you still see raw
+"insufficient lamports" errors from the chain (meaning the default reserve
+didn't cover your RPC's actual fee/rent cost).
 
 **Be clear about what these do and don't protect:** they bound what *this
 code* will voluntarily spend. They do **not** limit what the raw private key
