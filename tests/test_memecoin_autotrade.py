@@ -138,6 +138,52 @@ def test_cycle_exits_a_stop_loss_position(storage, monkeypatch):
     assert storage.memecoin_peak_state("M1") is None   # cleared on full exit
 
 
+def test_exit_check_stop_loss_uses_emergency_slippage(storage, monkeypatch):
+    # Real failure seen in live testing: a position crashing -66% had sell
+    # attempts rejected outright by pump.fun's own program at the normal
+    # 150bps slippage tolerance -- during a real crash the price moves
+    # faster than that between quote and landing. A stop-loss must use a
+    # much wider tolerance so the exit can actually execute.
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=0.5)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    calls = []
+
+    def fake_execute_sell(token, pct, s, *, kill_switch, slippage_bps=None, env=None, **k):
+        calls.append(slippage_bps)
+        return {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.05,
+               "usd_amount": 5.0}
+    monkeypatch.setattr(memecoin, "execute_sell", fake_execute_sell)
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    assert report["exits"][0]["reason"].startswith("stop-loss")
+    assert calls == [memecoin.EMERGENCY_EXIT_SLIPPAGE_BPS]
+
+
+def test_exit_check_take_profit_trim_uses_normal_slippage(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    # +150% triggers TRIM_1 (take-profit), not a stop-loss/trailing-stop.
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=2.5)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    calls = []
+
+    def fake_execute_sell(token, pct, s, *, kill_switch, slippage_bps=None, env=None, **k):
+        calls.append(slippage_bps)
+        return {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.05,
+               "usd_amount": 5.0}
+    monkeypatch.setattr(memecoin, "execute_sell", fake_execute_sell)
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    assert report["exits"][0]["reason"].startswith("take-profit")
+    assert calls == [memecoin.DEFAULT_SELL_SLIPPAGE_BPS]
+
+
 def test_cycle_one_bad_position_does_not_stop_the_rest(storage, monkeypatch):
     storage.set_kill_switch(False)
     for addr in ("BAD", "GOOD"):

@@ -437,6 +437,21 @@ riskier profile:
 - **Exits are tight:** stop-loss **-15%** (vs -35%), first trim at **+15%**
   (vs +100%), trailing stop after +20%, and a **30-minute** stall exit (vs
   6h) — if it hasn't moved by then, out regardless.
+- **The -15% stop-loss is a check-and-react rule, not a hard limit.** Live
+  testing produced a real, sobering example: a position hit the exit-check
+  loop already down -66.4% — the price gapped down between one 10-second
+  check and the next, which a genuinely fast-crashing pump.fun coin can do
+  easily. There is no on-chain stop-limit order type here; the bot can only
+  react to what it observes at each check, and the realized loss on a real
+  crash can be dramatically worse than the configured percentage implies.
+  A related failure compounded it: the sell itself was initially rejected
+  twice by pump.fun's own program (a slippage-tolerance failure) at the
+  normal 150bps tolerance, because the price was moving faster than that
+  between quote and execution. Exits triggered by stop-loss or trailing-stop
+  now use a much wider tolerance (`EMERGENCY_EXIT_SLIPPAGE_BPS`, 2500bps =
+  25%) specifically — getting out at a worse price beats repeatedly failing
+  to get out while the position keeps bleeding value. Take-profit trims
+  keep the normal tolerance; they're not emergencies.
 
 ```bash
 hf-bot memecoin newcoins                                   # test the feed first

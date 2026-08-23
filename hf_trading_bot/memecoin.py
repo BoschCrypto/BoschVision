@@ -31,6 +31,15 @@ CONFIRM_ENV = "HF_BOT_I_UNDERSTAND_MEMECOIN_RISK"
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 DEFAULT_MAX_TRADE_USD = 25.0
 DEFAULT_BUDGET_USD = 50.0
+DEFAULT_SELL_SLIPPAGE_BPS = 150   # a normal trim -- price sensitivity matters, no rush
+# Live testing: a position down -66% (a -15% stop-loss can't be a hard
+# limit when checks are periodic -- price can gap down between them) had
+# sell attempts rejected outright by pump.fun's own program at 150bps
+# tolerance, because the price was moving faster than that between quote
+# and landing. During a stop-loss or trailing-stop, getting out at a worse
+# price beats repeatedly failing to get out while the position keeps
+# bleeding value -- see run_exit_check.
+EMERGENCY_EXIT_SLIPPAGE_BPS = 2500
 
 # A single wallet (excluding the LP itself) holding this much of supply is
 # the textbook bundled/insider-launch pattern real pump.fun scalpers flag —
@@ -328,8 +337,8 @@ def execute_buy(token_address: str, usd_amount: float, storage, *,
 
 
 def execute_sell(token_address: str, pct: float, storage, *,
-                 kill_switch: bool, slippage_bps: int = 150, dry_run: bool = False,
-                 env: Optional[dict] = None) -> dict:
+                 kill_switch: bool, slippage_bps: int = DEFAULT_SELL_SLIPPAGE_BPS,
+                 dry_run: bool = False, env: Optional[dict] = None) -> dict:
     """Sell `pct`% (0-100] of the held balance of `token_address` back to SOL."""
     confirmed = is_confirmed(env)
     reasons = sell_block_reasons(kill_switch=kill_switch, confirmed=confirmed)
@@ -590,8 +599,24 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False) 
                 already_trimmed_2=bool(state.get("trimmed_2")))
             if not sig.exit:
                 continue
+            # Real failure seen in live testing: a position crashing -66%
+            # (past a -15% stop-loss that a periodic check can't enforce as
+            # a hard limit — the price can gap down between checks) had two
+            # sell attempts rejected outright by pump.fun's own program
+            # (custom error 6001 under a Jupiter Route -> SellV2 path) at
+            # the default 150bps slippage tolerance. That tolerance is sized
+            # for a normal trim, not a real crash — during a stop-loss or
+            # trailing-stop, the price can easily be moving faster than
+            # 1.5% between quote and landing, and repeatedly failing to
+            # exit while the position keeps bleeding value is worse than
+            # accepting a bad fill. Widen slippage specifically for the two
+            # downside-protection exit reasons; take-profit trims and stall
+            # exits aren't emergencies and keep the tighter default.
+            urgent = sig.reason.startswith("stop-loss") or sig.reason.startswith("trailing stop")
+            sell_slippage_bps = EMERGENCY_EXIT_SLIPPAGE_BPS if urgent else DEFAULT_SELL_SLIPPAGE_BPS
             result = _with_jupiter_retry(execute_sell, p.token_address, sig.sell_pct, storage,
-                                         kill_switch=kill_switch, env=env)
+                                         kill_switch=kill_switch, slippage_bps=sell_slippage_bps,
+                                         env=env)
             trim1_pct = (memecoin_strategy.SCALP_TRIM_1_SELL_PCT if scalp
                         else memecoin_strategy.TRIM_1_SELL_PCT)
             trim2_pct = (memecoin_strategy.SCALP_TRIM_2_SELL_PCT if scalp
