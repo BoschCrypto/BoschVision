@@ -452,6 +452,17 @@ riskier profile:
   25%) specifically — getting out at a worse price beats repeatedly failing
   to get out while the position keeps bleeding value. Take-profit trims
   keep the normal tolerance; they're not emergencies.
+- **The same thing happens on the way IN, not just the way out.** Live
+  testing hit `custom program error: 0x1771` (Anchor error 6001, the same
+  slippage-tolerance code as the sell-side failure above) on a scalp-mode
+  BUY, at the 100bps default meant for an established DexScreener pair. A
+  brand-new pump.fun coin trades directly against its bonding curve, not a
+  deep pool — the price moves far more than 1% between quote and landing
+  when it's seconds old. Scalp-mode entries now use `SCALP_BUY_SLIPPAGE_BPS`
+  (1000bps = 10%) instead of the normal `DEFAULT_BUY_SLIPPAGE_BPS` (100bps);
+  non-scalp entries (established pairs via DexScreener) keep the tighter
+  default. Both are overridable via `MEMECOIN_BUY_SLIPPAGE_BPS` /
+  `MEMECOIN_SCALP_BUY_SLIPPAGE_BPS` if 0x1771 still shows up on buys.
 
 ```bash
 hf-bot memecoin newcoins                                   # test the feed first

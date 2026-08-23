@@ -612,6 +612,34 @@ def test_cycle_scalp_mode_uses_pumpfun_discovery_not_dexscreener(storage, monkey
     assert report["entries"][0]["token_address"] == "PF1"
 
 
+def test_cycle_scalp_entries_use_wider_slippage_than_normal_entries(storage, monkeypatch):
+    """Live testing: a scalp-mode buy on a fresh pump.fun bonding-curve coin
+    was rejected with custom program error 0x1771 (Anchor 6001 -- slippage
+    tolerance exceeded) at the 100bps default meant for established pairs.
+    Scalp entries must use the wider SCALP_BUY_SLIPPAGE_BPS instead."""
+    storage.set_kill_switch(False)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+
+    from hf_trading_bot import pumpfun_data
+    import time as _t
+    coin = {"address": "PF1", "symbol": "FRESH", "created_at_ms": int(_t.time() * 1000),
+           "sol_raised": 30.0, "market_cap_usd": 4000, "migrated": False, "source": "pumpfun"}
+    monkeypatch.setattr(pumpfun_data, "list_new_coins", lambda limit=30, env=None: [coin])
+    monkeypatch.setattr(solana_wallet, "get_mint_info",
+                        lambda mint, env=None: {"mint_authority": None, "freeze_authority": None})
+    monkeypatch.setattr(memecoin, "rugcheck_flags", lambda addr, env=None: [])
+
+    slippage_seen = []
+    monkeypatch.setattr(memecoin, "execute_buy",
+                        lambda token, usd, s, *, kill_switch, slippage_bps=100, env=None, **k:
+                        slippage_seen.append(slippage_bps) or
+                        {"tx_signature": "sig", "status": "confirmed", "sol_amount": 0.1,
+                         "usd_amount": usd})
+
+    memecoin.run_autotrade_cycle(storage, env=CONFIRMED_ENV, scalp=True)
+    assert slippage_seen == [memecoin.SCALP_BUY_SLIPPAGE_BPS]
+
+
 def test_cycle_scalp_mode_uses_live_candidates_when_given(storage, monkeypatch):
     storage.set_kill_switch(False)
     monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])

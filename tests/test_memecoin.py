@@ -105,6 +105,17 @@ def test_size_for_score_handles_a_min_score_of_100_without_dividing_by_zero():
     assert memecoin.size_for_score(100.0, 100.0, env=env) == pytest.approx(25.0)
 
 
+def test_buy_slippage_bps_defaults():
+    assert memecoin.buy_slippage_bps({}) == memecoin.DEFAULT_BUY_SLIPPAGE_BPS
+    assert memecoin.buy_slippage_bps({}, scalp=True) == memecoin.SCALP_BUY_SLIPPAGE_BPS
+
+
+def test_buy_slippage_bps_overrides_are_independent():
+    env = {"MEMECOIN_BUY_SLIPPAGE_BPS": "200", "MEMECOIN_SCALP_BUY_SLIPPAGE_BPS": "1500"}
+    assert memecoin.buy_slippage_bps(env) == 200
+    assert memecoin.buy_slippage_bps(env, scalp=True) == 1500
+
+
 def test_size_for_score_falls_back_to_ceiling_when_floor_exceeds_it():
     # A misconfigured MEMECOIN_MIN_TRADE_USD above the max ceiling must not
     # size a trade larger than the ceiling the rest of the system enforces.

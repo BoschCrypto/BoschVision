@@ -42,6 +42,16 @@ DEFAULT_SELL_SLIPPAGE_BPS = 150   # a normal trim -- price sensitivity matters, 
 # bleeding value -- see run_exit_check.
 EMERGENCY_EXIT_SLIPPAGE_BPS = 2500
 
+DEFAULT_BUY_SLIPPAGE_BPS = 100    # 1% -- fine for an established DexScreener pair
+# Live testing: a scalp-mode BUY on a pump.fun bonding-curve coin (still
+# seconds/minutes old, trading directly against the bonding curve, not a
+# deep pool) was rejected with the same pump.fun program error as the
+# sell-side case above (custom program error 0x1771 / Anchor error 6001 --
+# slippage tolerance exceeded), this time on entry: the curve moved more
+# than 1% between quote and landing. A fresh bonding-curve coin needs a
+# much wider entry tolerance than an established pair does.
+SCALP_BUY_SLIPPAGE_BPS = 1000     # 10% -- scalp-mode entries only
+
 # Live testing: a buy sized against the internal USD budget ledger was
 # submitted for simulation and rejected with "insufficient lamports" --
 # the wallet's real spendable SOL was thinner than the ledger assumed,
@@ -79,6 +89,15 @@ def max_trade_usd(env: Optional[dict] = None) -> float:
         return float(_env(env).get("MEMECOIN_MAX_TRADE_USD", DEFAULT_MAX_TRADE_USD))
     except (TypeError, ValueError):
         return DEFAULT_MAX_TRADE_USD
+
+
+def buy_slippage_bps(env: Optional[dict] = None, *, scalp: bool = False) -> int:
+    key = "MEMECOIN_SCALP_BUY_SLIPPAGE_BPS" if scalp else "MEMECOIN_BUY_SLIPPAGE_BPS"
+    default = SCALP_BUY_SLIPPAGE_BPS if scalp else DEFAULT_BUY_SLIPPAGE_BPS
+    try:
+        return int(_env(env).get(key, default))
+    except (TypeError, ValueError):
+        return default
 
 
 def min_sol_reserve(env: Optional[dict] = None) -> float:
@@ -906,7 +925,8 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
         size = min(size_for_score(sig.score, min_score_used, env=env), remaining)
         try:
             result = _with_jupiter_retry(execute_buy, t["address"], size, storage,
-                                         kill_switch=kill_switch, env=env)
+                                         kill_switch=kill_switch,
+                                         slippage_bps=buy_slippage_bps(env, scalp=scalp), env=env)
             report["entries"].append({"token_address": t["address"], "symbol": t["symbol"],
                                       "score": sig.score, "usd_amount": size, "result": result})
             remaining -= size
