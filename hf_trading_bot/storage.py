@@ -211,10 +211,20 @@ CREATE TABLE IF NOT EXISTS memecoin_trades (
     usd_amount REAL NOT NULL,          -- notional at time of trade, in USD
     price_usd REAL,
     tx_signature TEXT,
-    status TEXT NOT NULL,              -- submitted | confirmed | failed
+    status TEXT NOT NULL,              -- submitted | confirmed | failed | external
     detail TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS memecoin_price_ticks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_address TEXT NOT NULL,
+    price_usd REAL NOT NULL,
+    source TEXT NOT NULL,              -- pumpportal | dexscreener
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memecoin_price_ticks_token
+    ON memecoin_price_ticks (token_address, recorded_at);
 """
 
 DEFAULT_WATCHLIST = [
@@ -244,6 +254,12 @@ class Storage:
         for name in ("message", "reply", "archived_at"):
             if name not in cols:
                 self._conn.execute(f"ALTER TABLE command_queue ADD COLUMN {name} TEXT")
+
+        state_cols = {r["name"] for r in
+                     self._conn.execute("PRAGMA table_info(memecoin_position_state)").fetchall()}
+        for name in ("last_recommended_reason", "last_recommended_at"):
+            if name not in state_cols:
+                self._conn.execute(f"ALTER TABLE memecoin_position_state ADD COLUMN {name} TEXT")
         self._conn.commit()
 
     def _ensure_settings_row(self) -> None:
@@ -802,12 +818,59 @@ class Storage:
         )
         self._conn.commit()
 
+    def memecoin_record_recommendation(self, token_address: str, reason: str) -> None:
+        """manual_sell mode: an exit rule fired but the bot doesn't execute
+        it -- this is how run_exit_check knows it already alerted on this
+        reason, so it re-alerts on a cooldown instead of every single tick
+        the condition stays true."""
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT INTO memecoin_position_state (token_address, peak_price_usd, "
+            "last_recommended_reason, last_recommended_at, updated_at) VALUES (?, 0, ?, ?, ?) "
+            "ON CONFLICT(token_address) DO UPDATE SET "
+            "last_recommended_reason=excluded.last_recommended_reason, "
+            "last_recommended_at=excluded.last_recommended_at",
+            (token_address, reason, now, now),
+        )
+        self._conn.commit()
+
     def memecoin_clear_position_state(self, token_address: str) -> None:
         """Called after a full exit so a later re-entry into the same token
         starts with a clean peak/trim state, not the prior trade's."""
         self._conn.execute(
             "DELETE FROM memecoin_position_state WHERE token_address = ?", (token_address,))
         self._conn.commit()
+
+    def memecoin_tracked_position_tokens(self) -> list[str]:
+        """Every token currently carrying peak/trim state -- i.e. actively
+        being watched as a held position by run_exit_check. Used to detect
+        a position that disappeared on-chain (a manual/external sell)
+        without the bot ever recording one."""
+        rows = self._conn.execute("SELECT token_address FROM memecoin_position_state").fetchall()
+        return [r["token_address"] for r in rows]
+
+    def record_memecoin_price_tick(self, token_address: str, price_usd: float,
+                                   source: str) -> int:
+        """A single price observation for a held position, timestamped --
+        the raw material for later backtesting an alternative exit rule
+        against what actually happened, not just the entry/peak/exit
+        snapshot the exit-check loop itself needs moment to moment."""
+        cur = self._conn.execute(
+            "INSERT INTO memecoin_price_ticks (token_address, price_usd, source, recorded_at) "
+            "VALUES (?,?,?,?)",
+            (token_address, price_usd, source, datetime.now(timezone.utc).isoformat()),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def memecoin_price_history(self, token_address: str, *,
+                               limit: int = 10_000) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT price_usd, source, recorded_at FROM memecoin_price_ticks "
+            "WHERE token_address = ? ORDER BY recorded_at ASC LIMIT ?",
+            (token_address, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def memecoin_token_net_usd(self, token_address: str) -> float:
         """Net USD invested in one token (buys minus sells). Can go negative

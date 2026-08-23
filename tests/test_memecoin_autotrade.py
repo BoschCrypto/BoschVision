@@ -331,6 +331,145 @@ def test_exit_check_unpins_on_full_exit(storage, monkeypatch):
     assert feed.unpinned == ["M1"]
 
 
+# --- run_exit_check: manual_sell mode (recommend, don't execute) -------
+# The principal trades manually from a terminal (e.g. Phantom) and wants
+# the bot's monitoring/alerting without giving up execution control.
+
+def test_exit_check_manual_sell_recommends_instead_of_selling(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=0.5)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+
+    def boom(*a, **k):
+        raise AssertionError("manual_sell must never actually execute a sell")
+    monkeypatch.setattr(memecoin, "execute_sell", boom)
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV, manual_sell=True)
+    assert report["exits"] == []
+    assert report["recommendations"][0]["reason"].startswith("stop-loss")
+
+
+def test_exit_check_manual_sell_does_not_repeat_within_the_cooldown(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=0.5)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    monkeypatch.setattr(memecoin, "execute_sell",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("must not execute a sell")))
+
+    first = memecoin.run_exit_check(storage, env=CONFIRMED_ENV, manual_sell=True)
+    second = memecoin.run_exit_check(storage, env=CONFIRMED_ENV, manual_sell=True)
+    assert len(first["recommendations"]) == 1
+    assert len(second["recommendations"]) == 0   # same reason, still within cooldown
+
+
+def test_exit_check_manual_sell_re_alerts_when_the_reason_changes(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    monkeypatch.setattr(memecoin, "execute_sell",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("must not execute a sell")))
+
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=1.2)])
+    first = memecoin.run_exit_check(storage, env=CONFIRMED_ENV, scalp=True, manual_sell=True)
+    assert first["recommendations"][0]["reason"].startswith("take-profit")
+
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=0.5)])
+    second = memecoin.run_exit_check(storage, env=CONFIRMED_ENV, scalp=True, manual_sell=True)
+    # The reason category changed (take-profit -> stop-loss), so this
+    # re-alerts immediately rather than waiting out the cooldown -- the
+    # cooldown only suppresses repeating the SAME still-open recommendation.
+    assert second["recommendations"][0]["reason"].startswith("stop-loss")
+
+
+def test_exit_check_manual_sell_does_not_mutate_trim_or_peak_state(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=1.2)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+    monkeypatch.setattr(memecoin, "execute_sell",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("must not execute a sell")))
+
+    memecoin.run_exit_check(storage, env=CONFIRMED_ENV, manual_sell=True)
+    state = storage.memecoin_peak_state("M1")
+    assert not state.get("trimmed_1")   # never marked -- no real sell happened
+
+
+# --- run_exit_check: reconciling a fully external (manual) exit --------
+
+def test_exit_check_reconciles_a_fully_externally_sold_position(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="GONE", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=15.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    storage.memecoin_update_peak("GONE", 1.2)   # was actively tracked as held
+    # No longer appears on-chain at all -- sold manually, outside the bot.
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    assert report["reconciled"] == [{"token_address": "GONE", "usd_amount": 15.0}]
+    assert storage.memecoin_net_deployed_usd() == 0.0   # budget freed back up
+    assert storage.memecoin_peak_state("GONE") is None   # state cleared
+
+
+def test_exit_check_reconciliation_unpins_the_pumpportal_feed(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="GONE", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=15.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    storage.memecoin_update_peak("GONE", 1.2)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+    feed = _FakeExitPumpPortalFeed(reading=None)
+
+    memecoin.run_exit_check(storage, env=CONFIRMED_ENV, scalp=True, pumpportal_feed=feed)
+    assert feed.unpinned == ["GONE"]
+
+
+def test_exit_check_does_not_reconcile_a_token_with_no_outstanding_usd(storage, monkeypatch):
+    # Already fully squared (bought and sold in equal amounts) -- nothing
+    # left to reconcile, and reconciling it anyway would fabricate a
+    # spurious sell record.
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="SQUARED", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    storage.record_memecoin_trade(side="sell", token_address="SQUARED", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s2", status="confirmed")
+    storage.memecoin_update_peak("SQUARED", 1.0)
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [])
+
+    report = memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    assert report["reconciled"] == []
+
+
+def test_exit_check_records_a_price_tick_for_every_held_position(storage, monkeypatch):
+    storage.set_kill_switch(False)
+    storage.record_memecoin_trade(side="buy", token_address="M1", token_symbol="X",
+                                  sol_amount=0.1, usd_amount=10.0, price_usd=1.0,
+                                  tx_signature="s1", status="confirmed")
+    monkeypatch.setattr(memecoin, "list_positions", lambda s, env=None: [_position(price=1.05)])
+    monkeypatch.setattr(memecoin_data, "get_token", lambda addr, env=None: None)
+
+    memecoin.run_exit_check(storage, env=CONFIRMED_ENV)
+    history = storage.memecoin_price_history("M1")
+    assert len(history) == 1
+    assert history[0]["price_usd"] == 1.05
+    assert history[0]["source"] == "dexscreener"
+
+
 def test_exit_check_scalp_trim_uses_scalp_slippage_not_the_normal_default(storage, monkeypatch):
     """Live testing: a routine take-profit trim on a pump.fun bonding-curve
     position was rejected (custom program error 0x1771 / Anchor 6001) at

@@ -531,6 +531,39 @@ stays the same: the kill switch, `MEMECOIN_MAX_TRADE_USD`, and
 changes *what* gets bought and *when* it gets sold, never *how much* the
 bot is allowed to risk in total.
 
+### Trade manually, let the bot only monitor and alert (`--memecoin-manual-sell`)
+
+Some principals would rather buy automatically but sell by hand — from a
+terminal like Phantom's, with a chart and their own judgment, rather than a
+fixed percentage rule. `--memecoin-manual-sell` does exactly that: the bot
+still evaluates every held position against its exit rule on the normal
+`--memecoin-exit-check-seconds` cadence, but when a rule fires it logs a
+**recommendation** (`recommend-sell`, re-alerted every 5 minutes if still
+unactioned) instead of actually signing and submitting a sell. Entries are
+unaffected — the bot still buys automatically; only the sell side becomes
+advisory.
+
+Two things this changes under the hood, both worth understanding before
+using it:
+- **The wallet budget ledger needs to know about sells that happen outside
+  it.** `MEMECOIN_WALLET_BUDGET_USD` is tracked as buys minus sells in the
+  bot's own trade history — if you sell manually and the bot never hears
+  about it, that capital would look permanently "still deployed" and
+  eventually block all future buying. Every exit check now compares its
+  currently-tracked positions against what's actually held on-chain; a
+  position that was being tracked and has since **fully** disappeared
+  on-chain gets a reconciling sell recorded automatically (logged as
+  `reconciled`), freeing the budget back up. This only covers a full exit —
+  selling half a position manually isn't detected, and will leave the
+  ledger slightly overstated until the position is fully closed one way or
+  another.
+- **Every resolved price for a held position is now saved
+  (`memecoin_price_ticks`)**, not just discarded after each check. This
+  isn't specific to manual-sell mode — it runs whenever a position is
+  being tracked — but it's what makes evaluating "was the stop-loss right
+  to fire" possible after the fact, using the position's actual price path
+  instead of just its entry/peak/exit snapshot.
+
 ### Live feed — real-time detection, not polling (`--memecoin-live`)
 
 `hf-bot memecoin newcoins` (and scalp mode without `--memecoin-live`) polls

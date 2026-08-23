@@ -2265,6 +2265,16 @@ def memecoin_positions(cfg):
                    "alongside scalp mode) rather than a DexScreener poll -- 1-2s is safe here "
                    "and reacts far faster than the 10s default. Only runs when "
                    "--memecoin-autotrade is on.")
+@click.option("--memecoin-manual-sell", is_flag=True,
+              help="The bot still monitors every held position against its exit rule and "
+                   "still buys new entries automatically, but never executes a sell itself — "
+                   "an exit rule firing shows up in the activity log as a recommendation "
+                   "(re-alerted every 5 minutes if still unactioned) instead of a real trade. "
+                   "For trading manually from a terminal (e.g. Phantom) while keeping the "
+                   "bot's monitoring/alerting. A position sold outside the bot is detected "
+                   "and reconciled against the wallet budget ledger once it fully disappears "
+                   "on-chain — a PARTIAL manual sell isn't detected and leaves the ledger "
+                   "slightly stale until the position is fully closed.")
 @click.option("--memecoin-scalp", is_flag=True,
               help="Switch --memecoin-autotrade to the scalp profile: entries come from "
                    "pump.fun's own brand-new-coin feed (pumpfun_data — an UNOFFICIAL API, "
@@ -2302,7 +2312,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
               fallback_cmd: Optional[str], auto_execute: bool,
               auto_execute_max: float, committee_model: Optional[str],
               tiered: bool, memecoin_autotrade: bool, memecoin_cycle_seconds: int,
-              memecoin_exit_check_seconds: int,
+              memecoin_exit_check_seconds: int, memecoin_manual_sell: bool,
               memecoin_scalp: bool, memecoin_live: bool,
               open_browser: bool,
               token: Optional[str], auth: bool, tunnel: bool):
@@ -2495,7 +2505,7 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         try:
             report = memecoin.run_autotrade_cycle(
                 s, scalp=memecoin_scalp, live_candidates=live_candidates,
-                pumpportal_feed=memecoin_pumpportal_feed)
+                pumpportal_feed=memecoin_pumpportal_feed, manual_sell=memecoin_manual_sell)
         finally:
             s.close()
         memecoin_autotrade_status["last_run_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
@@ -2506,16 +2516,25 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         for e in report.get("exits", []):
             _memecoin_log("auto-sell", f"{e.get('symbol') or e['token_address'][:8]} — "
                           f"sold {e['sell_pct']:.0f}% — {e['reason']}")
+        for e in report.get("recommendations", []):
+            _memecoin_log("recommend-sell", f"{e.get('symbol') or e['token_address'][:8]} — "
+                          f"sell {e['sell_pct']:.0f}% — {e['reason']} — go sell it manually")
+        for e in report.get("reconciled", []):
+            _memecoin_log("reconciled", f"{e['token_address'][:8]} — no longer held on-chain, "
+                          f"${e['usd_amount']:,.2f} freed from the budget ledger")
         for e in report.get("entries", []):
             _memecoin_log("auto-buy", f"{e.get('symbol') or e['token_address'][:8]} — "
                           f"${e['usd_amount']:,.2f} — score {e['score']:.0f}")
         for err in report.get("errors", []):
             _memecoin_log("error", f"{err.get('stage')}: {err.get('error')}")
-        if report.get("exits") or report.get("entries"):
+        if report.get("exits") or report.get("recommendations") or report.get("entries"):
             try:
                 from hf_trading_bot import notify
                 lines = [f"SOLD {e.get('symbol') or e['token_address'][:8]} "
                         f"({e['sell_pct']:.0f}%) — {e['reason']}" for e in report.get("exits", [])]
+                lines += [f"SELL RECOMMENDED: {e.get('symbol') or e['token_address'][:8]} "
+                         f"({e['sell_pct']:.0f}%) — {e['reason']}"
+                         for e in report.get("recommendations", [])]
                 lines += [f"BOUGHT {e.get('symbol') or e['token_address'][:8]} "
                          f"${e['usd_amount']:,.2f}" for e in report.get("entries", [])]
                 notify.notify("VANTRIX memecoin autotrade cycle", "\n".join(lines))
@@ -2534,7 +2553,8 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         s = Storage(db_path)
         try:
             report = memecoin.run_exit_check(s, scalp=memecoin_scalp,
-                                             pumpportal_feed=memecoin_pumpportal_feed)
+                                             pumpportal_feed=memecoin_pumpportal_feed,
+                                             manual_sell=memecoin_manual_sell)
         finally:
             s.close()
         memecoin_autotrade_status["last_exit_check_at"] = (
@@ -2542,17 +2562,26 @@ def dashboard(cfg: AppConfig, host: str, port: int, refresh: int,
         for e in report.get("exits", []):
             _memecoin_log("auto-sell", f"{e.get('symbol') or e['token_address'][:8]} — "
                           f"sold {e['sell_pct']:.0f}% — {e['reason']}")
+        for e in report.get("recommendations", []):
+            _memecoin_log("recommend-sell", f"{e.get('symbol') or e['token_address'][:8]} — "
+                          f"sell {e['sell_pct']:.0f}% — {e['reason']} — go sell it manually")
+        for e in report.get("reconciled", []):
+            _memecoin_log("reconciled", f"{e['token_address'][:8]} — no longer held on-chain, "
+                          f"${e['usd_amount']:,.2f} freed from the budget ledger")
         for err in report.get("errors", []):
             _memecoin_log("error", f"{err.get('stage')}: {err.get('error')}")
-        if report.get("exits"):
+        if report.get("exits") or report.get("recommendations"):
             try:
                 from hf_trading_bot import notify
                 lines = [f"SOLD {e.get('symbol') or e['token_address'][:8]} "
                         f"({e['sell_pct']:.0f}%) — {e['reason']}" for e in report.get("exits", [])]
+                lines += [f"SELL RECOMMENDED: {e.get('symbol') or e['token_address'][:8]} "
+                         f"({e['sell_pct']:.0f}%) — {e['reason']}"
+                         for e in report.get("recommendations", [])]
                 notify.notify("VANTRIX memecoin exit", "\n".join(lines))
             except Exception:  # noqa: BLE001
                 pass
-        if report.get("exits"):
+        if report.get("exits") or report.get("reconciled"):
             _refresh_memecoin_cache()
 
     def _handle_memecoin_command(text: str) -> dict:

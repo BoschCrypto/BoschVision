@@ -178,6 +178,59 @@ def test_failed_trades_dont_consume_budget(storage):
     assert storage.memecoin_net_deployed_usd() == 0.0
 
 
+# --- storage: price ticks (raw material for later backtesting) ---------
+
+def test_price_history_empty_for_unknown_token(storage):
+    assert storage.memecoin_price_history("UNKNOWN") == []
+
+
+def test_price_history_records_ticks_in_order(storage):
+    storage.record_memecoin_price_tick("M1", 1.0, "dexscreener")
+    storage.record_memecoin_price_tick("M1", 1.2, "pumpportal")
+    history = storage.memecoin_price_history("M1")
+    assert [h["price_usd"] for h in history] == [1.0, 1.2]
+    assert [h["source"] for h in history] == ["dexscreener", "pumpportal"]
+
+
+def test_price_history_only_returns_the_requested_token(storage):
+    storage.record_memecoin_price_tick("M1", 1.0, "dexscreener")
+    storage.record_memecoin_price_tick("M2", 2.0, "dexscreener")
+    assert len(storage.memecoin_price_history("M1")) == 1
+
+
+# --- storage: tracked position tokens (peak/trim state) -----------------
+
+def test_tracked_position_tokens_empty_initially(storage):
+    assert storage.memecoin_tracked_position_tokens() == []
+
+
+def test_tracked_position_tokens_reflects_peak_state(storage):
+    storage.memecoin_update_peak("M1", 1.0)
+    storage.memecoin_update_peak("M2", 2.0)
+    assert set(storage.memecoin_tracked_position_tokens()) == {"M1", "M2"}
+
+
+def test_tracked_position_tokens_drops_a_cleared_position(storage):
+    storage.memecoin_update_peak("M1", 1.0)
+    storage.memecoin_clear_position_state("M1")
+    assert storage.memecoin_tracked_position_tokens() == []
+
+
+# --- storage: manual-sell recommendation cooldown state -----------------
+
+def test_record_recommendation_creates_state_row(storage):
+    storage.memecoin_record_recommendation("M1", "stop-loss")
+    state = storage.memecoin_peak_state("M1")
+    assert state["last_recommended_reason"] == "stop-loss"
+    assert state["last_recommended_at"] is not None
+
+
+def test_record_recommendation_does_not_reset_peak_price(storage):
+    storage.memecoin_update_peak("M1", 5.0)
+    storage.memecoin_record_recommendation("M1", "stop-loss")
+    assert storage.memecoin_peak_state("M1")["peak_price_usd"] == 5.0
+
+
 # --- jupiter client ------------------------------------------------------
 
 class _Resp:

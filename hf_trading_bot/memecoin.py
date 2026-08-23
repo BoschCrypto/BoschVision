@@ -729,8 +729,11 @@ def _with_read_retry(fn, *args, **kwargs):
     raise last_error
 
 
+MANUAL_SELL_RECOMMENDATION_COOLDOWN_S = 300.0   # re-alert every 5 min if still unactioned
+
+
 def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False,
-                   pumpportal_feed=None) -> dict:
+                   pumpportal_feed=None, manual_sell: bool = False) -> dict:
     """Check every held position against its exit rule and sell if
     triggered. This is the risk-critical half of run_autotrade_cycle,
     factored out so it can run on its own, much faster cadence than entry
@@ -749,7 +752,30 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False,
     PumpPortal already pushes a price (marketCapSol) on every single
     trade, free, no extra API call. Falls back to the DexScreener price
     silently whenever PumpPortal has nothing fresh — this can only make
-    a check more current, never less informed.
+    a check more current, never less informed. Every resolved price is
+    also persisted (memecoin_price_ticks) so a held position's actual
+    price path can be replayed later, not just its entry/peak/current
+    snapshot — the raw material for backtesting an alternative exit rule
+    against what really happened.
+
+    `manual_sell`: when True, an exit rule firing is reported under
+    `recommendations` instead of actually being sold — the principal
+    trades manually (e.g. from a terminal like Phantom's) and wants the
+    bot's monitoring/alerting without giving up execution control.
+    Re-alerts on the same still-open recommendation every
+    MANUAL_SELL_RECOMMENDATION_COOLDOWN_S rather than every single tick.
+    Because no sell happens, a position closed this way only leaves the
+    held set once the wallet's on-chain balance actually reflects it —
+    see the reconciliation step below.
+
+    Reconciliation: any position the bot was actively tracking (peak/trim
+    state) that has fully disappeared from the current on-chain-held set
+    -- sold outside the bot (manually, or via `manual_sell`) with no
+    sell ever recorded here -- gets a reconciling sell trade recorded for
+    its outstanding net USD, so the wallet budget ledger (buys minus
+    sells) doesn't stay permanently overstated. This only covers a FULL
+    external exit; a partial manual sell isn't detected and will leave
+    the ledger slightly stale until the position is fully closed.
 
     Same never-raises-for-one-token contract as run_autotrade_cycle.
     `held_addresses` in the report is the set of currently-held token
@@ -759,7 +785,8 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False,
     find out."""
     from hf_trading_bot import memecoin_data, memecoin_strategy, pumpfun_data
 
-    report: dict = {"exits": [], "errors": [], "skipped": None, "held_addresses": None}
+    report: dict = {"exits": [], "recommendations": [], "reconciled": [], "errors": [],
+                    "skipped": None, "held_addresses": None}
 
     kill_switch = bool(storage.get_settings()["kill_switch_active"])
     if kill_switch:
@@ -776,12 +803,28 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False,
         return report
 
     report["held_addresses"] = {p.token_address for p in positions}
+
+    externally_exited = set(storage.memecoin_tracked_position_tokens()) - report["held_addresses"]
+    for addr in externally_exited:
+        net_usd = storage.memecoin_token_net_usd(addr)
+        if net_usd <= 0.01:
+            continue
+        storage.record_memecoin_trade(
+            side="sell", token_address=addr, token_symbol=None, sol_amount=0.0,
+            usd_amount=net_usd, price_usd=None, tx_signature=None, status="external",
+            detail="reconciled: position no longer held on-chain, presumed sold outside the bot")
+        storage.memecoin_clear_position_state(addr)
+        if pumpportal_feed is not None:
+            pumpportal_feed.unpin(addr)
+        report["reconciled"].append({"token_address": addr, "usd_amount": net_usd})
+
     for p in positions:
         try:
             basis = storage.memecoin_position_basis(p.token_address)
             if not basis["avg_entry_price"] or not p.current_price_usd:
                 continue
             current_price_usd = p.current_price_usd
+            price_source = "dexscreener"
             if scalp and pumpportal_feed is not None:
                 pumpportal_feed.pin(p.token_address)
                 reading = pumpportal_feed.last_market_cap_sol(p.token_address)
@@ -790,6 +833,8 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False,
                     live_price = (reading["market_cap_sol"] * sol_price) / pumpfun_data.TOTAL_SUPPLY
                     if live_price > 0:
                         current_price_usd = live_price
+                        price_source = "pumpportal"
+            storage.record_memecoin_price_tick(p.token_address, current_price_usd, price_source)
             peak = storage.memecoin_update_peak(p.token_address, current_price_usd)
             state = storage.memecoin_peak_state(p.token_address) or {}
             hours_held = 0.0
@@ -809,6 +854,25 @@ def run_exit_check(storage, *, env: Optional[dict] = None, scalp: bool = False,
                 already_trimmed_1=bool(state.get("trimmed_1")),
                 already_trimmed_2=bool(state.get("trimmed_2")))
             if not sig.exit:
+                continue
+            if manual_sell:
+                from datetime import datetime as _dt, timezone as _tz
+                reason_category = sig.reason.split(":")[0]
+                last_reason = state.get("last_recommended_reason")
+                should_notify = last_reason != reason_category
+                if not should_notify:
+                    last_at = state.get("last_recommended_at")
+                    if last_at:
+                        last_dt = _dt.fromisoformat(last_at.replace("Z", "+00:00"))
+                        should_notify = ((_dt.now(_tz.utc) - last_dt).total_seconds()
+                                        >= MANUAL_SELL_RECOMMENDATION_COOLDOWN_S)
+                    else:
+                        should_notify = True
+                if should_notify:
+                    storage.memecoin_record_recommendation(p.token_address, reason_category)
+                    report["recommendations"].append(
+                        {"token_address": p.token_address, "symbol": p.symbol,
+                         "sell_pct": sig.sell_pct, "reason": sig.reason})
                 continue
             # Real failure seen in live testing: a position crashing -66%
             # (past a -15% stop-loss that a periodic check can't enforce as
@@ -924,7 +988,7 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
                         max_new_positions: int = MAX_NEW_POSITIONS_PER_CYCLE,
                         scalp: bool = False,
                         live_candidates: Optional[list] = None,
-                        pumpportal_feed=None) -> dict:
+                        pumpportal_feed=None, manual_sell: bool = False) -> dict:
     """One full autonomous pass: check exits on every held position FIRST (a
     stop-loss always gets first claim on attention and budget), then look for
     new entries with whatever budget remains. Returns a report of every
@@ -966,10 +1030,14 @@ def run_autotrade_cycle(storage, *, env: Optional[dict] = None,
 
     from hf_trading_bot import memecoin_data, memecoin_strategy
 
-    report: dict = {"exits": [], "entries": [], "errors": [], "skipped": None}
+    report: dict = {"exits": [], "recommendations": [], "reconciled": [], "entries": [],
+                    "errors": [], "skipped": None}
 
-    exit_report = run_exit_check(storage, env=env, scalp=scalp, pumpportal_feed=pumpportal_feed)
+    exit_report = run_exit_check(storage, env=env, scalp=scalp, pumpportal_feed=pumpportal_feed,
+                                 manual_sell=manual_sell)
     report["exits"] = exit_report["exits"]
+    report["recommendations"] = exit_report["recommendations"]
+    report["reconciled"] = exit_report["reconciled"]
     report["errors"].extend(exit_report["errors"])
     if exit_report["skipped"] is not None:
         report["skipped"] = exit_report["skipped"]
