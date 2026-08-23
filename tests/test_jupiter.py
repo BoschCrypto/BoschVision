@@ -71,3 +71,46 @@ def test_price_impact_pct_converts_fraction_to_percent():
 
 def test_price_impact_pct_defaults_to_zero_when_missing():
     assert jupiter.price_impact_pct({}) == 0.0
+
+
+# --- API key header ---------------------------------------------------
+# Live testing: an unauthenticated request to api.jup.ag is capped at
+# ~0.5 requests/second -- one autotrade cycle blows past that easily,
+# surfacing as "Jupiter quote HTTP 429: ... Too many requests". Jupiter
+# expects the key as an x-api-key header once JUPITER_API_KEY is set.
+
+def test_quote_sends_no_api_key_header_when_unset(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["headers"] = req.headers
+        return _Resp({"outAmount": "1000", "priceImpactPct": "0.01"})
+    monkeypatch.setattr(jupiter.urllib.request, "urlopen", fake_urlopen)
+
+    jupiter.quote("IN", "OUT", 1_000_000, env={})
+    assert "X-api-key" not in captured["headers"]
+
+
+def test_quote_sends_api_key_header_when_set(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["headers"] = req.headers
+        return _Resp({"outAmount": "1000", "priceImpactPct": "0.01"})
+    monkeypatch.setattr(jupiter.urllib.request, "urlopen", fake_urlopen)
+
+    jupiter.quote("IN", "OUT", 1_000_000, env={"JUPITER_API_KEY": "test-key-123"})
+    assert captured["headers"]["X-api-key"] == "test-key-123"
+
+
+def test_swap_transaction_sends_api_key_header_when_set(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["headers"] = req.headers
+        return _Resp({"swapTransaction": "BASE64TX"})
+    monkeypatch.setattr(jupiter.urllib.request, "urlopen", fake_urlopen)
+
+    jupiter.swap_transaction({"outAmount": "1000"}, "PUBKEY",
+                             env={"JUPITER_API_KEY": "test-key-123"})
+    assert captured["headers"]["X-api-key"] == "test-key-123"

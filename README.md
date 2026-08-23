@@ -663,6 +663,17 @@ separately:**
   `priceImpactPct`, `swapTransaction`) are unchanged, so this was a
   one-line fix once identified. Override via `JUPITER_BASE_URL` in `.env`
   if Jupiter migrates domains again.
+- **Jupiter now requires an API key, even for free use.** Live testing
+  produced `entry-buy: Jupiter quote HTTP 429: {"code":429,"message":"[API
+  Gateway] Too many requests"}` almost immediately after the domain fix
+  above — a different failure from the DNS issue, and this time not a
+  bug in this bot at all. Jupiter's own docs confirm an unauthenticated
+  request to `api.jup.ag` is capped at roughly **0.5 requests/second**; a
+  single autotrade cycle (one quote per scanned candidate, plus exit
+  checks every 10s) exceeds that trivially. Fixed by adding `JUPITER_API_KEY`
+  support — set it and every quote/swap call sends it as the `x-api-key`
+  header Jupiter expects. Get a free key at portal.jup.ag (no cost); a
+  free-tier key's limit is well above the keyless 0.5 RPS cap.
 - **Mint-check rate limiting.** The same live-testing round that surfaced
   more real candidates than ever also tripped a NEW problem: "Solana RPC
   HTTP 429: Too Many Requests" on `entry-mint-check`. With PumpPortal

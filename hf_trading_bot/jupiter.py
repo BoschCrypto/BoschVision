@@ -15,6 +15,15 @@ listening at that hostname anymore, not a transient network blip. The
 current endpoint is `api.jup.ag/swap/v1` — same query params, request
 body, and response field names (outAmount, priceImpactPct,
 swapTransaction) as the old v6 API, so only the base URL changed here.
+
+Rate limits, bitten a second time: Jupiter now gates `api.jup.ag` behind an
+API key (free to generate at portal.jup.ag, no cost) — a request sent with
+no key at all is capped at roughly 0.5 requests/second, which a single
+autotrade cycle (one quote per scanned candidate, plus exit checks every
+10s) blows past easily, surfacing as a live `entry-buy: Jupiter quote HTTP
+429: {"code":429,"message":"[API Gateway] Too many requests"}`. Set
+JUPITER_API_KEY and every request here sends it as the `x-api-key` header
+Jupiter expects; a free key's limit is well above the keyless 0.5 RPS cap.
 """
 from __future__ import annotations
 
@@ -46,6 +55,15 @@ def base_url(env: Optional[dict] = None) -> str:
     return (e.get("JUPITER_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
 
 
+def _headers(env: Optional[dict] = None, *, extra: Optional[dict] = None) -> dict:
+    e = env if env is not None else os.environ
+    headers = dict(_HEADERS, **(extra or {}))
+    api_key = e.get("JUPITER_API_KEY")
+    if api_key:
+        headers["x-api-key"] = api_key
+    return headers
+
+
 def quote(input_mint: str, output_mint: str, amount: int, *,
          slippage_bps: int = 100, env: Optional[dict] = None) -> dict:
     """A swap quote. `amount` is in the input token's smallest unit (lamports
@@ -54,7 +72,7 @@ def quote(input_mint: str, output_mint: str, amount: int, *,
     params = (f"inputMint={input_mint}&outputMint={output_mint}&amount={amount}"
              f"&slippageBps={slippage_bps}")
     url = f"{base_url(env)}/quote?{params}"
-    req = urllib.request.Request(url, method="GET", headers=_HEADERS)
+    req = urllib.request.Request(url, method="GET", headers=_headers(env))
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             data = json.loads(resp.read().decode())
@@ -82,7 +100,7 @@ def swap_transaction(quote_response: dict, user_pubkey: str, *,
     }).encode()
     url = f"{base_url(env)}/swap"
     req = urllib.request.Request(url, data=body, method="POST",
-                                 headers=dict(_HEADERS, **{"Content-Type": "application/json"}))
+                                 headers=_headers(env, extra={"Content-Type": "application/json"}))
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
             data = json.loads(resp.read().decode())
