@@ -13,6 +13,8 @@ from hf_trading_bot.data.provider import get_provider, source_of
 from hf_trading_bot.engine import run_strategy_cycle
 from hf_trading_bot.storage import Storage
 from hf_trading_bot.strategies.registry import STRATEGY_KEYS
+from hf_trading_bot import xsection
+from hf_trading_bot.universe import UNIVERSE_KEYS, load_universe
 
 load_dotenv()
 
@@ -284,6 +286,201 @@ def backtest(
             "\n  This strategy underperformed simply buying and holding. "
             "On this evidence it destroyed value."
         )
+
+
+@cli.command("xfetch")
+@click.option("--universe", "universe_key", type=click.Choice(UNIVERSE_KEYS),
+              default="liquid_large_cap")
+@click.option("--universe-csv", default=None, help="CSV path when --universe=csv.")
+@click.option("--start", default="2005-01-01")
+@click.option("--end", default=None)
+@click.option("--cache", "cache_dir", default="data/bars", help="Cache directory.")
+@click.option("--benchmark", default="SPY")
+@click.option("--refresh/--skip-existing", default=False,
+              help="Re-download symbols already cached.")
+@click.pass_obj
+def xfetch(cfg: AppConfig, universe_key: str, universe_csv: Optional[str], start: str,
+           end: Optional[str], cache_dir: str, benchmark: str, refresh: bool):
+    """Download daily bars into the on-disk cache that `xbacktest` reads.
+
+    Twenty years of daily bars for a hundred-plus symbols is far too much data to
+    re-fetch per experiment, so it lands in per-symbol CSVs once and is reused.
+    Run this wherever market data is actually reachable; the backtest itself
+    needs no network.
+    """
+    from pathlib import Path
+
+    from hf_trading_bot import pricecache
+
+    symbols, _ = load_universe(universe_key, universe_csv)
+    wanted = [benchmark] + [s for s in symbols if s != benchmark]
+    cache = Path(cache_dir)
+    provider = _build_provider(cfg)
+    click.echo(f"Data source: {source_of(provider)}")
+    click.echo(f"Cache: {cache.resolve()}")
+
+    ok = skipped = failed = 0
+    for i, sym in enumerate(wanted, 1):
+        if not refresh and pricecache.read(cache, sym):
+            skipped += 1
+            continue
+        try:
+            bars = provider.daily_bars_range(sym, start, end)
+        except Exception as e:  # noqa: BLE001 — one symbol must not kill the batch
+            click.echo(f"  [{i}/{len(wanted)}] {sym}: {type(e).__name__}")
+            failed += 1
+            continue
+        if bars:
+            n = pricecache.write(cache, sym, bars)
+            ok += 1
+            click.echo(f"  [{i}/{len(wanted)}] {sym}: {n} bars "
+                       f"{bars[0].t} → {bars[-1].t}")
+        else:
+            failed += 1
+            click.echo(f"  [{i}/{len(wanted)}] {sym}: no data")
+
+    click.echo(f"\nCached {ok} · skipped {skipped} · failed {failed}")
+    if failed:
+        click.echo("  Symbols with no data are simply absent from the backtest "
+                   "universe; they are reported by `xbacktest` rather than "
+                   "silently dropped.")
+
+
+@cli.command("xbacktest")
+@click.option("--universe", "universe_key", type=click.Choice(UNIVERSE_KEYS),
+              default="liquid_large_cap", help="Candidate universe.")
+@click.option("--universe-csv", default=None, help="CSV path when --universe=csv.")
+@click.option("--cache", "cache_dir", default="data/bars",
+              help="Read bars from this cache instead of the network.")
+@click.option("--network/--no-network", default=False,
+              help="Fetch missing symbols live instead of failing.")
+@click.option("--start", default="2005-01-01")
+@click.option("--end", default=None)
+@click.option("--positions", default=20, help="Target number of holdings.")
+@click.option("--cost-bps", default=5.0, help="Round-trip cost in basis points.")
+@click.option("--ablations/--no-ablations", default=True,
+              help="Also run the component ablations.")
+@click.option("--benchmark", default="SPY")
+@click.pass_obj
+def xbacktest(
+    cfg: AppConfig, universe_key: str, universe_csv: Optional[str], cache_dir: str,
+    network: bool, start: str, end: Optional[str], positions: int, cost_bps: float,
+    ablations: bool, benchmark: str,
+):
+    """Cross-sectional Gated Momentum backtest, with ablations and bias warnings.
+
+    Unlike `backtest`, which replays one symbol, this ranks a whole universe
+    against itself and holds a portfolio — the only shape that can express the
+    strategy. Every run prints its integrity warnings; a component that does not
+    beat its own ablation has not earned its place in the spec.
+
+    Reads bars from the `xfetch` cache by default so a run needs no network.
+    """
+    from pathlib import Path
+
+    from hf_trading_bot import pricecache
+
+    symbols, mode = load_universe(universe_key, universe_csv)
+    click.echo(f"Universe: {universe_key} ({len(symbols)} symbols, mode={mode.value})")
+
+    cache = Path(cache_dir)
+    wanted = [benchmark] + [s for s in symbols if s != benchmark]
+    price_data, failed = pricecache.load_many(cache, wanted, start, end)
+    if price_data:
+        click.echo(f"Loaded {len(price_data)} symbols from cache {cache}")
+
+    if failed and network:
+        provider = _build_provider(cfg)
+        click.echo(f"Fetching {len(failed)} uncached symbols via {source_of(provider)} ...")
+        still_missing: list[str] = []
+        for sym in failed:
+            try:
+                bars = provider.daily_bars_range(sym, start, end)
+            except Exception:  # noqa: BLE001 — one bad symbol must not kill the run
+                bars = []
+            if bars:
+                price_data[sym] = bars
+                pricecache.write(cache, sym, bars)
+            else:
+                still_missing.append(sym)
+        failed = still_missing
+
+    if benchmark not in price_data:
+        raise click.ClickException(
+            f"No data for benchmark {benchmark} — it is the trading calendar and "
+            f"the regime input, so the run cannot proceed.\n"
+            f"Populate the cache first:  hf-bot xfetch --start {start} "
+            f"--cache {cache_dir}\n"
+            f"(or pass --network to fetch inline, where market data is reachable)."
+        )
+    if failed:
+        click.echo(f"  ({len(failed)} symbols unavailable: {', '.join(failed[:8])}"
+                   f"{' ...' if len(failed) > 8 else ''})")
+
+    universe = [s for s in symbols if s in price_data]
+    params = xsection.GatedMomentumParams(n_positions=positions, round_trip_bps=cost_bps)
+
+    try:
+        result = xsection.run(price_data, universe, mode, params, benchmark_symbol=benchmark)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+
+    bh = xsection.buy_and_hold(price_data, benchmark, result.start)
+
+    def _row(name: str, r) -> str:
+        def pct(v):
+            return f"{v * 100:>8.1f}%" if v is not None else f"{'n/a':>9}"
+        sharpe = f"{r.sharpe:>7.2f}" if r.sharpe is not None else f"{'n/a':>7}"
+        return f"{name:<22}{pct(r.total_return)}{pct(r.cagr)}{pct(r.max_drawdown)}{sharpe}"
+
+    click.echo(f"\n{result.start} → {result.end}  ({result.years:.1f}y, "
+               f"{len(result.rebalances)} rebalances)")
+    click.echo("=" * 72)
+    click.echo(f"{'':<22}{'return':>9}{'CAGR':>9}{'maxDD':>9}{'Sharpe':>8}")
+    click.echo("-" * 72)
+    click.echo(_row("gated_momentum", result))
+    if bh:
+        click.echo(_row(f"buy & hold {benchmark}", bh))
+
+    if ablations:
+        click.echo("\nABLATIONS — each removes exactly one component")
+        click.echo("-" * 72)
+        others = xsection.run_ablations(
+            price_data, universe, mode, params, benchmark_symbol=benchmark,
+            only=[k for k in xsection.ABLATIONS if k != "full"],
+        )
+        for name, r in others.items():
+            click.echo(_row(name, r))
+        click.echo(
+            "\n  A component earns its place only if the full strategy beats the\n"
+            "  ablation that removes it. Anything that does not should be deleted\n"
+            "  from the spec, not defended."
+        )
+
+    turnover = result.annual_turnover
+    drag = result.annual_cost_drag
+    deployed = result.pct_time_deployed
+    click.echo("\nIMPLEMENTATION")
+    click.echo("-" * 72)
+    if turnover is not None:
+        click.echo(f"  Annual turnover      {turnover:>8.2f}x  (1.0 = book replaced once)")
+    if drag is not None:
+        click.echo(f"  Annual cost drag     {drag * 100:>8.2f}%  "
+                   f"(kill-criterion K2 trips above 1.50%)")
+    if deployed is not None:
+        click.echo(f"  Deployed             {deployed * 100:>8.0f}%  of rebalance dates")
+
+    warnings = xsection.integrity_warnings(result)
+    click.echo("\nINTEGRITY")
+    click.echo("-" * 72)
+    if not warnings:
+        click.echo("  No structural objections raised. Still not proof.")
+    for w in warnings:
+        click.echo(f"  ! {w}")
+    click.echo(
+        "\n  A backtest is permission to try a small live allocation and compare\n"
+        "  reality against these numbers. It is not evidence the edge exists."
+    )
 
 
 @cli.group()
