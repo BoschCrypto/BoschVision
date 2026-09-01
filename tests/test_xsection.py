@@ -315,6 +315,63 @@ class TestNoLookahead:
             assert r.date not in month_ends
 
 
+class TestRealDataQuirks:
+    """Shapes real market data has and synthetic fixtures do not.
+
+    The universe spans 21 years, so it necessarily contains companies that
+    listed partway through (META 2012, TSLA 2010) and names that were halted or
+    thinly traded for stretches. Both produce ragged series, and a ranking
+    engine that mishandles them will quietly rank a stock on a window where it
+    did not trade.
+    """
+
+    def test_symbol_that_ipos_midway_is_excluded_until_it_has_history(self):
+        dates, data = _universe_data(900)
+        # No data at all for the first 500 sessions, then a strong performer.
+        late = _trend(dates[500:], 40.0, 0.003, volume=9_000_000.0)
+        data["IPO"] = late
+        universe = [s for s in data if s != "SPY"]
+        res = run(data, universe, UniverseMode.STATIC_LIST,
+                  GatedMomentumParams(n_positions=4, min_dollar_volume=1_000_000))
+
+        first_held = next((r.date for r in res.rebalances if "IPO" in r.holdings), None)
+        # It may legitimately be picked later, but never before it has a full
+        # 12-month window of its own trading history.
+        if first_held is not None:
+            idx = dates.index(first_held)
+            assert idx >= 500 + factors.TRADING_DAYS_YEAR, (
+                f"IPO name held at {first_held} with under a year of history"
+            )
+
+    def test_partial_history_does_not_crash_or_produce_nan(self):
+        dates, data = _universe_data(900)
+        data["IPO"] = _trend(dates[700:], 40.0, 0.004, volume=9_000_000.0)
+        universe = [s for s in data if s != "SPY"]
+        res = run(data, universe, UniverseMode.STATIC_LIST,
+                  GatedMomentumParams(n_positions=4, min_dollar_volume=1_000_000))
+        assert all(math.isfinite(e) and e > 0 for e in res.equity)
+
+    def test_momentum_is_none_while_the_window_predates_listing(self):
+        dates = _dates(600)
+        # Zero-priced bars stand in for "did not exist yet", which is what the
+        # calendar projection produces ahead of a symbol's first real bar.
+        prices = [0.0] * 300 + [50.0 * (1.002 ** i) for i in range(300)]
+        bars = _bars(dates, prices)
+        assert factors.momentum_12_1(bars, 400) is None   # window starts in the void
+        assert factors.momentum_12_1(bars, 580) is not None  # fully inside real data
+
+    def test_halted_name_forward_fills_rather_than_inventing_a_move(self):
+        dates, data = _universe_data(800)
+        # Drop a month of bars out of the middle of one symbol.
+        gapped = [b for b in data["WIN0"] if not (300 <= dates.index(b.t) < 330)]
+        data["WIN0"] = gapped
+        universe = [s for s in data if s != "SPY"]
+        res = run(data, universe, UniverseMode.STATIC_LIST,
+                  GatedMomentumParams(n_positions=4, min_dollar_volume=1_000_000))
+        # A gap must not manufacture a jump in the equity curve.
+        assert all(abs(r) < 0.5 for r in res.daily_returns), "gap produced a fake move"
+
+
 class TestAblations:
     def test_each_ablation_runs_and_is_labelled(self):
         _, data = _universe_data()
