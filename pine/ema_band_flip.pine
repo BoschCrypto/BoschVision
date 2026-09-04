@@ -1,0 +1,137 @@
+//@version=6
+// EMA Band Flip — the "Michael's EMA" rule, made testable.
+//
+// This is your professor's setup written as a STRATEGY rather than an
+// indicator, so TradingView's Strategy Tester reports what it actually does on
+// ETH 4h: win rate, profit factor, max drawdown, average win vs average loss.
+//
+// Expect a win rate near 30-45%, NOT 80-90%. That is not the rule failing —
+// it is what trend-following systems look like. Their edge is skew: a few
+// large wins pay for many small losses. Judge this by PROFIT FACTOR and
+// EXPECTANCY, never by win rate. If you require a high win rate you will
+// abandon a profitable system during a normal losing run.
+//
+// Three additions to the bare crossover, each switchable so you can measure
+// whether it earns its place. Turn them off one at a time and re-read the
+// Strategy Tester — that is an ablation, and it is the only honest way to know
+// which parts help:
+//   1. HTF trend filter  — only take flips aligned with the higher timeframe.
+//   2. Minimum separation — ignore marginal crosses that immediately reverse.
+//   3. ATR stop           — cut the loser instead of waiting for the opposite flip.
+
+strategy("EMA Band Flip",
+     overlay              = true,
+     initial_capital      = 10000,
+     default_qty_type     = strategy.fixed,
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.055,      // taker-ish; set to YOUR Bybit fee tier
+     slippage             = 1,
+     process_orders_on_close = true,
+     calc_on_every_tick   = false,
+     margin_long          = 0,
+     margin_short         = 0)
+
+// ─── Inputs ──────────────────────────────────────────────────────────────────
+fastLen   = input.int(12,  "Fast EMA",              minval = 2,  group = "Bands")
+slowLen   = input.int(50,  "Slow EMA",              minval = 5,  group = "Bands")
+minSepPct = input.float(0.15, "Min band separation %", step = 0.05, minval = 0,
+     group = "Bands", tooltip = "Ignore crosses where the EMAs are still tangled. 0 = take every cross.")
+
+useHTF    = input.bool(true, "Higher-timeframe filter", group = "Filters")
+htfTF     = input.timeframe("1D", "Higher timeframe",   group = "Filters")
+
+useStop   = input.bool(true,  "ATR stop",       group = "Risk")
+atrLen    = input.int(14,     "ATR length",     minval = 2, group = "Risk")
+atrMult   = input.float(2.0,  "Stop = ATR ×",   step = 0.1, minval = 0.5, group = "Risk")
+riskPct   = input.float(1.0,  "Risk % of equity", step = 0.25, minval = 0.1, maxval = 5,
+     group = "Risk", tooltip = "Per-trade risk. The mandate says 1%. 2% is the ceiling.")
+allowShort = input.bool(true, "Trade shorts (perps)", group = "Risk")
+
+// ─── Bands ───────────────────────────────────────────────────────────────────
+fast = ta.ema(close, fastLen)
+slow = ta.ema(close, slowLen)
+atr  = ta.atr(atrLen)
+
+sepPct = slow != 0 ? math.abs(fast - slow) / slow * 100 : 0.0
+
+bull = fast > slow and sepPct >= minSepPct
+bear = fast < slow and sepPct >= minSepPct
+
+// ─── Higher-timeframe alignment ──────────────────────────────────────────────
+// [1] offset + lookahead_off: reads only CLOSED higher-timeframe bars, so the
+// strategy cannot act on a daily close that has not happened yet. Without this
+// the backtest looks far better than the rule could ever trade.
+htfFast = request.security(syminfo.tickerid, htfTF, ta.ema(close, fastLen)[1],
+     lookahead = barmerge.lookahead_off)
+htfSlow = request.security(syminfo.tickerid, htfTF, ta.ema(close, slowLen)[1],
+     lookahead = barmerge.lookahead_off)
+
+htfReady = not na(htfFast) and not na(htfSlow)
+htfBull  = not useHTF or (htfReady and htfFast > htfSlow)
+htfBear  = not useHTF or (htfReady and htfFast < htfSlow)
+
+// ─── Signals: the FLIP, not the state ────────────────────────────────────────
+flipUp   = bull and not bull[1]
+flipDown = bear and not bear[1]
+
+longSig  = flipUp   and htfBull
+shortSig = flipDown and htfBear and allowShort
+
+// ─── Sizing: derived from stop distance, never chosen ────────────────────────
+// position = (equity × risk%) ÷ stop distance. Leverage does not appear here —
+// it changes the margin posted, never the risk taken.
+stopDist = useStop ? atr * atrMult : atr * 3.0
+riskAmt  = strategy.equity * riskPct / 100
+qty      = stopDist > 0 ? riskAmt / stopDist : 0.0
+
+// ─── Execution ───────────────────────────────────────────────────────────────
+if longSig and strategy.position_size <= 0 and qty > 0
+    strategy.close("S", comment = "flip")
+    strategy.entry("L", strategy.long, qty = qty)
+    if useStop
+        strategy.exit("L stop", "L", stop = close - stopDist)
+
+if shortSig and strategy.position_size >= 0 and qty > 0
+    strategy.close("L", comment = "flip")
+    strategy.entry("S", strategy.short, qty = qty)
+    if useStop
+        strategy.exit("S stop", "S", stop = close + stopDist)
+
+// Exit on the opposite flip even when shorts are disabled, so a long book does
+// not ride an adverse trend waiting for a stop that may be far away.
+if not allowShort and flipDown and strategy.position_size > 0
+    strategy.close("L", comment = "band flipped")
+
+// ─── Plotting ────────────────────────────────────────────────────────────────
+bandCol = bull ? color.new(color.teal, 0) : bear ? color.new(color.red, 0)
+     : color.new(color.gray, 40)
+pF = plot(fast, "Fast EMA", color = bandCol, linewidth = 2)
+pS = plot(slow, "Slow EMA", color = color.new(bandCol, 55), linewidth = 2)
+fill(pF, pS, color = color.new(bull ? color.teal : bear ? color.red : color.gray, 88))
+
+plotshape(longSig,  title = "Flip up",   style = shape.triangleup,
+     location = location.belowbar, color = color.new(color.teal, 0), size = size.tiny)
+plotshape(shortSig, title = "Flip down", style = shape.triangledown,
+     location = location.abovebar, color = color.new(color.red, 0),  size = size.tiny)
+
+// ─── Honest read-out ─────────────────────────────────────────────────────────
+var table t = table.new(position.top_right, 2, 5, border_width = 1)
+if barstate.islast
+    wins   = strategy.wintrades
+    total  = strategy.closedtrades
+    wr     = total > 0 ? wins / total * 100 : 0.0
+    gp     = strategy.grossprofit
+    gl     = strategy.grossloss
+    pf     = gl > 0 ? gp / gl : na
+    table.cell(t, 0, 0, "State",   bgcolor = color.new(color.gray, 80))
+    table.cell(t, 1, 0, bull ? "GREEN" : bear ? "RED" : "tangled",
+         bgcolor = bull ? color.new(color.teal, 60) : bear ? color.new(color.red, 60)
+              : color.new(color.gray, 60))
+    table.cell(t, 0, 1, "Separation")
+    table.cell(t, 1, 1, str.tostring(sepPct, "#.##") + "%")
+    table.cell(t, 0, 2, "Trades")
+    table.cell(t, 1, 2, str.tostring(total))
+    table.cell(t, 0, 3, "Win rate")
+    table.cell(t, 1, 3, str.tostring(wr, "#.#") + "%")
+    table.cell(t, 0, 4, "Profit factor")
+    table.cell(t, 1, 4, na(pf) ? "n/a" : str.tostring(pf, "#.##"))
