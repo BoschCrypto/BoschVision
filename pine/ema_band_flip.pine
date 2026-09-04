@@ -40,6 +40,12 @@ minSepPct = input.float(0.15, "Min band separation %", step = 0.05, minval = 0,
 useHTF    = input.bool(true, "Higher-timeframe filter", group = "Filters")
 htfTF     = input.timeframe("1D", "Higher timeframe",   group = "Filters")
 
+entryMode = input.string("Signal close", "Entry method",
+     options = ["Signal close", "Limit at fast EMA"], group = "Entry",
+     tooltip = "Signal close fills at the close of the flip bar — reliable, but on a large 4h candle that can be far above where the bands actually crossed. Limit at fast EMA waits for a pullback to the fast EMA, giving a better price on the trades that pull back and MISSING the ones that run away without you. Which is better is an empirical question — measure both.")
+retestBars = input.int(3, "Limit valid for N bars", minval = 1, maxval = 20, group = "Entry",
+     tooltip = "Cancel an unfilled pullback order after this many bars. Too long and you enter late into a move that already went; too short and you miss normal retests.")
+
 useStop   = input.bool(true,  "ATR stop",       group = "Risk")
 atrLen    = input.int(14,     "ATR length",     minval = 2, group = "Risk")
 atrMult   = input.float(2.0,  "Stop = ATR ×",   step = 0.1, minval = 0.5, group = "Risk")
@@ -85,17 +91,37 @@ riskAmt  = strategy.equity * riskPct / 100
 qty      = stopDist > 0 ? riskAmt / stopDist : 0.0
 
 // ─── Execution ───────────────────────────────────────────────────────────────
+useLimit = entryMode == "Limit at fast EMA"
+var int pendingSince = na
+
 if longSig and strategy.position_size <= 0 and qty > 0
     strategy.close("S", comment = "flip")
-    strategy.entry("L", strategy.long, qty = qty)
+    if useLimit
+        strategy.entry("L", strategy.long, qty = qty, limit = fast)
+        pendingSince := bar_index
+    else
+        strategy.entry("L", strategy.long, qty = qty)
     if useStop
         strategy.exit("L stop", "L", stop = close - stopDist)
 
 if shortSig and strategy.position_size >= 0 and qty > 0
     strategy.close("L", comment = "flip")
-    strategy.entry("S", strategy.short, qty = qty)
+    if useLimit
+        strategy.entry("S", strategy.short, qty = qty, limit = fast)
+        pendingSince := bar_index
+    else
+        strategy.entry("S", strategy.short, qty = qty)
     if useStop
         strategy.exit("S stop", "S", stop = close + stopDist)
+
+// An unfilled pullback order goes stale: the setup that justified it is older
+// every bar, and filling on bar 12 is entering a different trade than the one
+// the signal described. Cancel it rather than let it sit.
+if useLimit and not na(pendingSince) and strategy.position_size == 0
+     and bar_index - pendingSince >= retestBars
+    strategy.cancel("L")
+    strategy.cancel("S")
+    pendingSince := na
 
 // Exit on the opposite flip even when shorts are disabled, so a long book does
 // not ride an adverse trend waiting for a stop that may be far away.
