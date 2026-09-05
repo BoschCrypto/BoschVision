@@ -1,136 +1,178 @@
 //@version=6
 // EMA Band Flip — the "Michael's EMA" rule, made testable.
 //
-// This is your professor's setup written as a STRATEGY rather than an
-// indicator, so TradingView's Strategy Tester reports what it actually does on
-// ETH 4h: win rate, profit factor, max drawdown, average win vs average loss.
+// Your professor's setup written as a STRATEGY, so TradingView's Strategy
+// Tester reports what it actually does: win rate, profit factor, drawdown,
+// average win vs average loss.
 //
-// Expect a win rate near 30-45%, NOT 80-90%. That is not the rule failing —
-// it is what trend-following systems look like. Their edge is skew: a few
-// large wins pay for many small losses. Judge this by PROFIT FACTOR and
-// EXPECTANCY, never by win rate. If you require a high win rate you will
-// abandon a profitable system during a normal losing run.
+// EXPECT A LOW WIN RATE. The first test came back 17.4% (4 of 23) with a
+// profit factor of 2.15 — the average winner was ~10x the average loser. That
+// is what a working trend system looks like. Judge it by PROFIT FACTOR and
+// EXPECTANCY, never by win rate.
 //
-// Three additions to the bare crossover, each switchable so you can measure
-// whether it earns its place. Turn them off one at a time and re-read the
-// Strategy Tester — that is an ablation, and it is the only honest way to know
-// which parts help:
-//   1. HTF trend filter  — only take flips aligned with the higher timeframe.
-//   2. Minimum separation — ignore marginal crosses that immediately reverse.
-//   3. ATR stop           — cut the loser instead of waiting for the opposite flip.
+// WARNING ON FILTER STACKING. Every filter below makes the backtest look
+// better and the sample smaller. With 23 trades you are already under the ~30
+// needed to tell skill from luck; switch on three more filters and you may be
+// looking at 8 trades and a beautiful curve that means nothing. Turn filters on
+// ONE AT A TIME, note the trade count each time, and treat any result under 30
+// trades as a hypothesis rather than a finding.
 
 strategy("EMA Band Flip",
-     overlay              = true,
-     initial_capital      = 10000,
-     default_qty_type     = strategy.fixed,
-     commission_type      = strategy.commission.percent,
-     commission_value     = 0.055,      // taker-ish; set to YOUR Bybit fee tier
-     slippage             = 1,
+     overlay                 = true,
+     initial_capital         = 10000,
+     default_qty_type        = strategy.fixed,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.055,     // SET THIS TO YOUR BYBIT FEE TIER
+     slippage                = 1,
      process_orders_on_close = true,
-     calc_on_every_tick   = false,
-     margin_long          = 0,
-     margin_short         = 0)
-
-// ─── Inputs ──────────────────────────────────────────────────────────────────
-fastLen   = input.int(12,  "Fast EMA",              minval = 2,  group = "Bands")
-slowLen   = input.int(50,  "Slow EMA",              minval = 5,  group = "Bands")
-minSepPct = input.float(0.15, "Min band separation %", step = 0.05, minval = 0,
-     group = "Bands", tooltip = "Ignore crosses where the EMAs are still tangled. 0 = take every cross.")
-
-useHTF    = input.bool(true, "Higher-timeframe filter", group = "Filters")
-htfTF     = input.timeframe("1D", "Higher timeframe",   group = "Filters")
-
-entryMode = input.string("Signal close", "Entry method",
-     options = ["Signal close", "Limit at fast EMA"], group = "Entry",
-     tooltip = "Signal close fills at the close of the flip bar — reliable, but on a large 4h candle that can be far above where the bands actually crossed. Limit at fast EMA waits for a pullback to the fast EMA, giving a better price on the trades that pull back and MISSING the ones that run away without you. Which is better is an empirical question — measure both.")
-retestBars = input.int(3, "Limit valid for N bars", minval = 1, maxval = 20, group = "Entry",
-     tooltip = "Cancel an unfilled pullback order after this many bars. Too long and you enter late into a move that already went; too short and you miss normal retests.")
-
-useStop   = input.bool(true,  "ATR stop",       group = "Risk")
-atrLen    = input.int(14,     "ATR length",     minval = 2, group = "Risk")
-atrMult   = input.float(2.0,  "Stop = ATR ×",   step = 0.1, minval = 0.5, group = "Risk")
-riskPct   = input.float(1.0,  "Risk % of equity", step = 0.25, minval = 0.1, maxval = 5,
-     group = "Risk", tooltip = "Per-trade risk. The mandate says 1%. 2% is the ceiling.")
-allowShort = input.bool(true, "Trade shorts (perps)", group = "Risk")
+     calc_on_every_tick      = false,
+     margin_long             = 0,
+     margin_short            = 0)
 
 // ─── Bands ───────────────────────────────────────────────────────────────────
-fast = ta.ema(close, fastLen)
-slow = ta.ema(close, slowLen)
-atr  = ta.atr(atrLen)
+fastLen   = input.int(12, "Fast EMA", minval = 2, group = "Bands")
+slowLen   = input.int(50, "Slow EMA", minval = 5, group = "Bands")
+minSepPct = input.float(0.15, "Min band separation %", step = 0.05, minval = 0,
+     group = "Bands",
+     tooltip = "Ignore crosses while the EMAs are still tangled. 0 = take every cross.")
+
+// ─── Entry ───────────────────────────────────────────────────────────────────
+entryMode = input.string("Retest confirmed", "Entry method",
+     options = ["Signal close", "Retest limit", "Retest confirmed"], group = "Entry",
+     tooltip = "Signal close: fill at the close of the flip bar. Reliable, but on a big 4h candle that is far from where the bands crossed.\n\nRetest limit: resting limit order at the band. Best price on trades that pull back; MISSES the ones that run away — and those are often the winners paying for everything.\n\nRetest confirmed: wait for a bar that actually touches the band, then enter at its close. Slightly worse price than the limit, but it is the only mode where the pullback-volume check is possible.")
+retestBand = input.string("Fast EMA", "Retest target",
+     options = ["Fast EMA", "Slow EMA", "Midpoint"], group = "Entry",
+     tooltip = "Which band price must touch. In an uptrend the fast EMA is the upper line and in a downtrend the lower one — 'nearest band' is the fast EMA in both directions, which is why it is the default.")
+retestBars = input.int(4, "Retest valid for N bars", minval = 1, maxval = 30, group = "Entry",
+     tooltip = "Give up on the pullback after this many bars. Too long and you enter a trade the signal no longer describes.")
+
+// ─── Volume confluence ───────────────────────────────────────────────────────
+volLen        = input.int(20, "Volume average length", minval = 5, group = "Volume")
+useImpulseVol = input.bool(true, "Require volume on the flip bar", group = "Volume",
+     tooltip = "The move that flips the bands should carry participation. This is the 'backed by large money' check.")
+volMult       = input.float(1.5, "Flip bar volume ≥ × average", step = 0.1, minval = 0.5,
+     group = "Volume")
+usePullbackDry = input.bool(false, "Require DRY volume on the retest", group = "Volume",
+     tooltip = "Volume means the OPPOSITE thing here. A pullback on heavy volume is real selling; on light volume it is just an absence of buyers. Only available in 'Retest confirmed' mode — a limit order fills intrabar, before that bar's volume is known.")
+dryMult        = input.float(1.0, "Retest bar volume ≤ × average", step = 0.1, minval = 0.2,
+     group = "Volume")
+
+// ─── Filters ─────────────────────────────────────────────────────────────────
+useHTF = input.bool(true, "Higher-timeframe filter", group = "Filters")
+htfTF  = input.timeframe("1D", "Higher timeframe", group = "Filters")
+
+// ─── Risk ────────────────────────────────────────────────────────────────────
+useStop    = input.bool(true, "ATR stop", group = "Risk")
+atrLen     = input.int(14, "ATR length", minval = 2, group = "Risk")
+atrMult    = input.float(2.0, "Stop = ATR ×", step = 0.1, minval = 0.5, group = "Risk")
+riskPct    = input.float(1.0, "Risk % of equity", step = 0.25, minval = 0.1, maxval = 5,
+     group = "Risk", tooltip = "The mandate says 1%. 2% is the ceiling.")
+allowShort = input.bool(true, "Trade shorts (perps)", group = "Risk")
+
+// ─── Series ──────────────────────────────────────────────────────────────────
+fast   = ta.ema(close, fastLen)
+slow   = ta.ema(close, slowLen)
+atr    = ta.atr(atrLen)
+avgVol = ta.sma(volume, volLen)
 
 sepPct = slow != 0 ? math.abs(fast - slow) / slow * 100 : 0.0
+bull   = fast > slow and sepPct >= minSepPct
+bear   = fast < slow and sepPct >= minSepPct
 
-bull = fast > slow and sepPct >= minSepPct
-bear = fast < slow and sepPct >= minSepPct
+band = retestBand == "Fast EMA" ? fast : retestBand == "Slow EMA" ? slow : (fast + slow) / 2
 
-// ─── Higher-timeframe alignment ──────────────────────────────────────────────
-// [1] offset + lookahead_off: reads only CLOSED higher-timeframe bars, so the
-// strategy cannot act on a daily close that has not happened yet. Without this
-// the backtest looks far better than the rule could ever trade.
+// ─── Higher-timeframe alignment (non-repainting) ─────────────────────────────
+// [1] + lookahead_off reads only CLOSED higher-timeframe bars. Without this the
+// strategy acts on a daily close that has not happened yet, and the backtest
+// becomes unreproducible live.
 htfFast = request.security(syminfo.tickerid, htfTF, ta.ema(close, fastLen)[1],
      lookahead = barmerge.lookahead_off)
 htfSlow = request.security(syminfo.tickerid, htfTF, ta.ema(close, slowLen)[1],
      lookahead = barmerge.lookahead_off)
-
 htfReady = not na(htfFast) and not na(htfSlow)
 htfBull  = not useHTF or (htfReady and htfFast > htfSlow)
 htfBear  = not useHTF or (htfReady and htfFast < htfSlow)
 
-// ─── Signals: the FLIP, not the state ────────────────────────────────────────
+// ─── Signal: the FLIP, plus impulse participation ────────────────────────────
+impulseOK = not useImpulseVol or (not na(avgVol) and avgVol > 0 and volume >= volMult * avgVol)
+
 flipUp   = bull and not bull[1]
 flipDown = bear and not bear[1]
 
-longSig  = flipUp   and htfBull
-shortSig = flipDown and htfBear and allowShort
+longSig  = flipUp   and htfBull and impulseOK
+shortSig = flipDown and htfBear and impulseOK and allowShort
 
 // ─── Sizing: derived from stop distance, never chosen ────────────────────────
-// position = (equity × risk%) ÷ stop distance. Leverage does not appear here —
-// it changes the margin posted, never the risk taken.
+// Leverage is absent on purpose — on perps it changes the margin posted, never
+// the risk taken.
 stopDist = useStop ? atr * atrMult : atr * 3.0
-riskAmt  = strategy.equity * riskPct / 100
-qty      = stopDist > 0 ? riskAmt / stopDist : 0.0
+qty      = stopDist > 0 ? (strategy.equity * riskPct / 100) / stopDist : 0.0
 
-// ─── Execution ───────────────────────────────────────────────────────────────
-useLimit = entryMode == "Limit at fast EMA"
-var int pendingSince = na
+// ─── Armed-retest state machine ──────────────────────────────────────────────
+var bool armedLong  = false
+var bool armedShort = false
+var int  armedBar   = na
 
-if longSig and strategy.position_size <= 0 and qty > 0
-    strategy.close("S", comment = "flip")
-    if useLimit
-        strategy.entry("L", strategy.long, qty = qty, limit = fast)
-        pendingSince := bar_index
-    else
-        strategy.entry("L", strategy.long, qty = qty)
-    if useStop
-        strategy.exit("L stop", "L", stop = close - stopDist)
+useSignalClose = entryMode == "Signal close"
+useLimit       = entryMode == "Retest limit"
+useConfirmed   = entryMode == "Retest confirmed"
 
-if shortSig and strategy.position_size >= 0 and qty > 0
-    strategy.close("L", comment = "flip")
-    if useLimit
-        strategy.entry("S", strategy.short, qty = qty, limit = fast)
-        pendingSince := bar_index
-    else
-        strategy.entry("S", strategy.short, qty = qty)
-    if useStop
-        strategy.exit("S stop", "S", stop = close + stopDist)
+if longSig
+    armedLong  := not useSignalClose
+    armedShort := false
+    armedBar   := bar_index
+if shortSig
+    armedShort := not useSignalClose
+    armedLong  := false
+    armedBar   := bar_index
 
-// An unfilled pullback order goes stale: the setup that justified it is older
-// every bar, and filling on bar 12 is entering a different trade than the one
-// the signal described. Cancel it rather than let it sit.
-if useLimit and not na(pendingSince) and strategy.position_size == 0
-     and bar_index - pendingSince >= retestBars
+// A pullback that never came: the setup is stale, so stop waiting for it.
+expired = not na(armedBar) and bar_index - armedBar >= retestBars
+if expired
+    armedLong  := false
+    armedShort := false
     strategy.cancel("L")
     strategy.cancel("S")
-    pendingSince := na
 
-// Exit on the opposite flip even when shorts are disabled, so a long book does
-// not ride an adverse trend waiting for a stop that may be far away.
+// Dry-volume check applies only to confirmed mode, where the bar has closed and
+// its volume is actually known.
+dryOK = not usePullbackDry or (not na(avgVol) and avgVol > 0 and volume <= dryMult * avgVol)
+
+touchLong  = low  <= band
+touchShort = high >= band
+
+// ─── Execution ───────────────────────────────────────────────────────────────
+enterLong  = useSignalClose ? longSig  : useConfirmed and armedLong  and touchLong  and dryOK
+enterShort = useSignalClose ? shortSig : useConfirmed and armedShort and touchShort and dryOK
+
+if useLimit and longSig and qty > 0
+    strategy.close("S", comment = "flip")
+    strategy.entry("L", strategy.long, qty = qty, limit = band)
+if useLimit and shortSig and qty > 0
+    strategy.close("L", comment = "flip")
+    strategy.entry("S", strategy.short, qty = qty, limit = band)
+
+if enterLong and strategy.position_size <= 0 and qty > 0
+    strategy.close("S", comment = "flip")
+    strategy.entry("L", strategy.long, qty = qty)
+    armedLong := false
+if enterShort and strategy.position_size >= 0 and qty > 0
+    strategy.close("L", comment = "flip")
+    strategy.entry("S", strategy.short, qty = qty)
+    armedShort := false
+
+if useStop and strategy.position_size > 0
+    strategy.exit("L stop", "L", stop = strategy.position_avg_price - stopDist)
+if useStop and strategy.position_size < 0
+    strategy.exit("S stop", "S", stop = strategy.position_avg_price + stopDist)
+
+// Always leave on the opposite flip, even with shorts disabled, so a long book
+// does not ride an adverse trend waiting for a distant stop.
 if not allowShort and flipDown and strategy.position_size > 0
     strategy.close("L", comment = "band flipped")
 
 // ─── Plotting ────────────────────────────────────────────────────────────────
-bandCol = bull ? color.new(color.teal, 0) : bear ? color.new(color.red, 0)
-     : color.new(color.gray, 40)
+bandCol = bull ? color.new(color.teal, 0) : bear ? color.new(color.red, 0) : color.new(color.gray, 40)
 pF = plot(fast, "Fast EMA", color = bandCol, linewidth = 2)
 pS = plot(slow, "Slow EMA", color = color.new(bandCol, 55), linewidth = 2)
 fill(pF, pS, color = color.new(bull ? color.teal : bear ? color.red : color.gray, 88))
@@ -138,26 +180,32 @@ fill(pF, pS, color = color.new(bull ? color.teal : bear ? color.red : color.gray
 plotshape(longSig,  title = "Flip up",   style = shape.triangleup,
      location = location.belowbar, color = color.new(color.teal, 0), size = size.tiny)
 plotshape(shortSig, title = "Flip down", style = shape.triangledown,
-     location = location.abovebar, color = color.new(color.red, 0),  size = size.tiny)
+     location = location.abovebar, color = color.new(color.red, 0), size = size.tiny)
+plotshape(enterLong and not useSignalClose,  title = "Retest long",
+     style = shape.circle, location = location.belowbar,
+     color = color.new(color.lime, 0), size = size.tiny)
+plotshape(enterShort and not useSignalClose, title = "Retest short",
+     style = shape.circle, location = location.abovebar,
+     color = color.new(color.orange, 0), size = size.tiny)
 
-// ─── Honest read-out ─────────────────────────────────────────────────────────
-var table t = table.new(position.top_right, 2, 5, border_width = 1)
+// ─── Read-out ────────────────────────────────────────────────────────────────
+var table t = table.new(position.top_right, 2, 6, border_width = 1)
 if barstate.islast
-    wins   = strategy.wintrades
-    total  = strategy.closedtrades
-    wr     = total > 0 ? wins / total * 100 : 0.0
-    gp     = strategy.grossprofit
-    gl     = strategy.grossloss
-    pf     = gl > 0 ? gp / gl : na
-    table.cell(t, 0, 0, "State",   bgcolor = color.new(color.gray, 80))
+    total = strategy.closedtrades
+    wr    = total > 0 ? strategy.wintrades / total * 100 : 0.0
+    pf    = strategy.grossloss > 0 ? strategy.grossprofit / strategy.grossloss : na
+    table.cell(t, 0, 0, "State", bgcolor = color.new(color.gray, 80))
     table.cell(t, 1, 0, bull ? "GREEN" : bear ? "RED" : "tangled",
          bgcolor = bull ? color.new(color.teal, 60) : bear ? color.new(color.red, 60)
               : color.new(color.gray, 60))
-    table.cell(t, 0, 1, "Separation")
-    table.cell(t, 1, 1, str.tostring(sepPct, "#.##") + "%")
-    table.cell(t, 0, 2, "Trades")
-    table.cell(t, 1, 2, str.tostring(total))
-    table.cell(t, 0, 3, "Win rate")
-    table.cell(t, 1, 3, str.tostring(wr, "#.#") + "%")
-    table.cell(t, 0, 4, "Profit factor")
-    table.cell(t, 1, 4, na(pf) ? "n/a" : str.tostring(pf, "#.##"))
+    table.cell(t, 0, 1, "Waiting retest")
+    table.cell(t, 1, 1, armedLong ? "LONG" : armedShort ? "SHORT" : "—")
+    table.cell(t, 0, 2, "Rel. volume")
+    table.cell(t, 1, 2, na(avgVol) or avgVol == 0 ? "n/a"
+         : str.tostring(volume / avgVol, "#.##") + "×")
+    table.cell(t, 0, 3, "Trades")
+    table.cell(t, 1, 3, str.tostring(total))
+    table.cell(t, 0, 4, "Win rate")
+    table.cell(t, 1, 4, str.tostring(wr, "#.#") + "%")
+    table.cell(t, 0, 5, "Profit factor")
+    table.cell(t, 1, 5, na(pf) ? "n/a" : str.tostring(pf, "#.##"))
