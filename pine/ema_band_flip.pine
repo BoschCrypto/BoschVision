@@ -64,10 +64,38 @@ htfTF  = input.timeframe("1D", "Higher timeframe", group = "Filters")
 // ─── Risk ────────────────────────────────────────────────────────────────────
 useStop    = input.bool(true, "ATR stop", group = "Risk")
 atrLen     = input.int(14, "ATR length", minval = 2, group = "Risk")
-atrMult    = input.float(2.0, "Stop = ATR ×", step = 0.1, minval = 0.5, group = "Risk")
+atrMult    = input.float(2.0, "Initial stop = ATR ×", step = 0.1, minval = 0.5, group = "Risk")
 riskPct    = input.float(1.0, "Risk % of equity", step = 0.25, minval = 0.1, maxval = 5,
      group = "Risk", tooltip = "The mandate says 1%. 2% is the ceiling.")
 allowShort = input.bool(true, "Trade shorts (perps)", group = "Risk")
+
+// ─── Exit ────────────────────────────────────────────────────────────────────
+// The asymmetry that governs every choice here: 4 winners produced ~2.1x what
+// 19 losers cost. Tightening the LOSS side is nearly free; anything that caps
+// the WIN side attacks the handful of trades that are the entire edge.
+// Defaults are deliberately loose on winners.
+exitOnFlip = input.bool(true, "Exit on opposite band flip", group = "Exit",
+     tooltip = "The baseline exit. Lets a winner run until the trend genuinely turns, at the cost of giving back the last leg.")
+
+useTrail   = input.bool(true, "Trail behind the extreme", group = "Exit",
+     tooltip = "Chandelier trail: stop rides at (highest high since entry − ATR x mult) for longs. Tight early, loose late — keeps most of a big move without capping it.")
+trailMult  = input.float(3.0, "Trail = ATR ×", step = 0.25, minval = 1.0, group = "Exit",
+     tooltip = "WIDER than the initial stop on purpose. A tight trail is the classic way to destroy a positive-skew system.")
+activateR  = input.float(1.5, "Start trailing after +R", step = 0.25, minval = 0, group = "Exit",
+     tooltip = "Until the trade is this far in profit the ORIGINAL stop stands. Trailing from bar one converts winners into scratches.")
+
+useBE      = input.bool(false, "Move stop to breakeven", group = "Exit",
+     tooltip = "EXPECT THIS TO HURT. It converts small losses into scratches, but it also scratches you out of trades that would have become the big winners. Measure it — do not assume it is prudent.")
+beR        = input.float(1.0, "Breakeven after +R", step = 0.25, minval = 0.25, group = "Exit")
+
+usePartial = input.bool(false, "Scale out part of the position", group = "Exit",
+     tooltip = "EXPECT THIS TO HURT MOST. Taking profit early feels responsible and directly cuts the fat tail this strategy lives on. Included so the damage is measurable rather than theoretical.")
+partialR   = input.float(2.0, "Scale out at +R", step = 0.5, minval = 0.5, group = "Exit")
+partialPct = input.int(50, "Percent to close", minval = 10, maxval = 90, group = "Exit")
+
+useTimeStop = input.bool(false, "Time stop", group = "Exit",
+     tooltip = "Close a trade that has gone nowhere, freeing capital. Low risk to the tail because trades that become big winners rarely sit flat for long.")
+maxBars     = input.int(30, "Exit after N bars", minval = 5, group = "Exit")
 
 // ─── Series ──────────────────────────────────────────────────────────────────
 fast   = ta.ema(close, fastLen)
@@ -161,15 +189,91 @@ if enterShort and strategy.position_size >= 0 and qty > 0
     strategy.entry("S", strategy.short, qty = qty)
     armedShort := false
 
-if useStop and strategy.position_size > 0
-    strategy.exit("L stop", "L", stop = strategy.position_avg_price - stopDist)
-if useStop and strategy.position_size < 0
-    strategy.exit("S stop", "S", stop = strategy.position_avg_price + stopDist)
+// ─── Exit management ─────────────────────────────────────────────────────────
+// Per-trade state. Reset when a new position opens so nothing leaks between
+// trades — a stale peak or a stale "already scaled out" flag silently corrupts
+// every subsequent exit.
+var float entryPx   = na
+var float initStop  = na
+var float peakHigh  = na
+var float troughLow = na
+var int   entryBar  = na
+var bool  scaledOut = false
 
-// Always leave on the opposite flip, even with shorts disabled, so a long book
-// does not ride an adverse trend waiting for a distant stop.
-if not allowShort and flipDown and strategy.position_size > 0
+justOpened = strategy.position_size != 0 and strategy.position_size[1] == 0
+if justOpened
+    entryPx   := strategy.position_avg_price
+    initStop  := strategy.position_size > 0 ? entryPx - stopDist : entryPx + stopDist
+    peakHigh  := high
+    troughLow := low
+    entryBar  := bar_index
+    scaledOut := false
+
+if strategy.position_size == 0
+    entryPx   := na
+    initStop  := na
+    scaledOut := false
+
+inLong  = strategy.position_size > 0
+inShort = strategy.position_size < 0
+inTrade = inLong or inShort
+
+if inTrade
+    peakHigh  := math.max(nz(peakHigh, high), high)
+    troughLow := math.min(nz(troughLow, low), low)
+
+// R = progress in units of the ORIGINAL risk. Everything below is expressed in
+// R so the rules behave identically across volatility regimes.
+riskUnit = not na(entryPx) and not na(initStop) ? math.abs(entryPx - initStop) : na
+rNow = inTrade and not na(riskUnit) and riskUnit > 0
+     ? (inLong ? close - entryPx : entryPx - close) / riskUnit : 0.0
+
+// Build the working stop: start from the initial stop, then take the TIGHTEST
+// of whatever the enabled rules justify — but never loosen it (R10 in the risk
+// mandate: stops move toward entry, never away).
+workStop = initStop
+
+if inLong and not na(workStop)
+    if useTrail and rNow >= activateR
+        workStop := math.max(workStop, peakHigh - atr * trailMult)
+    if useBE and rNow >= beR
+        workStop := math.max(workStop, entryPx)
+
+if inShort and not na(workStop)
+    if useTrail and rNow >= activateR
+        workStop := math.min(workStop, troughLow + atr * trailMult)
+    if useBE and rNow >= beR
+        workStop := math.min(workStop, entryPx)
+
+if useStop and inLong and not na(workStop)
+    strategy.exit("L stop", "L", stop = workStop)
+if useStop and inShort and not na(workStop)
+    strategy.exit("S stop", "S", stop = workStop)
+
+// Scale-out. Fires once per trade — the flag is what stops it from shaving the
+// position on every subsequent bar above the threshold.
+if usePartial and inTrade and not scaledOut and rNow >= partialR
+    if inLong
+        strategy.close("L", qty_percent = partialPct, comment = "scale out")
+    else
+        strategy.close("S", qty_percent = partialPct, comment = "scale out")
+    scaledOut := true
+
+// Time stop: a trade that has gone nowhere is capital doing nothing.
+if useTimeStop and inTrade and not na(entryBar) and bar_index - entryBar >= maxBars
+    strategy.close_all(comment = "time stop")
+
+// Opposite flip. Kept available even with shorts disabled, so a long book does
+// not ride an adverse trend waiting on a distant stop.
+if exitOnFlip and inLong and flipDown
     strategy.close("L", comment = "band flipped")
+if exitOnFlip and inShort and flipUp
+    strategy.close("S", comment = "band flipped")
+// Safety net for one specific combination: flip-exit disabled AND shorts
+// disabled would otherwise leave a long riding an adverse trend with only a
+// distant stop between it and a large loss.
+if not exitOnFlip and not allowShort and flipDown and inLong
+    strategy.close("L", comment = "adverse flip")
 
 // ─── Plotting ────────────────────────────────────────────────────────────────
 bandCol = bull ? color.new(color.teal, 0) : bear ? color.new(color.red, 0) : color.new(color.gray, 40)
@@ -198,8 +302,11 @@ if barstate.islast
     table.cell(t, 1, 0, bull ? "GREEN" : bear ? "RED" : "tangled",
          bgcolor = bull ? color.new(color.teal, 60) : bear ? color.new(color.red, 60)
               : color.new(color.gray, 60))
-    table.cell(t, 0, 1, "Waiting retest")
-    table.cell(t, 1, 1, armedLong ? "LONG" : armedShort ? "SHORT" : "—")
+    table.cell(t, 0, 1, inTrade ? "Open trade R" : "Waiting retest")
+    table.cell(t, 1, 1, inTrade ? str.tostring(rNow, "#.##") + "R"
+         : armedLong ? "LONG" : armedShort ? "SHORT" : "—",
+         bgcolor = inTrade ? (rNow >= activateR ? color.new(color.teal, 70)
+              : color.new(color.gray, 80)) : color.new(color.gray, 90))
     table.cell(t, 0, 2, "Rel. volume")
     table.cell(t, 1, 2, na(avgVol) or avgVol == 0 ? "n/a"
          : str.tostring(volume / avgVol, "#.##") + "×")
