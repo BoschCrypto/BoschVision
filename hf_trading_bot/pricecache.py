@@ -98,3 +98,69 @@ def coverage(cache_dir: Path) -> list[tuple[str, str, str, int]]:
         if bars:
             out.append((p.stem, bars[0].t, bars[-1].t, len(bars)))
     return out
+
+
+# ─── Robinhood import ────────────────────────────────────────────────────────
+#
+# `xfetch` downloads through yfinance, which is blocked at the egress proxy in
+# the hosted environment — that blocker is what stalled this backtest. The
+# Robinhood MCP tool returns the same split-adjusted bars and is reachable, but
+# only the agent can call it: a Python process cannot. So the fetch is split in
+# two, and this is the second half:
+#
+#   1. the agent calls get_equity_historicals and saves each raw JSON response
+#   2. `ximport` feeds those responses through here into the same CSV cache
+#   3. `xbacktest` runs offline against the cache, exactly as before
+#
+# Nothing downstream knows or cares which half of the split produced a CSV.
+
+def _bar_from_rh(row: dict) -> Optional[Bar]:
+    """One Robinhood historicals row -> Bar; None when unusable.
+
+    Interpolated bars are dropped. Robinhood synthesises them to fill gaps and
+    they carry no new information, so admitting them would invent price history
+    that never traded — and a backtest cannot tell the difference afterwards.
+    """
+    if row.get("interpolated") is True:
+        return None
+    try:
+        return Bar(
+            t=str(row["begins_at"])[:10],
+            o=float(row["open_price"]),
+            h=float(row["high_price"]),
+            l=float(row["low_price"]),
+            c=float(row["close_price"]),
+            v=float(row.get("volume") or 0.0),
+        )
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def import_rh(payload, cache_dir: Path) -> dict[str, int]:
+    """Merge one get_equity_historicals response into the cache.
+
+    `payload` may be the parsed dict, a JSON string, or a path to a saved
+    response. Returns {symbol: total_bars_cached}. Existing bars for a symbol
+    are merged rather than overwritten, so a universe can be fetched in batches
+    and a long history assembled from several date ranges.
+    """
+    import json
+
+    if isinstance(payload, (str, Path)):
+        p = Path(str(payload))
+        payload = json.loads(p.read_text() if p.exists() else str(payload))
+
+    results = (payload or {}).get("data", {}).get("results", []) or []
+    out: dict[str, int] = {}
+    for entry in results:
+        symbol = entry.get("symbol")
+        if not symbol:
+            continue
+        fresh = [b for b in (_bar_from_rh(r) for r in entry.get("bars", []) or []) if b]
+        if not fresh:
+            out[symbol] = len(read(cache_dir, symbol) or [])
+            continue
+        merged = {b.t: b for b in (read(cache_dir, symbol) or [])}
+        merged.update({b.t: b for b in fresh})
+        out[symbol] = write(cache_dir, symbol, merged.values())
+    return out

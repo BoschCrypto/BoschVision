@@ -346,6 +346,51 @@ def xfetch(cfg: AppConfig, universe_key: str, universe_csv: Optional[str], start
                    "silently dropped.")
 
 
+@cli.command("ximport")
+@click.argument("paths", nargs=-1, required=True,
+                type=click.Path(exists=True, dir_okay=False))
+@click.option("--cache", "cache_dir", default="data/bars", help="Cache directory.")
+@click.pass_obj
+def ximport(cfg: AppConfig, paths: tuple[str, ...], cache_dir: str):
+    """Import saved Robinhood get_equity_historicals responses into the cache.
+
+    `xfetch` downloads through yfinance, which is blocked at the egress proxy in
+    the hosted environment. The Robinhood MCP tool serves the same split-adjusted
+    bars and is reachable, but only the agent can call it — so the agent saves
+    each raw JSON response and this command normalises them into the same CSVs
+    `xbacktest` already reads. Bars merge across files, so a long history can be
+    assembled from several batched fetches.
+    """
+    from pathlib import Path as _Path
+
+    from hf_trading_bot import pricecache
+
+    cache = _Path(cache_dir)
+    total: dict[str, int] = {}
+    for path in paths:
+        try:
+            got = pricecache.import_rh(path, cache)
+        except Exception as e:  # noqa: BLE001 — one bad file must not kill the batch
+            click.echo(f"  {path}: {type(e).__name__}: {e}")
+            continue
+        total.update(got)
+        click.echo(f"  {path}: {len(got)} symbol(s)")
+
+    if not total:
+        raise click.ClickException(
+            "No symbols imported. Each file must be a get_equity_historicals "
+            "response shaped {\"data\": {\"results\": [{\"symbol\": ..., \"bars\": [...]}]}}."
+        )
+
+    click.echo(f"\nCache: {cache.resolve()}")
+    for sym in sorted(total):
+        bars = pricecache.read(cache, sym)
+        if bars:
+            click.echo(f"  {sym:<7} {len(bars):>5} bars  {bars[0].t} → {bars[-1].t}")
+        else:
+            click.echo(f"  {sym:<7} no usable bars (all interpolated or malformed?)")
+
+
 @cli.command("xbacktest")
 @click.option("--universe", "universe_key", type=click.Choice(UNIVERSE_KEYS),
               default="liquid_large_cap", help="Candidate universe.")
