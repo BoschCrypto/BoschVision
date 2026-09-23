@@ -451,6 +451,13 @@ ABLATIONS: dict[str, dict] = {
     "no_52w_filter": {"use_52w_filter": False},
     "equal_dollar_weight": {"use_inverse_vol": False},
     "no_cost_model": {"round_trip_bps": 0.0},
+    # Both filters removed at once. Single-component ablations showed the gate
+    # and the 52-week filter each losing to their own removal in two
+    # independent sub-periods, which raises the obvious next question: what
+    # does the strategy look like with both gone? That is not a fifth tweak to
+    # search over — it is the union of two already-measured negative results,
+    # and it has to be measured rather than assumed additive.
+    "momentum_only": {"use_regime_gate": False, "use_52w_filter": False},
 }
 
 
