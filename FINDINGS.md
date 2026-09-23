@@ -185,3 +185,87 @@ is:
 
 A strategy that cannot be validated is not a strategy yet. The account's
 capital is better served by an index core than by a number nobody can check.
+
+---
+
+## "Runners keep running" — measured and rejected, 23 September 2026
+
+Tested on the local cache (141 names + SPY, daily 2010-01-04 → 2026-09-21) before
+acting on a momentum screen. Signals point-in-time; forward returns at 21/63/126
+sessions; every conditional number compared against the unconditional mean of all
+available names **on the identical dates**.
+
+### H1 — stock gained >=20% in 21 sessions: NOT REAL
+
+| | Conditional | Unconditional (same dates) |
+|---|---|---|
+| 1m hit rate | 57.9% | 56.7% |
+| **6m hit rate** | **64.6%** | **65.6%** |
+| 6m p10 / p90 | −20.0% / +67.2% | −14.3% / +28.8% |
+
+**The hit rate is the finding: a runner is LESS likely than an average name to be
+up six months later.** The large mean spread (+13.8% at 6m) is a wider
+distribution, not a shifted one — one fat right tail.
+
+The tail is the universe. The signal fires 627× on TSLA, 570× AMD, 435× NFLX,
+428× MU, 386× NVDA — names selected into the list *because* they won:
+
+| 6m spread | |
+|---|---|
+| All 141 names | +13.77% |
+| Drop top-10 lifetime winners | **+1.57%** |
+| Drop top-20 | **−0.53%** |
+
+**Removing 10 of 141 names erases 89% of the effect.**
+
+Tradable version, monthly rebalance, 5bp round trip:
+
+| | CAGR | Sharpe | maxDD |
+|---|---|---|---|
+| Runner basket | 23.2% | **0.71** | −41.0% |
+| Equal-weight same 141 names | 15.1% | **1.05** | −21.6% |
+| SPY | 12.6% | 0.90 | −34.1% |
+
+It beats SPY on return and loses to *equal-weighting the same universe* on Sharpe,
+at double the drawdown. That is leverage on a rigged universe, not alpha. Costs
+(~15bp/yr) were never the issue.
+
+Statistics stated honestly: 9,670 observations across only 2,702 dates with ~6:1
+overlapping windows → **effective n ≈ 190 monthly blocks**, not ~9,700. The
+1-month spread's CI straddles zero.
+
+### H2 — within 2% of the 252-day high: REAL, WRONG SIGN
+
+Spreads −0.33% / −0.60% / −0.82% at 1/3/6m, CIs excluding zero at all three.
+Standalone it predicts slightly *lower* forward returns.
+
+**This independently corroborates the same day's cross-sectional backtest**, where
+deleting the 52-week filter improved the strategy. Two unrelated methods — daily
+conditional forward returns, and a monthly cross-sectional portfolio — reached the
+same conclusion. That finding is now solid rather than suggestive.
+
+### H3 — top-decile 3-month relative strength: UNDETERMINED, leaning noise
+
+6m spread +4.00%, but hit rates are *identical* to baseline (66.5% vs 66.3%), the
+median spread is half the mean, and winner-removal takes +4.00% → +0.70%. Its
+basket Sharpe (1.24) is the one number that survives on its own terms, but with
+~80% of the raw spread gone without the hand-picked winners, that Sharpe cannot be
+attributed to the signal rather than the universe.
+
+### Why this is recorded rather than retried
+
+Multiple testing was counted, not ignored: 3 hypotheses × 3 horizons × 3 splits =
+27 headline comparisons, where ~1.4 false positives at p<0.05 are expected. The
+only results surviving both their CI and the winner-removal test are H2's negative
+spreads.
+
+The one test that would change the verdict is the one this project cannot run: the
+identical code on a point-in-time universe **containing delisted companies**.
+Robinhood serves none (inactive_instruments / missing_instruments), as established
+earlier the same day. Cheaper secondary bar: a spread whose **median and hit rate
+both** beat the date-matched baseline. None of the three clear it.
+
+**Decision: no momentum or relative-strength screen from this universe informs a
+position.** Three sweeps on 22-23 September — technical compression, fundamental
+quality, and momentum — produced one name worth research (DG) and three measured
+negative results. The negative results are the durable output.
