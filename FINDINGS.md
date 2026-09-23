@@ -141,3 +141,47 @@ measured against SPY does not. So:
 
 **Decision: nothing is funded off this backtest.** It cost a backtest
 instead of the account, which is the outcome a backtest is for.
+
+### The survivorship bias cannot be removed with this data source — tested
+
+A point-in-time universe needs bars for companies that no longer trade.
+Robinhood does not serve them. Tested directly:
+
+    get_equity_historicals(["TWTR","SIVB","FRC","ATVI","CERN"])
+    -> API error 400
+       inactive_instruments: ["TWTR","ATVI","CERN"]   (acquired)
+       missing_instruments:  ["SIVB","FRC"]           (failed banks)
+
+Both failure modes matter and they are the two that bias momentum most:
+acquisitions (often at a premium, after strength) and outright failures
+(terminal weakness). A universe that can only contain survivors is missing
+precisely the tails that decide whether the strategy works.
+
+So the blocking task stated above is **not achievable with the available
+data**, and no amount of engineering changes that. Removing this bias
+requires a point-in-time source that retains delisted securities — CRSP,
+Norgate, Sharadar or equivalent, all paid.
+
+**How large is the doubt?** momentum_only measured 16.9% CAGR against SPY's
+12.1% — a 4.8pp edge. Published estimates of survivorship bias in US
+large-cap backtests run roughly 1-4pp/yr depending on period and
+construction. The measured edge is the same order of magnitude as the bias
+that would manufacture it from nothing. **The two cannot be separated with
+this data.** That is not a reason to assume the edge is zero; it is a reason
+to refuse to act as though it is positive.
+
+**Stopping here deliberately.** The tempting next move is to try variants
+until one survives — sector-ETF rotation, different lookbacks, different
+holding counts. Each is cheap to run and each would produce a number. That
+is data-mining, and this file already records the rule against it: re-testing
+without a new hypothesis is not validation. The honest state of the project
+is:
+
+- Two components measured and deleted. That knowledge is permanent.
+- One component (inverse-vol weighting) measured and kept.
+- One component (quality gate) still untested, for want of point-in-time
+  fundamentals — the same missing-data problem in a different costume.
+- The surviving variant unfalsifiable on available data.
+
+A strategy that cannot be validated is not a strategy yet. The account's
+capital is better served by an index core than by a number nobody can check.
