@@ -35,6 +35,70 @@ is a data artifact to verify, not a finding.
 
 ---
 
+## Mode 1b — a metric FLOOR on a cyclical is a cycle-position filter, not a quality filter
+
+Discovered 2026-09-24 on DE (Deere), and it is the mirror image of Mode 1 rather
+than another instance of it. Mode 1 is a flattering level on a negative slope.
+This is a **trough level passing a quality threshold, then paid for at a peak
+multiple**.
+
+A screen requiring `net margin > 10%` and `ROE > 15%` passed DE here:
+
+| FY | Revenue | Net income | Net margin |
+|---|---|---|---|
+| FY23 | $61.251B | $10.166B | **16.60%** |
+| FY24 | $51.716B | $7.100B | 13.73% |
+| FY25 | $45.684B | $5.027B | 11.00% |
+| TTM (to 2026-08-02) | $47.983B | $4.873B | **10.16%** |
+
+Revenue −25.4% peak-to-FY25, net income −52.1%. ROE 18.4% against roughly 35% in
+FY23. The filter did not select a high-quality business; it selected a cyclical
+that had fallen just far enough to still clear the bar.
+
+> **CHECK:** before treating a margin/ROE screen hit as quality, locate the metric
+> inside that company's own 5-year range. On a secular business a floor is a
+> quality filter. On a cyclical it is a cycle-position filter, and it fires
+> precisely at the trough.
+
+Two companions to the same check, both missed on DE:
+
+- **Read the trailing multiple, not only the forward one.** The DE case quoted
+  forward P/E 28.65 and never trailing **39.4x**, nor P/B **6.83** (VTI: 27.37x /
+  5.02x). On trough earnings a forward multiple silently embeds the recovery — DE
+  at $706 required FY27 EPS ~$24.64 against FY26 guided ~$18.00, i.e. **+37% EPS
+  growth already in the price** after a 63% run off the low.
+- **Decompose ROE before believing it.** DE's Financial Services segment is
+  $70.300B of $107.607B total assets (**65.3%**) at 3.84x leverage. The "18.4%
+  ROE" is a captive lender's levered ROE bolted onto a manufacturer, and an
+  `ROE > 15%` filter cannot distinguish that from an unlevered industrial earning
+  the same number. Worse, the provision was falling (−20.5% y/y) into USDA net farm
+  income −5.5% in real terms — flattering current EPS.
+
+---
+
+## Mode 3 — proposing something whose only support is a signal this project already measured as worthless
+
+The DE proposal's single stated positive was *"new 52-week high, the only genuine
+breakout in the cohort."*
+
+**That is the exact condition measured as negative-expectancy and formally banned
+as a screen 24 hours earlier** (2026-09-23, corroborated twice: deleting the
+52-week filter improved the cross-sectional strategy 352% → 512%; and standalone
+proximity spreads of −0.33% / −0.60% / −0.82% at 1/3/6m with CIs excluding zero).
+The ban was written into the memory ledger by the same agent that then advanced the
+proposal.
+
+This is not an analytical error. It is a **failure to apply the project's own
+findings to the project's own proposal** — the measurement existed, was recent,
+was recorded, and was not consulted.
+
+> **CHECK:** before proposing a position, state the signal that generated it and
+> run `hf-bot memory recall` against that signal. If the ledger contains a measured
+> verdict on it, that verdict governs. A finding that is not consulted at decision
+> time is not a finding, it is a note.
+
+---
+
 ## Mode 2 — asserting absence from a search that cannot detect presence
 
 Two claims, both stated with confidence, both wrong, both the same logic:
