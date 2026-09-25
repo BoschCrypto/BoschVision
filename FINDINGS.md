@@ -269,3 +269,67 @@ both** beat the date-matched baseline. None of the three clear it.
 position.** Three sweeps on 22-23 September — technical compression, fundamental
 quality, and momentum — produced one name worth research (DG) and three measured
 negative results. The negative results are the durable output.
+
+---
+
+## Applying the findings to the code — and a correction, 25 September 2026
+
+### The defaults never changed (fixed)
+
+FINDINGS.md said on 2026-09-23 that the regime gate and the 52-week filter were
+"deleted from the specification." They were not. `GatedMomentumParams` still had
+`use_regime_gate: bool = True` and `use_52w_filter: bool = True`, so every
+`hf-bot xbacktest` run for the next day used the **known-worse** configuration.
+
+Defaults are now off, the ablations are inverted to test *re-adding* each filter
+(`with_regime_gate`, `with_52w_filter`, `with_both_filters`) so the burden sits on
+a component to earn re-entry, and `tests/test_xsection.py` asserts the defaults
+directly so this cannot silently revert.
+
+Default spec now, 15.6y / 188 rebalances:
+
+| | return | CAGR | maxDD | Sharpe |
+|---|---|---|---|---|
+| **gated_momentum (default)** | **1043.0%** | 16.9% | −31.9% | 0.88 |
+| buy & hold SPY | 491.8% | 12.1% | −34.1% | 0.75 |
+| with_52w_filter | 657.2% | 13.9% | −31.3% | 0.78 |
+| with_regime_gate | 512.0% | 12.3% | −31.9% | 0.75 |
+| with_both_filters | 352.0% | 10.2% | −31.3% | 0.66 |
+
+Re-adding either filter still costs return and Sharpe. Those verdicts hold.
+
+### CORRECTION — "inverse-vol weighting survived" was wrong
+
+On 2026-09-23 this file recorded that inverse-volatility weighting "earned its
+place" on Sharpe in both sub-periods (0.84 vs 0.79; 0.53 vs 0.52). **Those numbers
+were measured with both filters ON.** With the filters off — the spec as it now
+stands — the result does not replicate:
+
+| | 2012-02 → 2018-12 | 2020-02 → 2026-09 | Full period |
+|---|---|---|---|
+| inverse-vol | 175.4% · **0.99** · −23.6% | 222.0% · 0.86 | 1043% · 0.88 |
+| equal weight | 181.3% · 0.96 · −25.3% | 277.4% · **0.90** | 1328% · **0.89** |
+
+Inverse-vol wins Sharpe in the first half, loses it in the second, and the
+full-period gap (0.88 vs 0.89) is inside noise. **Revised verdict: UNDETERMINED,
+not "survived."**
+
+It is retained as the default on a narrower claim than before — drawdown control,
+not return: −23.6% vs −25.3% in the first half and a lower worst case in both.
+That is a risk preference, stated as one, rather than a measured edge.
+
+### The methodological lesson — ablations are not independent
+
+Removing two components **changed the verdict on a third.** A one-at-a-time
+ablation measures a component *conditional on every other component's current
+setting*, so a verdict expires the moment any other component changes.
+
+> **CHECK:** after changing any default, re-run the full ablation set and re-read
+> every prior component verdict. A verdict from a configuration that no longer
+> exists is not evidence about the configuration that does.
+
+This is why the spec is not "tuned" further from here. Each of these runs is a
+comparison on a survivorship-biased 141-name universe, the interactions are real,
+and continuing to search the component space until the number improves is
+data-mining with extra steps. The absolute figures remain uncreditable (see the
+23 September entry); only the internal comparisons carry weight.

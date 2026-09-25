@@ -210,8 +210,12 @@ class TestEngine:
         for i in range(4):
             data[f"W{i}"] = _trend(dates, 50.0, 0.0004, volume=9_000_000.0)
         universe = [s for s in data if s != "SPY"]
+        # The gate is OFF by default since 2026-09-24 (it was measured as
+        # value-destroying), so it must be switched on explicitly here. This test
+        # verifies the gate's mechanics still work, not that it should be used.
         res = run(data, universe, UniverseMode.STATIC_LIST,
-                  GatedMomentumParams(n_positions=3, min_dollar_volume=1_000_000))
+                  GatedMomentumParams(n_positions=3, use_regime_gate=True,
+                                      min_dollar_volume=1_000_000))
         assert all(not r.holdings for r in res.rebalances), (
             "regime gate should hold cash while SPY is below trend"
         )
@@ -373,6 +377,25 @@ class TestRealDataQuirks:
 
 
 class TestAblations:
+    def test_measured_failing_components_stay_off_by_default(self):
+        """Both filters were measured as value-destroying; defaults must reflect that.
+
+        This test exists because the finding was recorded in FINDINGS.md on
+        2026-09-23 and the code kept running the known-worse configuration for a
+        day afterwards. A recorded finding that does not reach the defaults is a
+        note, not a finding — so the default is asserted here rather than trusted.
+        """
+        p = GatedMomentumParams()
+        assert p.use_regime_gate is False, (
+            "regime gate lost to its own removal in both sub-periods; see FINDINGS.md"
+        )
+        assert p.use_52w_filter is False, (
+            "52-week-high filter measured negative twice; see FINDINGS.md"
+        )
+        assert p.use_inverse_vol is True, (
+            "inverse-vol weighting beat equal-dollar weight on Sharpe in both halves"
+        )
+
     def test_each_ablation_runs_and_is_labelled(self):
         _, data = _universe_data()
         universe = [s for s in data if s != "SPY"]
@@ -380,8 +403,9 @@ class TestAblations:
             data, universe, UniverseMode.STATIC_LIST,
             GatedMomentumParams(n_positions=4, min_dollar_volume=1_000_000),
         )
-        assert set(results) == {"full", "no_regime_gate", "no_52w_filter",
-                                "equal_dollar_weight", "no_cost_model"}
+        assert set(results) == {"full", "with_regime_gate", "with_52w_filter",
+                                "with_both_filters", "equal_dollar_weight",
+                                "no_cost_model"}
         for name, res in results.items():
             assert res.label == name
             assert res.equity

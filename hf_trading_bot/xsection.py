@@ -73,8 +73,26 @@ class GatedMomentumParams:
     regime_trend_months: int = 24
     round_trip_bps: float = 5.0
 
-    use_regime_gate: bool = True
-    use_52w_filter: bool = True
+    # BOTH FILTERS DEFAULT OFF because both were MEASURED as value-destroying on
+    # 2026-09-23 (141 symbols + SPY, 15.6y, 188 rebalances). Do not flip these back
+    # on without new evidence — the numbers are in FINDINGS.md:
+    #
+    #   full spec (both on)   352.0% · Sharpe 0.66
+    #   buy & hold SPY        491.8% · Sharpe 0.75
+    #   gate off              657.2% · Sharpe 0.78
+    #   52w filter off        512.0% · Sharpe 0.75
+    #   both off              1043.0% · Sharpe 0.88
+    #
+    # The gate lost to its own removal in BOTH independent ~7-year sub-periods, and
+    # the 52-week filter's negative edge was corroborated a second time by a daily
+    # conditional-forward-return test. Leaving the defaults on meant `xbacktest` ran
+    # the known-worse configuration, which is how a recorded finding quietly fails
+    # to reach the code.
+    #
+    # inverse-vol weighting STAYS ON: it beat equal-dollar weight on Sharpe in both
+    # sub-periods (0.84 vs 0.79; 0.53 vs 0.52) despite lower raw return.
+    use_regime_gate: bool = False
+    use_52w_filter: bool = False
     use_inverse_vol: bool = True
     quality_fn: Optional[Callable[[str, str], Optional[float]]] = None
     quality_percentile: float = 0.50
@@ -447,17 +465,15 @@ def buy_and_hold(
 
 ABLATIONS: dict[str, dict] = {
     "full": {},
-    "no_regime_gate": {"use_regime_gate": False},
-    "no_52w_filter": {"use_52w_filter": False},
+    # The two deleted filters are now tested by ADDING them back, since the spec's
+    # defaults turn them off. Naming them "with_..." keeps the direction of the
+    # question honest: the burden is on a component to earn re-entry, not on the
+    # stripped spec to justify itself.
+    "with_regime_gate": {"use_regime_gate": True},
+    "with_52w_filter": {"use_52w_filter": True},
+    "with_both_filters": {"use_regime_gate": True, "use_52w_filter": True},
     "equal_dollar_weight": {"use_inverse_vol": False},
     "no_cost_model": {"round_trip_bps": 0.0},
-    # Both filters removed at once. Single-component ablations showed the gate
-    # and the 52-week filter each losing to their own removal in two
-    # independent sub-periods, which raises the obvious next question: what
-    # does the strategy look like with both gone? That is not a fifth tweak to
-    # search over — it is the union of two already-measured negative results,
-    # and it has to be measured rather than assumed additive.
-    "momentum_only": {"use_regime_gate": False, "use_52w_filter": False},
 }
 
 
