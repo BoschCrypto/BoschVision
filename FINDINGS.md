@@ -333,3 +333,71 @@ comparison on a survivorship-biased 141-name universe, the interactions are real
 and continuing to search the component space until the number improves is
 data-mining with extra steps. The absolute figures remain uncreditable (see the
 23 September entry); only the internal comparisons carry weight.
+
+---
+
+## 2026-09-26 — The ranking cannot be compressed into a position I can afford
+
+**Question.** The account has ~$1,289 cash and a $439 named-satellite reserve. The
+cross-sectional engine produces a 20-name book. Does the measured edge survive
+compression into 1-3 names — the only form a $439 satellite could take?
+
+**Answer: no. Concentration destroys the risk-adjusted edge and the apparent
+gain is a second-half artifact.**
+
+Method: monthly (21 trading day, non-overlapping) rebalances over the cached
+universe, 2011-01-04 → 2026-09-21, 188 rebalances, equal weight, **no costs** —
+which favours the concentrated variants, so any deficit they show is real. SPY is
+date-matched over the identical rebalance dates.
+
+| strategy | total | Sharpe | maxDD | worst month |
+|---|---|---|---|---|
+| top-1 | 7122.4% | **0.79** | **−56.0%** | −33.1% |
+| top-3 | 5035.5% | 1.01 | −30.2% | −21.1% |
+| top-5 | 3508.9% | 1.08 | −24.2% | −23.2% |
+| top-20 | 1488.9% | **1.17** | −18.4% | −14.8% |
+| SPY (date-matched) | 500.6% | 0.93 | −23.3% | −18.0% |
+
+Sharpe falls monotonically as the book concentrates, and **top-1's 0.79 is worse
+than simply owning SPY (0.93)**. The 7122% headline is not skill; it is the same
+signal levered by volatility.
+
+**The split-half test is what settles it:**
+
+| | top-1 | top-3 | top-20 | SPY |
+|---|---|---|---|---|
+| first half (94 mo) | 76.2% / **0.38** | 208.8% / 0.71 | 206.4% / 1.06 | 116.7% / 0.93 |
+| second half (94 mo) | 3999.7% / 1.10 | 1563.2% / 1.27 | 418.6% / 1.27 | 177.2% / 0.94 |
+
+In the first half **top-1 lost to the index outright** — 76.2% against SPY's
+116.7%, with a −47.2% drawdown. All of its lifetime edge comes from the second
+half, which is the 2018-2026 semiconductor/AI run: precisely the regime that this
+universe's survivorship bias inflates most, because the universe is today's
+survivors. top-3 also fails the first half (0.71 vs 0.93).
+
+**Only the diversified top-20 beats SPY on Sharpe in both halves** (1.06, 1.27).
+Diversification is not a tax on this strategy — it *is* the strategy. The edge
+lives in the cross-section, not in the top name.
+
+### What this forbids
+- **No single-name expression of this ranking.** A $439 bet on the #1-ranked name
+  is a strategy measured at a *worse* Sharpe than the index, and it is the same
+  error already recorded against Novy-Marx gross profitability: taking a
+  cross-sectional factor and betting it on 1-3 names is not the tested strategy.
+- MU currently ranks **#1** on 12-1 momentum (+476.9% as of 2026-09-21) **and
+  prints Wednesday 2026-09-30.** The engine's top name carrying a binary event is
+  a coincidence, not a confluence — and per the above, #1 is the rank whose
+  measured Sharpe is worst.
+
+### Caveats, stated not estimated
+- Survivorship bias is unfixed and unfixable here; it inflates every momentum row
+  above and the concentrated ones most.
+- No cost model. Adding costs penalises top-20 more than top-1, narrowing but not
+  closing a 1.17-vs-0.79 Sharpe gap that already ignores them.
+- The cache ends **2026-09-21**; a 12-1 signal with a skip month barely moves in
+  three sessions, but the ranking is not as-of-Friday.
+- **The current top-20 is not actually diversified**: 6 of 20 are semis
+  (MU, INTC, AMD, AMAT, LRCX, KLAC) and 4 are refiners/energy (VLO, MPC, PSX,
+  SLB). ~50% of the book sits in two clusters. The historical result was measured
+  on the *rule*, not on this particular book, and the rule's diversification
+  benefit is weaker right now than the table implies.
