@@ -401,3 +401,62 @@ lives in the cross-section, not in the top name.
   SLB). ~50% of the book sits in two clusters. The historical result was measured
   on the *rule*, not on this particular book, and the rule's diversification
   benefit is weaker right now than the table implies.
+
+---
+
+## 2026-09-28 — Two corrections and one live divergence
+
+### 1. My look-through calculation was omitting VTI (method error)
+
+This morning I reported NVDA look-through as **4.5%**. That was computed as direct
+NVDA + NVDA-inside-VGT, **ignoring NVDA inside VTI** — and VTI is the largest
+holding at $750. Corrected, with VTI's NVDA weight at 5.5/6.5/7.5%:
+
+| | NVDA look-through |
+|---|---|
+| as reported this morning (wrong) | 4.5% |
+| corrected, VTI @ 5.5% / 6.5% / 7.5% | 6.38% / **6.72%** / 7.06% |
+
+Still well under the 12% cap, so no action followed from the error — but a
+look-through cap computed on a subset of the funds that hold the name is not a
+cap. **Every look-through number must include every fund held.** VTI's own weight
+is an estimate and must be verified from Vanguard's holdings, not assumed.
+
+### 2. The Oct-8 VTI tranche is not risk-neutral
+
+The scheduled second $750 VTI tranche has been carried as a neutral core add. It
+is not. Portfolio $2,197.49, of which cash $1,289.51 (58.7%):
+
+| | now | after the tranche | cap |
+|---|---|---|---|
+| tech look-through (VTI tech @ 34%) | 18.8% | **30.4%** | 35% |
+| NVDA look-through (VTI NVDA @ 6.5%) | 6.72% | **8.94%** | 12% |
+| free cash after the $439 satellite reserve | $850.51 | **$100.51** | — |
+
+At a 38% VTI tech weight the tranche puts tech look-through at 33.1%, inside the
+35% cap with ~2pp to spare. The tranche is affordable but it consumes most of the
+remaining sector headroom and nearly all genuinely free cash. **It should be
+decided on that basis before 2026-10-08, not waved through on the day.** VTI is a
+total-market fund; the total market is roughly a third technology.
+
+### 3. Live divergence: memory is being sold, NVDA bought, two days before MU prints
+
+Intraday 2026-09-28 ~10:15am ET, against the 09-25 closes:
+
+| memory / storage | | broad semis | | energy |
+|---|---|---|---|---|
+| SNDK −4.73% | STX −3.61% | SMH −1.40% | AVGO −0.65% | XLE +0.70% |
+| MU −3.37% | INTC −4.82% | TSM −1.14% | TXN −0.91% | VLO +0.56% |
+| | | **NVDA +3.33%** | QCOM −7.09% | MPC +0.22% |
+
+NVDA is the only semiconductor up, while the memory and storage complex is down
+3.4–4.7% and SPY is −0.43%. A candidate mechanism: NVDA guided gross margin down
+~300bp on memory cost and named the memory oligopoly as taxing the AI buildout, so
+an expectation of **falling** DRAM/NAND prices relieves NVDA and hurts MU. Today's
+tape is that trade running in NVDA's favour.
+
+**I cannot confirm the cause** — the news hosts are proxy-blocked and QCOM's −7.09%
+is a large move with no explanation I can source, which is itself a reason not to
+over-read the pattern. Treat the mechanism as a hypothesis that Wednesday's MU
+guide will test, and log the alternative: this may simply be de-risking into the
+print, which carries no information about its outcome.
