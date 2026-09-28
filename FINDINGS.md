@@ -460,3 +460,91 @@ is a large move with no explanation I can source, which is itself a reason not t
 over-read the pattern. Treat the mechanism as a hypothesis that Wednesday's MU
 guide will test, and log the alternative: this may simply be de-risking into the
 print, which carries no information about its outcome.
+
+---
+
+## 2026-09-28 — The momentum book with real frictions: it belongs in a tax-advantaged account, and dies in this one
+
+**Question.** Saturday's finding was that only the diversified top-20 book carries
+the edge. Robinhood's fractional shares make a 20-name book implementable at
+$1,289. Does it survive spread, T+1 settlement in a cash account, and the tax on
+its turnover?
+
+**Answer: no, not in the taxable account. VERDICT — DO NOT FUND IT HERE.**
+
+Method: `hf_trading_bot/bookstudy.py`, 188 monthly rebalances, 2011-01 → 2026-09,
+$1,289.51 start. Sells execute at close *i*, and because proceeds settle T+1 the
+buys execute at close *i+1* — rotated capital sits in cash for one session, which
+is the actual cash-account constraint. Realised gains are taxed at each rebalance
+and the tax is paid out of the account. **Measured annual turnover: 6.6x.**
+
+### Each friction added one at a time
+
+| | final $ | CAGR | Sharpe | cost paid | tax paid |
+|---|---|---|---|---|---|
+| frictionless control | 20,483 | 19.3% | 1.17 | — | — |
+| + T+1 settlement | 20,582 | 19.3% | 1.10 | — | — |
+| + 20bp spread round trip | 18,556 | 18.6% | 1.07 | $539 | — |
+| **+ short-term tax @ 27%** | **8,661** | **12.9%** | **0.81** | $333 | **$2,818** |
+
+Settlement is nearly free in return but costs 0.07 of Sharpe and widens the
+sampled drawdown from −18.4% to −22.3%: being out of the market one day per
+rebalance adds risk without adding return. Spread is minor — 20bp costs 0.7pp of
+CAGR. **Tax is the whole story: $2,818, more than twice the starting capital and
+8.5x the transaction cost.** It removes 5.7pp of CAGR and 0.26 of Sharpe.
+
+### Against the honest benchmark
+
+SPY buy-and-hold defers its tax indefinitely, so the comparison must be
+after-tax terminal wealth: SPY $7,810, or **$6,832** after a single 15% long-term
+tax on the gain. The taxed monthly book ends at **$8,661** — it wins on dollars by
+27%, and **loses on Sharpe, 0.81 against 0.86.**
+
+### The split-half kills it
+
+| | first half (94 mo) | second half (94 mo) |
+|---|---|---|
+| top-20 monthly, taxed 27% | 113% / **0.79** | 216% / 0.85 |
+| top-20 monthly, tax-free | 190% / **1.05** | 396% / 1.11 |
+| SPY buy & hold | 126% / **1.00** | 168% / 0.81 |
+
+**Taxed, the book lost to SPY in the first half on both dollars (113% vs 126%)
+and Sharpe (0.79 vs 1.00).** Its entire advantage is second-half — the
+survivorship-inflated regime. **Tax-free, it beats SPY in both halves** (1.05 vs
+1.00, then 1.11 vs 0.81). The tax is what converts a strategy that works in both
+regimes into one that works in one.
+
+### Rebalance frequency does not rescue it
+
+| taxable | final $ | CAGR | Sharpe | turnover |
+|---|---|---|---|---|
+| monthly @27% | 8,661 | 12.9% | 0.81 | 6.5x |
+| quarterly @27% | 6,878 | 11.4% | 0.83 | 3.6x |
+| semiannual @27% | 6,526 | 11.0% | 0.84 | 2.5x |
+| annual @15% (long-term gains) | 7,953 | 12.9% | 0.99 | 1.5x |
+
+Slowing down cuts the tax rate but discards the signal — 12-1 momentum decays in
+weeks, so an annual hold is a different, weaker strategy. The annual arm's 0.99
+Sharpe and −8.7% drawdown are **not trustworthy**: n=15, and the drawdown is
+sampled once a year, so it measures how rarely the portfolio was looked at rather
+than how gently it behaved. Drawdowns are not comparable across these rows for
+the same reason.
+
+### Caveats that survive
+- **Survivorship bias is unfixed** and inflates every momentum row more than SPY.
+  It is a larger effect than any friction measured here.
+- Drawdowns are sampled at the rebalance frequency, so all of them understate the
+  true intra-period figure; the monthly rows are the only ones roughly comparable.
+- 20bp is an assumption, not a measurement. Robinhood fractional orders route as
+  market orders; the real cost is unmeasured. At 100bp the tax-free CAGR falls to
+  15.5% / Sharpe 0.91, so the conclusion is not sensitive to it.
+- A $1 minimum per fractional order is satisfied at ~$64 per name, but 20 positions
+  rebalanced monthly means ~20 approvals a month and 20 short-term tax lots
+  compounding — an operational load this ledger has not priced.
+
+### What follows
+The strategy is real and it is in the wrong wrapper. **It is worth funding only
+inside a tax-advantaged account** (a Roth IRA: 18.6% CAGR, Sharpe 1.07, beats SPY
+in both halves). In the taxable Robinhood cash account the measured result is
+worse risk-adjusted than doing nothing, so the $439 satellite reserve and the
+Oct-8 tranche should not go here.
