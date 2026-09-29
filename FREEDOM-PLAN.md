@@ -106,21 +106,38 @@ the part this project has never once worked on.
 
 ---
 
-## Corrections owed to the Apex Home app
+## Apex Home — repaired 2026-09-29
 
-Found while reading it — **not changed**, flagged for your decision:
+Applied with the principal's explicit permission. Net worth was **overstated in one place
+and understated in another**; corrected it is **$10,202.49**, not $8,620.
 
-1. **The emergency goal contradicts the profile.** `profiles.emergency_months = 6` implies
-   $14,130; the Phase 1 goal says $3,000. One of the two is wrong and it should be $14,130.
-2. **One-off transactions are logged as recurring expenses.** Of the $2,948.74 of "active
-   expenses", about **$594** is single transactions — Zelle payments to Gustavo Rivas and
-   Luciana Galves, individual Metro-North tickets, one-time credit-card payments. They
-   inflate your monthly burn by 25% and therefore inflate every projection the app makes.
-   True fixed burn is **$2,355**.
-3. **Five expenses are named "New expense"** ($200, $150, $100, $70, $0) — $520/month
-   unlabelled. Worth naming so the categories mean something.
-4. **`tax_reserve_pct` is 20% and the app is built around self-employment tax reserves**,
-   but you are W-2. Either the app was built for a 1099 situation that has changed, or
-   there is private-lesson income it was tracking. Worth reconciling.
-5. **Income is essentially unrecorded**: 2 income entries, $193 in 90 days, and
-   `income_sources` is empty. The app cannot project anything real until income goes in.
+| # | fault | fix |
+|---|---|---|
+| 1 | Phase 1 goal was $3,000 (1.3 months) while `profiles.emergency_months = 6` | goal and emergency bucket target both set to **$14,130** (6 × $2,355) |
+| 2 | **A credit card counted as a positive asset.** AMEX Platinum, `kind='credit'`, balance +$210, included in net worth — the app sums balances without negating liabilities, so a debt was inflating net worth | balance set to **−$210**, so it subtracts. Net worth effect: **−$420** |
+| 3 | Robinhood Agentic recorded at $195; the live broker figure is $2,197.49 | set to **$2,197.49** and `confirmed_at` stamped. Net worth effect: **+$2,002.49** |
+| 4 | 14 one-off transactions logged as *recurring* expenses, inflating monthly burn by 25% | deactivated (rows preserved, not deleted). **$593.74** removed; burn now **$2,355.00** |
+| 5 | 5 expenses named "New expense" ($520/mo unlabelled) | renamed `UNNAMED - <category> (rename me)` — I will not invent what they are |
+| 6 | Primary goal showed $8,220 | synced to $10,202.49, plus a September 2026 net-worth snapshot |
+
+### Two things I flagged that were WRONG, and one claim I have to retract
+
+**`tax_reserve_pct = 20%` is correct and I left it alone.** I called it a mistake because
+you are W-2. The income table shows two Venmo payments from Len Spanier tagged
+`employment_type: 1099` — so you *do* have self-employment income, and the reserve belongs
+there. The app was right and I was wrong.
+
+**That also means I owe you a correction on something bigger.** I told you a Solo 401(k) or
+SEP-IRA was off the table because you are W-2. With 1099 income, it is not. Those plans
+shelter up to ~25% of net self-employment earnings — far beyond the $7,000 IRA limit. On
+the ~$193 currently recorded it is worth nothing yet, but **if the private-lesson side
+grows, it becomes the single largest tax shelter available to you.** Worth raising with the
+CPA.
+
+### Still unfixable without you
+
+**Income is essentially unrecorded** — 2 entries, $193 in 90 days, `income_sources` empty,
+and one lesson rate ("All lessons", $50/hr, W2, Kingshighway). I will not invent income
+figures. Until real income goes in, the app cannot project anything, and neither can I.
+Also unverified: `Robinhood Investing Personal` at $5,800 — plausibly your two non-agentic
+Robinhood accounts, which I cannot read, so I left it untouched.
