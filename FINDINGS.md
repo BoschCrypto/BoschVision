@@ -548,3 +548,97 @@ inside a tax-advantaged account** (a Roth IRA: 18.6% CAGR, Sharpe 1.07, beats SP
 in both halves). In the taxable Robinhood cash account the measured result is
 worse risk-adjusted than doing nothing, so the $439 satellite reserve and the
 Oct-8 tranche should not go here.
+
+---
+
+## 2026-10-01 — MU beat and fell. Two of my own methods were wrong.
+
+**The print.** MU reported FY26 Q4 on 2026-09-30 pm: **EPS $33.42 against $31.50
+consensus, a 6.1% beat**, verified. On 2026-10-01 the stock went **1065.11 →
+1048.26, −1.58%**.
+
+### The beat is fully priced — and the beat is shrinking
+
+| report | EPS beat | stock move |
+|---|---|---|
+| 2025-06-25 | +18.6% | −0.98% |
+| 2025-09-23 | +8.6% | −2.82% |
+| 2025-12-17 | +25.1% | +10.21% |
+| 2026-03-18 | **+41.9%** | **−3.78%** |
+| 2026-06-24 | +24.3% | **+15.74%** |
+| 2026-09-30 | **+6.1%** | −1.58% |
+
+**MU has beaten EPS in all six quarters on record here, and the stock fell on
+four of them.** Correlation between beat size and price move is **+0.15 on n=6**,
+which is nothing. A 41.9% beat produced −3.78%; a 24.3% beat produced +15.74%.
+An EPS beat is not a reason to expect a move in either direction.
+
+Separately: the prior five beats ran 8.6 / 18.6 / 24.3 / 25.1 / 41.9%. **This
+quarter's 6.1% is the smallest of the six.** Estimates are catching up to the
+memory upcycle, so the surprise factor is fading. That is a real deceleration
+signal, independent of price.
+
+### Error 1 — my gap model was built from a magnitude-selected sample
+
+On 2026-09-26 I told the principal to expect **±7% with a fat tail to ±18%**. I
+derived it from "the 4 largest overnight gaps per year" in `data/bars/MU.csv`,
+reasoning that MU prints four times a year so the counts matched.
+
+**They do not match.** The four largest gaps in a year are not the four earnings
+gaps — they are crises and shocks, and I had already noted that four of the top
+twenty were March 2020 COVID days *while using the sample anyway*. I built a
+predictor out of the right tail and presented it as a central expectation.
+
+Computed correctly on the five **verified** prior earnings dates:
+
+| | my estimate | correct method | realised |
+|---|---|---|---|
+| mean abs move | 7.76% | 6.71% | — |
+| **median abs move** | **6.82%** | **3.78%** | — |
+| this print | — | — | **1.58%** |
+
+The mean survived by luck; the median — the number a person actually plans
+against — was off by 1.8x, and the realised move was barely above a typical
+0.87% day.
+
+**NEW RULE: an event-study distribution must be built from the event dates,
+obtained from `get_earnings_results`, never from a magnitude-selected sample.**
+This is a new instance of Mode 1 in `knowledge/process/error-modes.md`: I
+selected on the outcome variable and then used the selection as a forecast.
+
+### Error 2 — the HYG credit tripwire is measured on the wrong series
+
+Today Robinhood reports HYG `previous_close` **77.21** but
+`adjusted_previous_close` **76.8684** — a **$0.3416 distribution** going ex on
+1 October.
+
+| | |
+|---|---|
+| today's move, raw closes | −0.74% |
+| today's move, dividend-adjusted | **−0.30%** |
+| vs my 09-24 baseline of 78.09 (unadjusted) | −1.86% |
+
+**My baseline was an unadjusted price, so the tripwire conflates income being
+paid out with credit stress.** HYG yields roughly 6% a year, about 0.5% a month,
+so a "3% fall in under a month" threshold on an unadjusted series carries ~0.5pp
+of guaranteed false signal every month — it would eventually fire on nothing but
+distributions. The tripwire must use `adjusted_previous_close` or a total-return
+series. Fixed in the routine.
+
+### What could not be read, and therefore is not concluded
+
+**The DRAM/HBM pricing guide — the only variable that actually mattered — is
+unavailable.** The 2026-09-30 8-K returns **404** on `get_sec_filing`,
+`get_sec_filing_facts` returns an **empty fact set** for it, and the news hosts
+are proxy-blocked.
+
+So whether MU's guide confirms or refutes the NVDA margin-transfer mechanism
+(NVDA guided gross margin down ~300bp on memory cost and named the memory
+oligopoly as taxing the AI buildout) is **UNRESOLVED**. A −1.58% move is too
+small to carry that information, and the 2026-09-28 divergence — memory down
+3.4–4.7% while NVDA was the only semi up — remains **untested**, not confirmed.
+I will not infer the guide from the price.
+
+**Still no position, and the case for one is weaker than before the print**, not
+stronger: the beat decelerated, the reaction was negative, and the thesis
+variable is unreadable.
