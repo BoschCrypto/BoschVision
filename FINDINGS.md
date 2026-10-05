@@ -642,3 +642,62 @@ I will not infer the guide from the price.
 **Still no position, and the case for one is weaker than before the print**, not
 stronger: the beat decelerated, the reaction was negative, and the thesis
 variable is unreadable.
+
+---
+
+## 2026-10-05 — Small caps: the whole asset class lost, and the fee data I could not verify
+
+Asked to find "small caps with real opportunity." Two results worth keeping, one
+of them a limit on what I can honestly claim.
+
+### The measurement
+
+Monthly closes, dividend-adjusted (`adjustment_type: all`), Jan 2019 - Sep 2026,
+n=92 months (AVUV n=84, inception 2019-09-24):
+
+| | CAGR | vol | Sharpe | maxDD |
+|---|---|---|---|---|
+| SPY | 17.60% | 18.0% | **1.00** | -25.6% |
+| VTI | 16.92% | 18.6% | 0.94 | -26.6% |
+| AVUV | 16.22% | 29.7% | 0.66 | **-50.6%** |
+| XSMO | 13.41% | 22.5% | 0.67 | -27.7% |
+| VBR | 11.54% | 24.6% | 0.57 | -42.3% |
+| IWM | 10.35% | 23.6% | 0.54 | -34.0% |
+| IJR | 10.18% | 24.2% | 0.52 | -37.6% |
+
+Every small-cap vehicle lost to SPY on return AND Sharpe AND drawdown. Rolling
+3-year windows: IWM beat SPY in **0 of 57**. AVUV, the best of them, in 21/49
+(43%). Matched window from 2019-09, AVUV +186.5% vs SPY +204.0% — AVUV's
+headline total return only looks competitive because its series starts later.
+
+**The window is one regime and I will not present it as settled.** 2019-2026 is
+the mega-cap era; 2000-2009 ran the other way. Same lesson as the 2026-10-02
+asset-class work: the decade winner flips. Read the table as "small caps have
+been losing", not "small caps lose".
+
+### The one structural fact that is not regime-dependent
+
+IWM P/E **72.1** vs IJR P/E **23.1**, both labelled "US small caps". That is not
+a valuation gap, it is a profitability gap: the Russell 2000 takes ranks
+1,001-3,000 with no earnings requirement; the S&P 600 screens for positive
+earnings. Choosing the index IS the decision. AVUV (P/E 15.1, P/B 1.40) adds an
+explicit profitability screen on top of value and was the only vehicle with a
+coin-flip 3y record against SPY.
+
+### Method rule: no individual small-cap names from this data
+
+Survivorship bias is mild for large caps and disqualifying for small caps —
+delisted tickers return as `inactive_instruments`, so any screen I build is
+assembled from survivors and will show a flattering hit rate that does not
+exist. Combined with the 2026-09-26 finding (Sharpe falls monotonically as the
+ranking is compressed into fewer names), individual small-cap selection is
+outside what this data can support. Sector/factor exposure only.
+
+### Expense ratios: I could not reach the issuers
+
+`avantisinvestors.com`, `ishares.com`, `etfdb.com` and `trackinsight.com` are all
+blocked by this environment's network egress proxy (EGRESS_BLOCKED). AVUV 0.25%
+and IJR 0.06% are corroborated by search aggregators but **not issuer-confirmed**,
+and are recorded here as unverified. Confirm from the fund page or prospectus
+before sizing on a fee assumption. Do not launder a secondary source into a
+stated fact.
