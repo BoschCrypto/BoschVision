@@ -4,18 +4,29 @@ Built 2026-10-05. Numbers from `coaching_schedule` in Apex Home and from
 published compensation data. Read the "what I do not know" section before using
 any of this in a real conversation.
 
-## The one fact that starts the conversation
+## The structure, confirmed by the principal 2026-10-05
 
-A semi-private lesson was billed to the members at **"$110 each"** — $220 for
-the hour. The rate paid for that hour is **$50**.
+**Pay is $50/hour flat, regardless of what the lesson bills the client.**
+Confirmed directly, so this is no longer an inference from one billing line.
 
-That is a **22.7% share** of the revenue the hour generated.
+That makes the earlier "22.7% share" figure the wrong frame — it was computed
+from a single $220 semi-private and the real share varies by lesson type. The
+correct and stronger statement is structural:
 
-Published compensation practice for club tennis pros puts the pro's share at
-**50-100%** of lesson fees, with 60% cited as a reasonable *starting* point for
-an assistant professional. A club keeping 15-25% is the normal arrangement; here
-the club keeps roughly 77%. That is the inversion of the standard, and it is the
-entire argument.
+> The pay is **fixed**. The revenue is **variable**. Every dollar of upside from
+> a denser, more expensive or more skilfully sold lesson accrues entirely to the
+> club.
+
+A private, a semi-private at $220 and a group clinic all pay the same $50. So
+the club's margin on an hour of this labour ranges from modest to very large,
+and none of that range reaches the person delivering it. Published practice puts
+the pro at **50-100%** of lesson fees, with 60% a reasonable starting point for
+an assistant professional; clubs typically keep 15-25%. A flat hourly rate with
+no participation in lesson revenue is outside that structure entirely.
+
+This also means **pulling the billing emails is unnecessary** to make the case.
+The distribution of billed rates would only quantify how much upside is being
+forgone; the fact that none of it is shared is already established.
 
 ## The volume behind it
 
@@ -67,9 +78,10 @@ one that has never been pulled.
 
 ## What I do not know, and should be checked before the conversation
 
-- **Whether "$110 each" is representative** or a one-off premium format. One
-  observation. Pull 3-6 months of RacquetDesk billing emails and get the real
-  distribution of billed rates by lesson type before quoting a take rate.
+- **How much upside is actually being forgone.** Not needed for the argument,
+  since the flat structure is confirmed, but 3-6 months of RacquetDesk billing
+  would size it. The principal declined this on 2026-10-05 as irrelevant to the
+  decision, and he is right that it is.
 - **Whether the $50 is W-2 or 1099 for this specific work.** Both exist in the
   picture; the 1099 portion carries self-employment tax, which makes $50 worth
   materially less than $50 and is itself part of the argument.
