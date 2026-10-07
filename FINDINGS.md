@@ -701,3 +701,58 @@ and IJR 0.06% are corroborated by search aggregators but **not issuer-confirmed*
 and are recorded here as unverified. Confirm from the fund page or prospectus
 before sizing on a fee assumption. Do not launder a secondary source into a
 stated fact.
+
+---
+
+## 2026-10-07 — A pending deposit is not account value, and the error ran the wrong way
+
+Caught by the principal: "scan the accounts again your math is off." He was right.
+
+### The error
+
+On 2026-10-05 I reported the combined Robinhood total as **$11,116.67**.
+`get_portfolio` returns `total_value` and `pending_deposits` as **separate**
+fields. Account 568342596: `total_value` 6408.14, `pending_deposits` 2500, and
+2854.71 equity + 3.26 crypto + 3550.16 cash = 6408.13 exactly — the deposit is
+already excluded. I added it on top.
+
+Verified totals, 2026-10-07:
+
+| account | type | value |
+|---|---|---|
+| 568342596 | cash, default | $6,408.14 |
+| 873579528 | cash, "Agentic" | $2,208.24 |
+| 181268516224 | limited margin, managed | $0.24 |
+| **total** | | **$8,616.62** |
+
+$11,116.62 is the post-settlement balance. I reported it as the current one.
+
+### Why it mattered more than the total did
+
+The damage was in the **denominator**. Every percentage-of-total quoted on
+10-05 and repeated in the 10-06 and 10-07 monitors was divided by the inflated
+figure. Tech look-through is **~22.7% of total**, not the 18.1% I reported —
+identical dollars, smaller base.
+
+**An error that biases a risk metric toward permissive is worse than one that
+biases conservative.** This one made the book read safer than measured and made
+the pencilled $750 VTI tranche look like it had more headroom than it has.
+
+### Rules
+
+1. `total_value` IS the account value. `pending_deposits` is reported separately
+   *because it is not yet yours*. Never add it. Where a deposit bears on a
+   decision, give settled and pending as two numbers.
+2. Before calling a routine's facts stale, check which account it governs. I
+   told the principal his Morning Market Monitor had a wrong holdings list
+   (VTI/VGT/NVDA only). It was right: that routine is scoped to 873579528,
+   which holds exactly those three. VOO and QQQ sit in 568342596, out of scope.
+   Retracted.
+
+### Still unverified, flagged a third time
+
+VTI / VOO / QQQ sector and NVDA weights have never been confirmed from the
+issuers — vanguard.com, ishares.com and avantisinvestors.com are all
+EGRESS_BLOCKED in this container. Direct holdings are exact; every
+"look-through" figure is an estimate, and it is now the weakest input in the
+risk math.
