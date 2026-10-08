@@ -197,3 +197,41 @@ forecasts — but the asymmetry against leaving the room unused is the point.
 The $1M-by-30 gap remains an INCOME problem. $7,500 of contribution room does
 not change that and no investment solution will. The rate structure
 (`knowledge/process/rate-negotiation-case.md`) is the lever.
+
+---
+
+## 2026-10-08 — Correction: he is 23, not 22
+
+**Waldo Bosch, date of birth 2003-06-18.** Age 23 as of 2026-10-08; turns 24 on
+2027-06-18. Every earlier figure in this plan, and the standing brief in the
+Morning Market Monitor routine, said 22. Wrong by a year, and the error ran in
+the flattering direction — it credited him with one more compounding year than
+he has.
+
+### What the year costs
+
+Maxing the Roth now runs ages 23 to 64: **42 contributions, not 43.**
+
+| real return | at 65, starting age 23 | what age 22 would have given | the missing year |
+|---|---|---|---|
+| 3% | $615,000 | $641,000 | $26,000 |
+| 4% | $786,000 | $825,000 | $39,000 |
+| 5% | **$1,014,000** | $1,072,000 | $58,000 |
+| 6% | $1,320,000 | $1,406,000 | $87,000 |
+| 7% | **$1,730,000** | $1,858,000 | **$129,000** |
+| 8% | $2,282,000 | $2,472,000 | $190,000 |
+
+Total contributed in real terms: **$315,000**. At 7% real the growth is
+$1,414,742 and the tax shelter alone is worth ~$212,000 against a taxable
+account paying 15% on the gain at the end.
+
+Balance at age 30 (2033): **~$61,000 at 5% real, ~$65,000 at 7%**. The Roth is a
+40-year machine; it does not touch the $1M-by-30 goal, which stays an income
+problem.
+
+### The point
+
+One year of delay at a 7% real return costs about **$129,000** of eventual
+balance, and the contribution room is gone permanently — it cannot be
+back-filled later. That is the argument for funding the 2026 contribution now
+rather than near the 2027-04-15 deadline, and for never skipping a year.
