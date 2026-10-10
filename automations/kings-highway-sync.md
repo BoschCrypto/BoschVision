@@ -6,9 +6,12 @@ Kings Highway Tennis Club emails and adds any lesson missing from his
 coaching schedule in the Apex Home app. It only ever **inserts**; deletions,
 renames and "make this weekly" are reported for Martin to decide.
 
-Routine: `trig_01B5wUJxjPAohN2ebooxsEVj`, cron `CRON_TZ=America/New_York 50 7 * * *`,
-fresh session per run. Needs the **Gmail** and **Lovable** connectors on the
-Routine (attach them in the claude.ai routines UI). The text below
+Routine: `trig_01BGfgNEFyNMcqnu8xUaVbxC`, cron `CRON_TZ=America/New_York 50 7 * * *`.
+It fires into the Claude Code session that set it up (session_01Kai36hFoCxRhb2SMR8vcKQ),
+because that session holds the **Gmail** and **Lovable** connectors; routines that
+start a fresh session get no connectors here (the first routine,
+`trig_01B5wUJxjPAohN2ebooxsEVj`, failed that way and is disabled). Archiving that
+session stops the sync. The text below
 is the Routine's prompt, verbatim — keep the two in sync.
 
 ---
