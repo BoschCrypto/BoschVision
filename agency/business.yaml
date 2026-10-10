@@ -1,0 +1,121 @@
+# ---------------------------------------------------------------------------
+# The business, in one file.
+#
+# The public website is rendered from this file, and every agent reads it
+# before it works — so change the name, region, prices or offers here and the
+# site, the ads, the posts and the sales emails all follow. Restart
+# `agency up` after editing.
+#
+# Before going live: set `brand`, `region` and `contact_email`. SENTRY (the
+# security agent) flags the placeholder email until you do.
+# ---------------------------------------------------------------------------
+
+brand: Mainstreet AI
+tagline: AI assistants and automations for local businesses
+pitch: >-
+  We build custom GPT agents, workflow automations and prompt packs that answer
+  your customers, book appointments, chase invoices and follow up on every lead,
+  so a five-person business can run like a fifteen-person one.
+region: ""                       # e.g. "Gothenburg, Sweden" — leave empty to omit
+contact_email: hello@example.com
+currency: "$"
+
+services:
+  - name: Custom GPT agents
+    summary: >-
+      Assistants trained on your business that answer questions, qualify leads
+      and book appointments, on your website, WhatsApp or Instagram.
+    examples:
+      - Website chat receptionist
+      - Quote and estimate assistant
+      - Staff help desk for your SOPs
+  - name: Workflow automations
+    summary: >-
+      Connect the tools you already use so the busywork between them runs
+      itself.
+    examples:
+      - New lead → CRM → instant reply → follow-up
+      - Missed-call text-back
+      - Review requests after every job
+      - Invoice and payment reminders
+  - name: Prompt engineering packages
+    summary: >-
+      Tested prompts and templates so your team gets great results from
+      ChatGPT, Claude or Copilot from day one.
+    examples:
+      - Customer replies in your tone of voice
+      - Social posts and seasonal offers
+      - Quotes, proposals and job write-ups
+
+packages:
+  - name: Prompt Pack
+    setup: 490
+    blurb: Your team's everyday tasks, turned into tested prompts and templates.
+    includes:
+      - 25 custom prompts for your real tasks
+      - Shared prompt library in Google Docs or Notion
+      - 60-minute team training session
+      - 30 days of tweaks
+  - name: AI Front Desk
+    setup: 1500
+    monthly: 150
+    featured: true
+    blurb: A custom GPT agent that answers your customers around the clock, in your voice.
+    includes:
+      - Trained on your services, prices, FAQ and policies
+      - Website chat, plus WhatsApp, Instagram or SMS if you want them
+      - Captures leads and books into your calendar
+      - Hands over to a person when it should
+      - Monthly review and retraining
+  - name: Automation Sprint
+    setup: 2900
+    monthly: 250
+    blurb: Two weeks to automate the busywork between your tools.
+    includes:
+      - Workflow audit to map where the hours go
+      - Up to 5 automations (Zapier, Make or n8n)
+      - Lead follow-up, review requests, invoice reminders, reporting
+      - Monitoring and fixes on the monthly plan
+
+process:
+  - title: Free 20-minute AI audit
+    text: We look at where your hours go and point to the two or three automations that pay back fastest.
+  - title: Built in about two weeks
+    text: Fixed price and fixed scope. You see a working version in the first week.
+  - title: Run, measure, improve
+    text: We monitor everything and tune it monthly, so it keeps paying for itself.
+
+verticals:
+  - Dental and medical clinics
+  - Hair and beauty salons
+  - Trades (plumbers, electricians, HVAC)
+  - Restaurants and cafés
+  - Real estate agents
+  - Gyms and fitness studios
+  - Law and accounting firms
+
+faq:
+  - q: Do I need to be technical?
+    a: No. We set everything up, train your team, and keep it running. You approve how it talks and what it does.
+  - q: Which tools do you work with?
+    a: Google Workspace, Microsoft 365, Calendly, HubSpot, Pipedrive, Shopify, WhatsApp Business, and anything Zapier, Make or n8n can reach.
+  - q: What happens to my customers' data?
+    a: We set assistants up on business accounts whose providers don't train on your data, keep only what each workflow needs, and can sign a data processing agreement (GDPR).
+  - q: What does the AI cost to run each month?
+    a: Software and AI usage are billed at cost. For most small businesses that's a modest monthly amount, and we estimate it for you in the free audit.
+  - q: What if the assistant gets something wrong?
+    a: Every assistant has guardrails, logs every conversation, and hands over to a person when it isn't sure. We review the logs monthly.
+
+ads:
+  monthly_budget: 600            # what FLARE plans campaigns around (it never spends)
+  channels: [Google Search, Meta (Facebook and Instagram)]
+
+# How often each agent wakes up, in minutes. They run 24/7 while `agency up`
+# is running; work that would leave the building waits in HQ for your approval.
+agents:
+  marketing: 360
+  ads: 720
+  security: 30
+  analytics: 60
+  sales: 15
+  delivery: 180
