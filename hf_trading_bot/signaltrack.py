@@ -12,11 +12,15 @@ way out and half on the way in, so turnover is charged at SPREAD_PCT of notional
 traded. A signal must beat buy-and-hold by more than that drag to be worth
 anything, however good its calls are.
 
-TWO BENCHMARKS, both necessary:
+THREE BENCHMARKS, all necessary:
   - BTC buy and hold: the sector's beta. Beating the alts is not an achievement if
     BTC did it too.
-  - FROZEN sleeve: his allocation on day one, never touched. This isolates the
+  - FROZEN sleeve: a paper allocation on day one, never touched. This isolates the
     value of the SIGNAL from the value of the ASSETS he already picked.
+  - AS FILLED: the real sleeve, at the prices the broker actually charged, loaded
+    from data/signals/position.json. This is the one that decides anything, because
+    it is his money. The entry spread is already inside those fill prices, so the
+    code must never charge it again -- see Position and actual().
 
 Honest limits, stated because they bound every number this produces:
   - n is tiny. One signal is not a track record. Treat anything under ~20
@@ -29,10 +33,10 @@ Honest limits, stated because they bound every number this produces:
 from __future__ import annotations
 import json
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
 from pathlib import Path
 
 LOG = Path("data/signals/adam.jsonl")
+POSITION = Path("data/signals/position.json")
 
 # Round-trip cost of moving $1 of notional on Robinhood crypto. Measured, not assumed.
 SPREAD_PCT = 0.0189
@@ -138,25 +142,188 @@ def frozen(weights: dict, signals: list[Signal], start_usd: float) -> dict:
     return {"value": _value(units, cash, signals[-1].prices), "cost": entry_cost}
 
 
-def report(start_usd: float, own_weights: dict | None = None,
-           path: Path = LOG) -> str:
+@dataclass
+class Position:
+    """The sleeve as actually filled, taken from broker order records.
+
+    `basis` is the dollars the broker really took, so the entry spread is ALREADY
+    inside it. Nothing here may be charged SPREAD_PCT a second time -- doing so
+    would understate his real starting point and flatter every alternative.
+
+    `cash` is the uninvested remainder of the sleeve, not the whole account: this
+    tracker's universe is the crypto sleeve he designated, nothing else.
+    """
+    at: str                                        # ISO8601 of the last fill
+    units: dict                                    # asset -> units held
+    basis: dict                                    # asset -> USD actually paid
+    cash: float                                    # uninvested sleeve cash
+    orders: dict = field(default_factory=dict)     # asset -> broker order id
+    note: str = ""
+
+    @property
+    def invested(self) -> float:
+        return sum(self.basis.values())
+
+    @property
+    def capital(self) -> float:
+        """Sleeve capital at entry: paid plus left in cash. The denominator for
+        every return this module prints about the real position."""
+        return self.invested + self.cash
+
+    def fill_price(self, asset: str) -> float:
+        return self.basis[asset] / self.units[asset]
+
+    def weights(self) -> dict:
+        """Realised weights at entry, cash included, so they are comparable to a
+        Signal's published weights."""
+        cap = self.capital
+        w = {a: b / cap for a, b in self.basis.items()}
+        w["CASH"] = self.cash / cap
+        return w
+
+    def validate(self) -> None:
+        for a, u in self.units.items():
+            if a not in self.basis:
+                raise ValueError(f"no cost basis for {a} -- fill not recorded")
+            if u <= 0:
+                raise ValueError(f"{a} holds {u} units; an opening position needs a fill")
+        if self.cash < 0:
+            raise ValueError("sleeve cash is negative -- the sleeve was overspent")
+
+
+def load_position(path: Path = POSITION) -> Position | None:
+    if not path.exists():
+        return None
+    pos = Position(**json.loads(path.read_text()))
+    pos.validate()
+    return pos
+
+
+def save_position(pos: Position, path: Path = POSITION) -> None:
+    pos.validate()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(asdict(pos), indent=2) + "\n")
+
+
+def value_position(pos: Position, prices: dict) -> dict:
+    """Mark the real sleeve. Refuses to price a position it cannot price in full,
+    because a silently missing asset reads as a loss."""
+    missing = [a for a in pos.units if a not in prices]
+    if missing:
+        raise ValueError(f"no price for {', '.join(sorted(missing))} -- cannot mark the sleeve")
+    mark = _value(pos.units, pos.cash, prices)
+    return {"value": mark, "capital": pos.capital, "pnl": mark - pos.capital,
+            "ret": mark / pos.capital - 1}
+
+
+def actual(pos: Position, signals: list[Signal]) -> dict:
+    """The real sleeve, untouched since entry, marked at the latest signal's prices.
+
+    This is what following the signal has to beat. No spread is charged: he has
+    already paid it, and the market kept the money.
+    """
+    if not signals:
+        raise ValueError("need at least one signal to mark the position against")
+    return value_position(pos, signals[-1].prices)
+
+
+def entry_premium(pos: Position, signal: Signal) -> dict:
+    """How far the real fills landed above the marks logged with a signal.
+
+    This is the only place the 1.89% SPREAD_PCT assumption meets evidence, and it
+    is NOT a clean measurement of the spread: the marks are logged minutes before
+    the fills, so price drift is mixed in and cannot be separated out. Read it as
+    a consistency check. A weighted premium near zero would mean the spread
+    assumption is too harsh; one near a full SPREAD_PCT would mean it is far too
+    kind; one near SPREAD_PCT/2 means the model is roughly right about entry.
+    """
+    per = {}
+    paid = at_mark = 0.0
+    for a, u in pos.units.items():
+        if a not in signal.prices:
+            continue
+        per[a] = pos.fill_price(a) / signal.prices[a] - 1
+        paid += pos.basis[a]
+        at_mark += u * signal.prices[a]
+    if at_mark <= 0:
+        raise ValueError("no overlap between the position and the signal's prices")
+    weighted = paid / at_mark - 1
+    return {"per_asset": per, "weighted": weighted,
+            "implied_round_trip": weighted * 2,
+            "assumed_round_trip": SPREAD_PCT,
+            "paid": paid, "at_mark": at_mark, "excess": paid - at_mark}
+
+
+def opening_report(pos: Position, signals: list[Signal]) -> str:
+    """What can honestly be said when only one signal has been logged: where the
+    real money started, and what entry cost. No comparison -- there is nothing
+    yet to compare against."""
+    v = actual(pos, signals)
+    prem = entry_premium(pos, signals[0])
+    lines = [
+        f"Opening position recorded {pos.at[:16].replace('T', ' ')} "
+        f"-- ${pos.capital:,.2f} of sleeve capital.",
+        "",
+        f"{'asset':<6}{'units':>14}{'fill':>12}{'paid':>11}{'vs mark':>10}",
+    ]
+    for a in sorted(pos.basis, key=lambda x: -pos.basis[x]):
+        lines.append(f"{a:<6}{pos.units[a]:>14.8f}{pos.fill_price(a):>12,.4f}"
+                     f"{pos.basis[a]:>11,.2f}{prem['per_asset'][a]:>+10.2%}")
+    lines += [
+        f"{'CASH':<6}{'':>14}{'':>12}{pos.cash:>11,.2f}{'':>10}",
+        "",
+        f"  invested ${pos.invested:,.2f} + cash ${pos.cash:,.2f} = ${pos.capital:,.2f}",
+        f"  marked now                      : ${v['value']:>10,.2f}  ({v['ret']:+.2%})",
+        "",
+        f"  entry cost over mark: ${prem['excess']:,.2f} ({prem['weighted']:.2%} of notional), "
+        f"implying a {prem['implied_round_trip']:.2%} round trip",
+        f"  against the {SPREAD_PCT:.2%} this module assumes. Minutes of drift sit "
+        f"inside that number; it is a check, not a measurement.",
+        "",
+        f"Signals logged: {len(signals)}. No comparison is possible until a second "
+        f"one arrives -- a single allocation has no performance.",
+    ]
+    return "\n".join(lines)
+
+
+def report(start_usd: float | None = None, own_weights: dict | None = None,
+           path: Path = LOG, position: Position | None = None) -> str:
+    """Compare following the signal against the alternatives.
+
+    `position`, when given, supplies the starting capital and adds the AS FILLED
+    line. Passing it is strongly preferred: it anchors every percentage to money
+    he actually committed instead of a round number chosen for convenience.
+    """
     sigs = read_signals(path)
+    if position is None and start_usd is None:
+        raise ValueError("report needs either a real position or a start_usd")
+    if start_usd is None:
+        start_usd = position.capital
+
     if len(sigs) < 2:
+        if position is not None and sigs:
+            return opening_report(position, sigs)
         return (f"Signal log holds {len(sigs)} entry. Need at least 2 to compare "
                 f"anything -- a single allocation has no performance. "
                 f"Forward the next update and this starts producing numbers.")
+
     f = follow(sigs, start_usd)
     b = hold("BTC", sigs, start_usd)
     lines = [
         f"Signals logged: {f['n']}  ({sigs[0].at[:10]} -> {sigs[-1].at[:10]})",
+        f"Starting capital: ${start_usd:,.2f}"
+        + ("  (as filled, from broker records)" if position is not None else "  (assumed)"),
         f"Rebalances executed: {f['trades']}   spread paid: ${f['cost']:,.2f}",
         "",
         f"  following the signal : ${f['value']:>10,.2f}  ({f['value']/start_usd-1:+.2%})",
         f"  BTC, bought and held : ${b['value']:>10,.2f}  ({b['value']/start_usd-1:+.2%})",
     ]
+    if position is not None:
+        a = actual(position, sigs)
+        lines.append(f"  your sleeve as filled: ${a['value']:>10,.2f}  ({a['ret']:+.2%})")
     if own_weights:
         z = frozen(own_weights, sigs, start_usd)
-        lines.append(f"  your sleeve, frozen  : ${z['value']:>10,.2f}  ({z['value']/start_usd-1:+.2%})")
+        lines.append(f"  a paper sleeve frozen: ${z['value']:>10,.2f}  ({z['value']/start_usd-1:+.2%})")
     lines += [
         "",
         f"  spread paid as % of starting capital: {f['cost']/start_usd:.2%}",

@@ -4,14 +4,27 @@ The point of this module is to say whether following a signal beats not followin
 it AFTER costs. Every test here defends a way that question could be answered
 dishonestly.
 """
+import json
 import math
+import pathlib
+from dataclasses import asdict
+
 import pytest
 from hf_trading_bot.signaltrack import (
-    Signal, follow, hold, frozen, SPREAD_PCT, MIN_TRADE_USD)
+    Signal, Position, follow, hold, frozen, actual, value_position,
+    entry_premium, load_position, read_signals, report,
+    SPREAD_PCT, LOG, POSITION)
 
 
 def _sig(at, w, p):
     return Signal(at=at, weights=w, prices=p)
+
+
+def _write(sigs, tmp=pathlib.Path("/tmp/claude-0/sigtest.jsonl")):
+    """A throwaway log, so a test never reads or writes the real one."""
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text("".join(json.dumps(asdict(s)) + "\n" for s in sigs))
+    return tmp
 
 
 def test_weights_must_include_cash_and_sum_to_one():
@@ -81,3 +94,120 @@ def test_frozen_benchmark_never_trades_after_entry():
     # 500 of BTC rises 50% -> 750, plus 500 cash less the one-way entry cost
     expected = 750.0 + 500.0 - 1000.0 * 0.5 * SPREAD_PCT / 2
     assert math.isclose(z["value"], expected, rel_tol=1e-9)
+
+
+# --- the real position -------------------------------------------------------
+#
+# These tests guard the number that every percentage in this module divides by.
+# An error here does not make one line wrong; it makes all of them wrong, in a
+# direction nobody notices, which is exactly how the pending-deposit error got
+# through on 2026-10-07.
+
+
+def _pos(**kw):
+    base = dict(at="2026-10-09T22:18:02-04:00",
+                units={"BTC": 0.01, "SOL": 1.0},
+                basis={"BTC": 1000.0, "SOL": 100.0},
+                cash=100.0)
+    base.update(kw)
+    return Position(**base)
+
+
+def test_capital_is_what_was_paid_plus_what_was_left():
+    """The denominator. Marking against invested-only would overstate every
+    return by the cash weight -- 46% of this sleeve."""
+    p = _pos()
+    assert p.invested == 1100.0
+    assert p.capital == 1200.0
+
+
+def test_marking_at_the_fill_prices_shows_exactly_zero_profit():
+    """The entry spread is already inside `basis`. If anything charged it again,
+    a sleeve marked at the price he paid would show a phantom loss."""
+    p = _pos()
+    v = value_position(p, {"BTC": 100000.0, "SOL": 100.0})
+    assert math.isclose(v["value"], p.capital, rel_tol=1e-12)
+    assert math.isclose(v["pnl"], 0.0, abs_tol=1e-9)
+
+
+def test_an_unpriceable_asset_raises_instead_of_reading_as_a_loss():
+    """Silently skipping an asset with no quote would report a crash as a
+    rebalancing success."""
+    with pytest.raises(ValueError, match="no price for SOL"):
+        value_position(_pos(), {"BTC": 100000.0})
+
+
+def test_a_fill_without_a_cost_basis_is_rejected():
+    """Units with no recorded basis means a fill was transcribed by hand and the
+    paid amount guessed. Guessed basis is worse than no basis."""
+    with pytest.raises(ValueError, match="no cost basis for SOL"):
+        _pos(basis={"BTC": 1000.0}).validate()
+
+
+def test_overspent_sleeve_is_rejected():
+    with pytest.raises(ValueError, match="negative"):
+        _pos(cash=-1.0).validate()
+
+
+def test_entry_premium_is_notional_weighted_not_a_plain_average():
+    """A $5 fill at a 10% premium and a $1000 fill at 0.5% did not cost 5.25%.
+    Averaging per-asset percentages would say it did, and would misprice the
+    only cost that decides whether to follow this signal at all."""
+    p = _pos(units={"BTC": 0.01, "SOL": 0.05},
+             basis={"BTC": 1005.0, "SOL": 5.5})
+    s = Signal(at="2026-10-09T20:12:00Z",
+               weights={"BTC": 0.9, "SOL": 0.1},
+               prices={"BTC": 100000.0, "SOL": 100.0})
+    r = entry_premium(p, s)
+    naive = sum(r["per_asset"].values()) / 2
+    assert naive > 0.05                      # the misleading figure
+    assert r["weighted"] < 0.011             # the honest one
+    assert math.isclose(r["weighted"], 1010.5 / 1005.0 - 1, rel_tol=1e-9)
+
+
+def test_actual_needs_a_signal_to_mark_against():
+    with pytest.raises(ValueError, match="at least one signal"):
+        actual(_pos(), [])
+
+
+def test_report_divides_by_the_real_capital_not_a_round_number():
+    """Passing a position must override a convenient start_usd. $1,000 is not
+    what he committed; $1,290.84 is."""
+    p = _pos()
+    sigs = [_sig("2026-10-01T00:00:00Z", {"BTC": 1.0, "CASH": 0.0}, {"BTC": 100000.0, "SOL": 100.0}),
+            _sig("2026-10-02T00:00:00Z", {"BTC": 1.0, "CASH": 0.0}, {"BTC": 100000.0, "SOL": 100.0})]
+    out = report(own_weights=None, path=_write(sigs), position=p)
+    assert "$1,200.00" in out
+    assert "as filled, from broker records" in out
+
+
+def test_report_refuses_to_invent_a_starting_capital():
+    with pytest.raises(ValueError, match="either a real position or a start_usd"):
+        report()
+
+
+# --- the position actually on file -------------------------------------------
+
+
+@pytest.mark.skipif(not POSITION.exists() or not LOG.exists(),
+                    reason="live records not present")
+def test_the_recorded_fills_match_the_published_signal():
+    """He followed the 2026-10-09 allocation. If the recorded fills drift from
+    the published weights, either the fills or the signal was mistyped, and the
+    whole comparison is measuring the wrong thing."""
+    pos = load_position()
+    sig = read_signals()[0]
+    got, want = pos.weights(), sig.weights
+    assert set(got) == set(want)
+    for a in want:
+        assert abs(got[a] - want[a]) < 0.001, f"{a}: filled {got[a]:.4%}, signal {want[a]:.4%}"
+
+
+@pytest.mark.skipif(not POSITION.exists() or not LOG.exists(),
+                    reason="live records not present")
+def test_the_measured_entry_cost_brackets_the_assumed_spread():
+    """SPREAD_PCT is the number this entire module turns on. The real fills imply
+    a round trip; if that ever lands outside half-to-double the assumption, the
+    assumption is stale and every conclusion drawn from it is suspect."""
+    r = entry_premium(load_position(), read_signals()[0])
+    assert SPREAD_PCT / 2 < r["implied_round_trip"] < SPREAD_PCT * 2
