@@ -35,8 +35,10 @@ THE APP
 - Table public.coaching_schedule_exceptions (schedule_id, exception_date,
   status='cancelled') skips one occurrence of a recurring row. Read it for
   the coverage check; never write to it.
-- Confirmed fixed (recurring) list: none yet. Everything is a one-off until
-  Martin says otherwise.
+- Confirmed fixed (weekly, recurring=true) list, confirmed by Martin on
+  2026-10-11: Sunday 8:00–10:00 AM "P120 8am" and Sunday 12:00–1:00 PM "OB2"
+  (both from 2026-10-11). Everything else is a one-off until Martin says
+  otherwise. If a fixed lesson is missing from today's email, tell him once.
 
 THE EMAILS (all from email@racquetdesk.com; times are US Eastern)
 Search Gmail for `from:email@racquetdesk.com newer_than:3d` and open every
