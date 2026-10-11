@@ -89,6 +89,20 @@ def follow(signals: list[Signal], start_usd: float,
            spread: float = SPREAD_PCT, min_trade: float = MIN_TRADE_USD) -> dict:
     """Walk the signal history, rebalancing to each new target and paying spread.
 
+    COST CONVENTION, and it decides the answer. SPREAD_PCT is the ROUND TRIP --
+    the full bid-to-ask distance. A single leg crosses only half of it: a buy
+    lifts the ask (mid + spread/2), a sell hits the bid (mid - spread/2). So each
+    leg is charged `spread / 2`, which is what hold() and frozen() already charge
+    on entry. Rotating $100 from SOL into BTC is two legs and therefore costs one
+    full SPREAD_PCT of $100 -- half on the way out, half on the way in.
+
+    This was wrong until 2026-10-11: every leg was charged the full SPREAD_PCT,
+    so follow() paid double what its own benchmarks paid for identical turnover.
+    The error ran against the signal, which is the direction that flattered the
+    argument I had already made against following it. Waldo's real fills settle
+    the convention: they landed 0.99% above the mark, half of the 1.89% round
+    trip, exactly as one leg should.
+
     Returns the final value plus the running cost, so the drag is never hidden
     inside the return.
     """
@@ -108,7 +122,7 @@ def follow(signals: list[Signal], start_usd: float,
             delta = want - have
             if abs(delta) < min_trade:
                 continue          # drift too small to be worth the spread
-            cost += abs(delta) * spread
+            cost += abs(delta) * (spread / 2)   # one leg crosses half the spread
             trades += 1
             units[asset] = units.get(asset, 0.0) + delta / sig.prices[asset]
             cash -= delta

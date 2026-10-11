@@ -43,7 +43,7 @@ def test_an_unchanged_signal_costs_nothing():
     r = follow([_sig("2026-10-01T00:00:00Z", w, p),
                 _sig("2026-10-02T00:00:00Z", w, p)], 1000.0)
     assert r["trades"] == 1          # the initial purchase only
-    assert math.isclose(r["cost"], 500.0 * SPREAD_PCT, rel_tol=1e-9)
+    assert math.isclose(r["cost"], 500.0 * SPREAD_PCT / 2, rel_tol=1e-9)
 
 
 def test_drift_under_the_minimum_is_not_traded():
@@ -211,3 +211,27 @@ def test_the_measured_entry_cost_brackets_the_assumed_spread():
     assumption is stale and every conclusion drawn from it is suspect."""
     r = entry_premium(load_position(), read_signals()[0])
     assert SPREAD_PCT / 2 < r["implied_round_trip"] < SPREAD_PCT * 2
+
+
+def test_a_rotation_costs_one_round_trip_not_two():
+    """Moving $100 from SOL to BTC is a sell and a buy: half a spread each, one
+    SPREAD_PCT in total. Charging each leg a full spread doubled the drag and
+    made the signal look twice as expensive as it is -- against the signal, and
+    in favour of the argument already made for not following it."""
+    p0 = {"BTC": 100.0, "SOL": 100.0}
+    sigs = [_sig("2026-10-01T00:00:00Z", {"BTC": 0.0, "SOL": 1.0, "CASH": 0.0}, p0),
+            _sig("2026-10-02T00:00:00Z", {"BTC": 1.0, "SOL": 0.0, "CASH": 0.0}, p0)]
+    r = follow(sigs, 1000.0)
+    entry = 1000.0 * SPREAD_PCT / 2          # cash -> SOL
+    rotation = 1000.0 * SPREAD_PCT           # SOL -> BTC, two legs
+    assert math.isclose(r["cost"], entry + rotation, rel_tol=1e-9)
+
+
+def test_the_strategy_and_its_benchmark_are_charged_on_the_same_scale():
+    """The regression that was missed: follow() and hold() buy the identical
+    thing on day one, so their entry cost must be identical. Any gap is the
+    tracker tilting the comparison before a single price has moved."""
+    sigs = [_sig("2026-10-01T00:00:00Z", {"BTC": 1.0, "CASH": 0.0}, {"BTC": 100.0}),
+            _sig("2026-10-02T00:00:00Z", {"BTC": 1.0, "CASH": 0.0}, {"BTC": 100.0})]
+    assert math.isclose(follow(sigs, 1000.0)["cost"],
+                        hold("BTC", sigs, 1000.0)["cost"], rel_tol=1e-9)
