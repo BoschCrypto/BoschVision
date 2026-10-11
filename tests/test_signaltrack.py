@@ -11,7 +11,8 @@ from dataclasses import asdict
 
 import pytest
 from hf_trading_bot.signaltrack import (
-    Signal, Position, follow, hold, frozen, actual, value_position,
+    Signal, Position, Trade, follow, hold, frozen, actual, value_position,
+    apply_trades, read_trades, LEDGER,
     entry_premium, load_position, read_signals, report,
     SPREAD_PCT, LOG, POSITION)
 
@@ -235,3 +236,56 @@ def test_the_strategy_and_its_benchmark_are_charged_on_the_same_scale():
             _sig("2026-10-02T00:00:00Z", {"BTC": 1.0, "CASH": 0.0}, {"BTC": 100.0})]
     assert math.isclose(follow(sigs, 1000.0)["cost"],
                         hold("BTC", sigs, 1000.0)["cost"], rel_tol=1e-9)
+
+
+# --- the ledger --------------------------------------------------------------
+
+
+def test_the_denominator_survives_a_realised_loss():
+    """Capital must stay pinned to what he put in. Recomputing it as
+    paid-plus-cash after a losing sale shrinks the denominator by the amount
+    lost, which reports a smaller loss than actually happened."""
+    live = Position(at="2026-10-11T09:58:46-04:00",
+                    units={"BTC": 0.01}, basis={"BTC": 900.0}, cash=99.0,
+                    committed=1000.0, realized=-1.0)
+    assert live.capital == 1000.0            # not 999.0
+    v = value_position(live, {"BTC": 90000.0})
+    assert math.isclose(v["pnl"], -1.0, abs_tol=1e-9)
+
+
+def test_replaying_the_ledger_cannot_sell_units_that_are_not_there():
+    """A fat-fingered quantity would otherwise produce a negative holding and a
+    sleeve value that looks fine."""
+    pos = _pos()
+    t = Trade(at="2026-10-11T10:00:00-04:00", asset="SOL", side="sell",
+              units=99.0, notional=10.0, basis_delta=-10.0)
+    with pytest.raises(ValueError, match="sold below zero"):
+        apply_trades(pos, [t])
+
+
+def test_a_sale_realises_proceeds_less_disposed_basis():
+    t = Trade(at="2026-10-11T09:58:33-04:00", asset="SOL", side="sell",
+              units=0.2606, notional=28.22, basis_delta=-28.88)
+    assert math.isclose(t.realized, -0.66, abs_tol=1e-9)
+    assert Trade(at="x", asset="BTC", side="buy", units=1.0,
+                 notional=10.0, basis_delta=10.0).realized == 0.0
+
+
+def test_a_buy_that_removes_basis_is_rejected():
+    with pytest.raises(ValueError, match="a buy adds cost basis"):
+        Trade(at="x", asset="BTC", side="buy", units=1.0,
+              notional=10.0, basis_delta=-10.0).validate()
+
+
+@pytest.mark.skipif(not POSITION.exists() or not LEDGER.exists(),
+                    reason="live records not present")
+def test_the_replayed_ledger_matches_the_brokers_own_records():
+    """The whole tracker rests on its baseline matching the account. Broker
+    figures read back after the fills on 2026-10-11."""
+    live = apply_trades(load_position(), read_trades())
+    for a, (u, b) in {"SOL": (0.53143, 58.90), "BTC": (0.00532545, 444.27),
+                      "SUI": (213.682, 234.95), "NEAR": (29.14, 147.08)}.items():
+        assert abs(live.units[a] - u) < 1e-8, f"{a} units"
+        assert abs(live.basis[a] - b) < 0.005, f"{a} basis"
+    assert abs(live.cash - 404.98) < 0.005
+    assert abs(live.capital - 1290.84) < 0.005   # float sum of the four fills

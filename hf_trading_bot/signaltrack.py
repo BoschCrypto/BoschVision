@@ -37,6 +37,7 @@ from pathlib import Path
 
 LOG = Path("data/signals/adam.jsonl")
 POSITION = Path("data/signals/position.json")
+LEDGER = Path("data/signals/ledger.jsonl")
 
 # Round-trip cost of moving $1 of notional on Robinhood crypto. Measured, not assumed.
 SPREAD_PCT = 0.0189
@@ -173,6 +174,8 @@ class Position:
     cash: float                                    # uninvested sleeve cash
     orders: dict = field(default_factory=dict)     # asset -> broker order id
     note: str = ""
+    committed: float | None = None   # capital first put in; None means "this IS entry"
+    realized: float = 0.0            # cumulative realised P&L from closed units
 
     @property
     def invested(self) -> float:
@@ -180,8 +183,16 @@ class Position:
 
     @property
     def capital(self) -> float:
-        """Sleeve capital at entry: paid plus left in cash. The denominator for
-        every return this module prints about the real position."""
+        """Capital originally committed to the sleeve -- the denominator for every
+        return this module prints.
+
+        At entry this is simply paid-plus-cash. After trading it must NOT be
+        recomputed that way: realised losses shrink paid-plus-cash, which would
+        quietly shrink the denominator and inflate the reported return by exactly
+        the amount that was lost. `committed` pins it to the money he actually
+        put in."""
+        if self.committed is not None:
+            return self.committed
         return self.invested + self.cash
 
     def fill_price(self, asset: str) -> float:
@@ -268,6 +279,90 @@ def entry_premium(pos: Position, signal: Signal) -> dict:
             "paid": paid, "at_mark": at_mark, "excess": paid - at_mark}
 
 
+@dataclass
+class Trade:
+    """One real fill, from the broker's order record.
+
+    `notional` is the USD the broker moved, fees included. `basis_delta` is the
+    signed change in cost basis -- the notional on a buy, minus the DISPOSED
+    basis on a sell. The disposed figure comes from the broker's own lot
+    accounting rather than being recomputed here, because guessing a disposal
+    method and quietly getting it wrong would misstate realised P&L.
+    """
+    at: str
+    asset: str
+    side: str                 # "buy" | "sell"
+    units: float
+    notional: float
+    basis_delta: float
+    order_id: str = ""
+    note: str = ""
+
+    @property
+    def realized(self) -> float:
+        """Only a sale closes units, so only a sale realises anything."""
+        return 0.0 if self.side == "buy" else self.notional + self.basis_delta
+
+    def validate(self) -> None:
+        if self.side not in ("buy", "sell"):
+            raise ValueError(f"side is {self.side!r}, not buy or sell")
+        if self.units <= 0 or self.notional <= 0:
+            raise ValueError("units and notional are magnitudes; both must be positive")
+        if self.side == "buy" and self.basis_delta <= 0:
+            raise ValueError("a buy adds cost basis")
+        if self.side == "sell" and self.basis_delta >= 0:
+            raise ValueError("a sale removes cost basis")
+
+
+def log_trade(t: Trade, path: Path = LEDGER) -> None:
+    t.validate()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        f.write(json.dumps(asdict(t)) + "\n")
+
+
+def read_trades(path: Path = LEDGER) -> list[Trade]:
+    if not path.exists():
+        return []
+    out = [Trade(**json.loads(ln)) for ln in path.read_text().splitlines() if ln.strip()]
+    return sorted(out, key=lambda t: t.at)
+
+
+def apply_trades(pos: Position, trades: list[Trade]) -> Position:
+    """Replay real fills onto the opening position to get the live sleeve.
+
+    The opening Position stays untouched on disk: it is the control arm of the
+    experiment -- what he would hold had he never rebalanced. Overwriting it
+    with the live state would delete the only thing the signal has to beat.
+    """
+    units = dict(pos.units)
+    basis = dict(pos.basis)
+    cash = pos.cash
+    realized = pos.realized
+    for t in trades:
+        sign = 1 if t.side == "buy" else -1
+        units[t.asset] = units.get(t.asset, 0.0) + sign * t.units
+        basis[t.asset] = basis.get(t.asset, 0.0) + t.basis_delta
+        cash -= sign * t.notional
+        realized += t.realized
+        if units[t.asset] < -1e-12:
+            raise ValueError(f"{t.asset} sold below zero at {t.at} -- ledger is wrong")
+    return Position(at=trades[-1].at if trades else pos.at,
+                    units=units, basis=basis, cash=cash,
+                    orders={t.asset: t.order_id for t in trades} or pos.orders,
+                    note="derived by replaying the ledger onto the opening position",
+                    committed=pos.capital, realized=realized)
+
+
+def live_position(pos_path: Path = POSITION, led_path: Path = LEDGER) -> Position | None:
+    """The sleeve as it stands now: opening fills plus every trade since."""
+    opening = load_position(pos_path)
+    if opening is None:
+        return None
+    trades = read_trades(led_path)
+    return apply_trades(opening, trades) if trades else opening
+
+
 def opening_report(pos: Position, signals: list[Signal]) -> str:
     """What can honestly be said when only one signal has been logged: where the
     real money started, and what entry cost. No comparison -- there is nothing
@@ -301,12 +396,15 @@ def opening_report(pos: Position, signals: list[Signal]) -> str:
 
 
 def report(start_usd: float | None = None, own_weights: dict | None = None,
-           path: Path = LOG, position: Position | None = None) -> str:
+           path: Path = LOG, position: Position | None = None,
+           opening: Position | None = None) -> str:
     """Compare following the signal against the alternatives.
 
-    `position`, when given, supplies the starting capital and adds the AS FILLED
-    line. Passing it is strongly preferred: it anchors every percentage to money
-    he actually committed instead of a round number chosen for convenience.
+    `position` is the LIVE sleeve and supplies the starting capital, so every
+    percentage is anchored to money actually committed rather than a round
+    number chosen for convenience. `opening` is the untouched entry position --
+    the control arm. Once real rebalancing begins the live sleeve IS the follow
+    arm, and without the control there is nothing left to measure it against.
     """
     sigs = read_signals(path)
     if position is None and start_usd is None:
@@ -334,7 +432,10 @@ def report(start_usd: float | None = None, own_weights: dict | None = None,
     ]
     if position is not None:
         a = actual(position, sigs)
-        lines.append(f"  your sleeve as filled: ${a['value']:>10,.2f}  ({a['ret']:+.2%})")
+        lines.append(f"  your sleeve, live    : ${a['value']:>10,.2f}  ({a['ret']:+.2%})")
+    if opening is not None and position is not None and opening.units != position.units:
+        c = value_position(opening, sigs[-1].prices)
+        lines.append(f"  had you never traded : ${c['value']:>10,.2f}  ({c['ret']:+.2%})")
     if own_weights:
         z = frozen(own_weights, sigs, start_usd)
         lines.append(f"  a paper sleeve frozen: ${z['value']:>10,.2f}  ({z['value']/start_usd-1:+.2%})")
@@ -342,6 +443,9 @@ def report(start_usd: float | None = None, own_weights: dict | None = None,
         "",
         f"  spread paid as % of starting capital: {f['cost']/start_usd:.2%}",
     ]
+    if position is not None and position.realized:
+        lines.append(f"  realised so far: ${position.realized:+,.2f} "
+                     f"(short-term; crypto has no wash-sale rule)")
     if f["n"] < 20:
         lines.append("")
         lines.append(f"n={f['n']}. This is a LOG, not a result. Do not act on it.")
