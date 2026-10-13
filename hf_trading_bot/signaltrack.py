@@ -461,3 +461,80 @@ def report(start_usd: float | None = None, own_weights: dict | None = None,
         lines.append("")
         lines.append(f"n={f['n']}. This is a LOG, not a result. Do not act on it.")
     return "\n".join(lines)
+
+
+# --- what the published weights themselves reveal ----------------------------
+#
+# These answer questions about the SIGNAL, not about its performance. That
+# distinction decides what is worth running: a signal's turnover is nearly
+# deterministic and converges in weeks, while its risk-adjusted return is a
+# noisy estimate that needs decades. See the power note in turnover_summary.
+
+
+def unit_lattice(signals: list[Signal], denom: int = 44) -> dict:
+    """Test whether every published weight is an exact multiple of 1/denom.
+
+    Adam's posts fit k/44 to within the rounding of a one-decimal percentage,
+    which says the allocation is a discrete unit book rather than optimiser
+    output. That matters for cost: the smallest possible move is one unit, so
+    every change carries a FLOOR on the turnover it generates.
+
+    This is a falsifiable claim, which is the point of keeping it as a check. A
+    single post at, say, 20.0% breaks it, and the model should be dropped the
+    day it does rather than quietly retained.
+    """
+    worst, offender = 0.0, None
+    for s in signals:
+        for a, w in s.weights.items():
+            u = w * denom
+            err = abs(u - round(u))
+            if err > worst:
+                worst, offender = err, (s.at[:10], a, w)
+    # one decimal place on a percentage is +/-0.0005 of weight, i.e. this in units
+    tol = 0.0005 * denom
+    return {"denom": denom, "max_error_units": worst, "tolerance_units": tol,
+            "holds": worst <= tol, "worst_case": offender,
+            "unit_pct": 1.0 / denom}
+
+
+def turnover(signals: list[Signal]) -> list[dict]:
+    """One-way turnover between consecutive publications.
+
+    Half the sum of absolute weight changes: the fraction of the sleeve that
+    has to move. Rotating that fraction from one asset to another is two legs,
+    each crossing half the spread, so the cost is turnover * SPREAD_PCT.
+    """
+    out = []
+    for a, b in zip(signals, signals[1:]):
+        keys = set(a.weights) | set(b.weights)
+        t = sum(abs(b.weights.get(k, 0.0) - a.weights.get(k, 0.0)) for k in keys) / 2
+        moved = {k: b.weights.get(k, 0.0) - a.weights.get(k, 0.0) for k in keys
+                 if abs(b.weights.get(k, 0.0) - a.weights.get(k, 0.0)) > 1e-9}
+        out.append({"from": a.at, "to": b.at, "turnover": t,
+                    "cost": t * SPREAD_PCT, "moved": moved})
+    return out
+
+
+def turnover_summary(signals: list[Signal], posts_per_year: int = 365) -> dict:
+    """Mean turnover, the annualised drag it implies, and an honest interval.
+
+    The interval is the whole point. A point estimate off three transitions is
+    not a measurement, and reporting one without its width would be the same
+    error as reporting a backtest without its sample size.
+    """
+    ts = [r["turnover"] for r in turnover(signals)]
+    n = len(ts)
+    if n < 2:
+        return {"n": n, "note": "need at least 2 transitions"}
+    m = sum(ts) / n
+    sd = (sum((t - m) ** 2 for t in ts) / (n - 1)) ** 0.5
+    # Student t, two-sided 95%, for the small n this will realistically see
+    t_crit = {2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
+              8: 2.306, 9: 2.262, 10: 2.228}.get(n - 1, 1.96)
+    half = t_crit * sd / (n ** 0.5)
+    return {"n": n, "mean": m, "sd": sd,
+            "no_change_rate": sum(1 for t in ts if t == 0) / n,
+            "annual_drag": m * SPREAD_PCT * posts_per_year,
+            "ci": (max(m - half, 0.0), m + half),
+            "annual_ci": (max(m - half, 0.0) * SPREAD_PCT * posts_per_year,
+                          (m + half) * SPREAD_PCT * posts_per_year)}

@@ -12,7 +12,7 @@ from dataclasses import asdict
 import pytest
 from hf_trading_bot.signaltrack import (
     Signal, Position, Trade, follow, hold, frozen, actual, value_position,
-    apply_trades, read_trades, LEDGER,
+    apply_trades, read_trades, turnover, turnover_summary, unit_lattice, LEDGER,
     entry_premium, load_position, read_signals, report,
     SPREAD_PCT, LOG, POSITION)
 
@@ -311,3 +311,54 @@ def test_basis_left_on_a_fully_sold_asset_is_refused():
     with pytest.raises(ValueError, match="fully sold but"):
         apply_trades(_pos(), [Trade(at="x", asset="SOL", side="sell", units=1.0,
                                     notional=95.0, basis_delta=-40.0)])
+
+
+# --- what the weights themselves reveal --------------------------------------
+
+
+def test_the_unit_lattice_is_falsifiable():
+    """The claim is that every published weight is an exact k/44. A check that
+    cannot fail is not evidence, so this pins that an off-lattice weight is
+    actually rejected."""
+    on = _sig("2026-10-09T20:12:00Z",
+              {"BTC": 14/44, "SUI": 8/44, "NEAR": 5/44, "SOL": 3/44, "CASH": 14/44},
+              {"BTC": 1, "SUI": 1, "NEAR": 1, "SOL": 1})
+    assert unit_lattice([on])["holds"]
+    off = _sig("2026-10-10T20:12:00Z",
+               {"BTC": 0.20, "SUI": 0.20, "NEAR": 0.20, "SOL": 0.20, "CASH": 0.20},
+               {"BTC": 1, "SUI": 1, "NEAR": 1, "SOL": 1})
+    assert not unit_lattice([off])["holds"], "20% is not a multiple of 1/44"
+
+
+def test_turnover_is_one_way_not_double_counted():
+    """Rotating 10% of the sleeve from SOL to BTC moves 10%, not 20%. Summing
+    absolute changes without halving would double every cost this produces."""
+    p = {"BTC": 1.0, "SOL": 1.0}
+    r = turnover([_sig("2026-10-09T00:00:00Z", {"BTC": 0.4, "SOL": 0.2, "CASH": 0.4}, p),
+                  _sig("2026-10-10T00:00:00Z", {"BTC": 0.5, "SOL": 0.1, "CASH": 0.4}, p)])
+    assert math.isclose(r[0]["turnover"], 0.10, rel_tol=1e-9)
+    assert math.isclose(r[0]["cost"], 0.10 * SPREAD_PCT, rel_tol=1e-9)
+
+
+def test_an_unchanged_signal_generates_no_turnover():
+    w = {"BTC": 0.5, "CASH": 0.5}
+    r = turnover([_sig("2026-10-10T00:00:00Z", w, {"BTC": 1.0}),
+                  _sig("2026-10-11T00:00:00Z", w, {"BTC": 1.0})])
+    assert r[0]["turnover"] == 0.0 and r[0]["moved"] == {}
+
+
+def test_the_turnover_interval_is_reported_and_is_wide_at_small_n():
+    """A point estimate off three transitions is not a measurement. If this ever
+    returns a mean without an interval, the number will get quoted as fact."""
+    p = {"BTC": 1.0, "SOL": 1.0}
+    # turnover of 2%, then 0%, then 6% -- real signals vary, and it is that
+    # variance the interval is meant to expose
+    btc = [0.40, 0.42, 0.42, 0.48]
+    sigs = [_sig(f"2026-10-0{i+1}T00:00:00Z",
+                 {"BTC": b, "SOL": 0.60 - b, "CASH": 0.0}, p)
+            for i, b in enumerate(btc)]
+    s = turnover_summary(sigs)
+    assert s["n"] == 3 and math.isclose(s["no_change_rate"], 1/3, rel_tol=1e-9)
+    assert s["ci"][1] > s["mean"] > s["ci"][0], "a varying sample must yield a real interval"
+    assert s["ci"][0] == 0.0, "turnover cannot be negative; the bound is clipped at zero"
+    assert turnover_summary(sigs[:1])["n"] == 0
