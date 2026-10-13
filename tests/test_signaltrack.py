@@ -281,11 +281,33 @@ def test_a_buy_that_removes_basis_is_rejected():
                     reason="live records not present")
 def test_the_replayed_ledger_matches_the_brokers_own_records():
     """The whole tracker rests on its baseline matching the account. Broker
-    figures read back after the fills on 2026-10-11."""
+    figures read back after the fills on 2026-10-12."""
     live = apply_trades(load_position(), read_trades())
-    for a, (u, b) in {"SOL": (0.53143, 58.90), "BTC": (0.00532545, 444.27),
-                      "SUI": (213.682, 234.95), "NEAR": (29.14, 147.08)}.items():
+    for a, (u, b) in {"BTC": (0.00593502, 494.33), "SUI": (213.682, 234.95),
+                      "NEAR": (29.14, 147.08)}.items():
         assert abs(live.units[a] - u) < 1e-8, f"{a} units"
         assert abs(live.basis[a] - b) < 0.005, f"{a} basis"
-    assert abs(live.cash - 404.98) < 0.005
+    assert "SOL" not in live.units, "SOL was fully exited 2026-10-12"
+    assert abs(live.cash - 408.98) < 0.005
     assert abs(live.capital - 1290.84) < 0.005   # float sum of the four fills
+
+
+def test_a_fully_exited_asset_leaves_the_sleeve():
+    """A zero-unit entry would force every later report to carry a price for
+    something no longer held — the day that coin stops being quoted, the whole
+    report raises instead of printing."""
+    pos = _pos()
+    live = apply_trades(pos, [Trade(at="2026-10-12T20:54:46-04:00", asset="SOL",
+                                    side="sell", units=1.0, notional=95.0,
+                                    basis_delta=-100.0)])
+    assert "SOL" not in live.units and "SOL" not in live.basis
+    assert math.isclose(live.realized, -5.0, abs_tol=1e-9)
+    value_position(live, {"BTC": 100000.0})      # no SOL price needed, must not raise
+
+
+def test_basis_left_on_a_fully_sold_asset_is_refused():
+    """Units at zero with basis remaining means the disposal was mis-recorded.
+    Carrying it would overstate the sleeve by that amount forever."""
+    with pytest.raises(ValueError, match="fully sold but"):
+        apply_trades(_pos(), [Trade(at="x", asset="SOL", side="sell", units=1.0,
+                                    notional=95.0, basis_delta=-40.0)])

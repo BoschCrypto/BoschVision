@@ -347,6 +347,17 @@ def apply_trades(pos: Position, trades: list[Trade]) -> Position:
         realized += t.realized
         if units[t.asset] < -1e-12:
             raise ValueError(f"{t.asset} sold below zero at {t.at} -- ledger is wrong")
+    # A fully exited asset leaves the sleeve. Keeping a zero-unit entry would
+    # oblige every future report to carry a price for something no longer held,
+    # so the day a dropped coin stops being quoted the whole report fails. A
+    # leftover basis on zero units means the disposal was mis-recorded, which is
+    # worth refusing rather than silently carrying.
+    for a in [a for a, u in units.items() if abs(u) < 1e-12]:
+        if abs(basis[a]) > 0.005:
+            raise ValueError(f"{a} is fully sold but ${basis[a]:,.2f} of basis "
+                             f"remains -- the disposal was mis-recorded")
+        del units[a]
+        del basis[a]
     return Position(at=trades[-1].at if trades else pos.at,
                     units=units, basis=basis, cash=cash,
                     orders={t.asset: t.order_id for t in trades} or pos.orders,
