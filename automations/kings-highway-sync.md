@@ -39,7 +39,8 @@ THE APP
   the coverage check; never write to it.
 - Confirmed fixed (weekly, recurring=true) list, confirmed by Martin on
   2026-10-11: Sunday 8:00–10:00 AM "P120 8am" and Sunday 12:00–1:00 PM "OB2"
-  (both from 2026-10-11). Everything else is a one-off until Martin says
+  (both from 2026-10-11); Monday 12:00–1:30 PM "Emma Stroop" (from 2026-10-12,
+  confirmed 2026-10-13). Everything else is a one-off until Martin says
   otherwise. If a fixed lesson is missing from today's email, tell him once.
 
 THE EMAILS (all from email@racquetdesk.com; times are US Eastern)
