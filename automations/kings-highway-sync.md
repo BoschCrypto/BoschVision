@@ -1,12 +1,14 @@
 # Kings Highway → Apex Home daily sync
 
-Runs as a Claude Code Routine every day at 7:50 AM US Eastern (the
-RacquetDesk "Daily Appointments" email lands at ~7:00 AM). It reads Martin's
+Runs as a Claude Code Routine every hour from 6:50 AM to 10:50 PM US Eastern
+(the RacquetDesk "Daily Appointments" email lands at ~7:00 AM; reservations
+arrive any time). Martin pre-approved it: it scans only RacquetDesk email and
+inserts without asking; quiet runs send no notification. It reads Martin's
 Kings Highway Tennis Club emails and adds any lesson missing from his
 coaching schedule in the Apex Home app. It only ever **inserts**; deletions,
 renames and "make this weekly" are reported for Martin to decide.
 
-Routine: `trig_01BGfgNEFyNMcqnu8xUaVbxC`, cron `CRON_TZ=America/New_York 50 7 * * *`.
+Routine: `trig_01BGfgNEFyNMcqnu8xUaVbxC`, cron `CRON_TZ=America/New_York 50 6-22 * * *`.
 It fires into the Claude Code session that set it up (session_01Kai36hFoCxRhb2SMR8vcKQ),
 because that session holds the **Gmail** and **Lovable** connectors; routines that
 start a fresh session get no connectors here (the first routine,
