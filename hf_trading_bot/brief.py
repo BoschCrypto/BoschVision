@@ -223,7 +223,10 @@ def render(log=LOG, px: dict | None = None, store=P.STORE) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python3 -m hf_trading_bot.brief")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("brief", help="re-run the analysis on the stored log")
+    br = sub.add_parser("brief", help="re-run the analysis on the stored log")
+    br.add_argument("--prices", default=None,
+                    help='live broker marks, which are always better than the '
+                         'marks stored with a signal: "BTC=81508.87,SUI=1.0229,..."')
     lg = sub.add_parser("log", help="record a new signal, then analyse it")
     lg.add_argument("--at", required=True,
                     help="ISO8601 WITH a UTC offset, when the post was PUBLISHED")
@@ -249,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         log_signal(sig)
         print(f"logged {sig.at}\n")
-    print(render(px=parse_pairs(a.prices) if a.cmd == "log" else None))
+    print(render(px=parse_pairs(a.prices) if a.prices else None))
     if load_position() is None:
         print("\n(no position on file, so the plan section is skipped)")
     return 0

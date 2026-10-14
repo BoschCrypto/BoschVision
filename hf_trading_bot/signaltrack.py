@@ -584,6 +584,45 @@ def apply_trades(pos: Position, trades: list[Trade]) -> Position:
                     committed=pos.capital, realized=realized)
 
 
+def reconcile(pos: Position, units: dict, basis: dict,
+              tol_units: float = 1e-8, tol_usd: float = 0.01) -> dict:
+    """Check the replayed sleeve against the broker's own position records.
+
+    Everything in this module is built on `apply_trades` replaying the ledger
+    onto the opening fills. If that replay drifts from reality -- a fill logged
+    at the wrong size, a sale recorded twice, an order that filled differently
+    from the confirmation screen -- then every arm, every weight and every
+    return is computed against a sleeve that does not exist. Nothing checked
+    that until now; the ledger was simply trusted.
+
+    This is the one place in the project where a number can be compared against
+    an authority rather than against another of our own numbers, which is worth
+    more than any internal consistency check.
+
+    Reports EVERY discrepancy before raising, rather than failing on the first.
+    A reconciliation that stops at the first mismatch tells you the least useful
+    thing it knows: one leg is wrong, and nothing about whether the rest are.
+    """
+    rows, bad = [], []
+    for a in sorted(set(units) | set(pos.units) | set(basis) | set(pos.basis)):
+        mine_u, theirs_u = pos.units.get(a, 0.0), units.get(a, 0.0)
+        mine_b, theirs_b = pos.basis.get(a, 0.0), basis.get(a, 0.0)
+        du, db = mine_u - theirs_u, mine_b - theirs_b
+        ok = abs(du) <= tol_units and abs(db) <= tol_usd
+        rows.append({"asset": a, "units": mine_u, "broker_units": theirs_u,
+                     "d_units": du, "basis": mine_b, "broker_basis": theirs_b,
+                     "d_basis": db, "ok": ok})
+        if not ok:
+            bad.append(f"{a}: ledger {mine_u:.8f} units / ${mine_b:,.2f} basis vs "
+                       f"broker {theirs_u:.8f} / ${theirs_b:,.2f}")
+    if bad:
+        raise ValueError("the replayed ledger does not match the broker:\n  "
+                         + "\n  ".join(bad)
+                         + "\nFix the ledger before trusting any number here -- "
+                           "every arm is marked against this sleeve.")
+    return {"ok": True, "rows": rows, "checked": len(rows)}
+
+
 def live_position(pos_path: Path = POSITION, led_path: Path = LEDGER) -> Position | None:
     """The sleeve as it stands now: opening fills plus every trade since."""
     opening = load_position(pos_path)
@@ -834,4 +873,20 @@ def status(prices: dict | None = None, log: Path = LOG,
 
 
 if __name__ == "__main__":        # python -m hf_trading_bot.signaltrack
-    print(status())
+    # Both daily routines already call this module, so the way to give them the
+    # risk decomposition is to improve the command rather than to rewrite two
+    # stored prompts by hand -- retyping an 8KB prompt to change one line is the
+    # transcription risk this project keeps being bitten by.
+    #
+    # The import lives HERE, inside __main__, and not at module scope. The rule
+    # that the price store is for RISK and never for marking the sleeve is kept
+    # honest by signaltrack's own functions having no access to it: `prices` is
+    # Crypto.com data sitting 0.19-0.42% off the broker's marks, which is
+    # irrelevant to a volatility and a real error in a valuation.
+    try:
+        from .brief import render
+    except Exception as e:          # loud, and still prints what it can
+        print(f"[risk layer unavailable -- {e}]\n")
+        print(status())
+    else:
+        print(render())

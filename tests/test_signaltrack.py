@@ -14,7 +14,7 @@ from hf_trading_bot.signaltrack import (
     Signal, Position, Trade, follow, hold, frozen, actual, value_position,
     apply_trades, read_trades, turnover, turnover_summary, unit_lattice,
     latest_prices, naive_weights, _value, LEDGER,
-    entry_premium, load_position, read_signals, report, log_signal,
+    entry_premium, load_position, read_signals, report, log_signal, reconcile,
     SPREAD_PCT, LOG, POSITION)
 
 
@@ -634,3 +634,27 @@ def test_a_return_needs_a_positive_denominator():
     op = _pos(units={"BTC": 1.0}, basis={"BTC": 0.0}, cash=0.0)
     with pytest.raises(ValueError, match="positive denominator"):
         value_position(op, {"BTC": 100.0})
+
+
+def test_reconciliation_against_the_broker_lists_every_mismatch():
+    """The replay of the ledger is what every arm is marked against, and nothing
+    checked it against an authority until 2026-10-14. A reconciliation that stops
+    at the first bad leg tells you the least useful thing it knows."""
+    pos = _pos(units={"BTC": 1.0, "SUI": 100.0, "NEAR": 10.0},
+               basis={"BTC": 100.0, "SUI": 100.0, "NEAR": 50.0}, cash=10.0)
+    assert reconcile(pos, {"BTC": 1.0, "SUI": 100.0, "NEAR": 10.0},
+                     {"BTC": 100.0, "SUI": 100.0, "NEAR": 50.0})["ok"]
+    with pytest.raises(ValueError) as e:
+        reconcile(pos, {"BTC": 1.0, "SUI": 99.0, "NEAR": 10.0},
+                  {"BTC": 123.0, "SUI": 100.0, "NEAR": 50.0})
+    msg = str(e.value)
+    assert "SUI" in msg and "BTC" in msg, f"only one leg was reported: {msg}"
+    assert "NEAR" not in msg, "a matching leg must not be reported as a mismatch"
+
+
+def test_an_asset_the_broker_holds_but_the_ledger_does_not_is_a_mismatch():
+    """The direction that matters most: a fill that happened and was never
+    logged. A sleeve short a whole position reads as a loss."""
+    pos = _pos(units={"BTC": 1.0}, basis={"BTC": 100.0}, cash=10.0)
+    with pytest.raises(ValueError, match="SOL"):
+        reconcile(pos, {"BTC": 1.0, "SOL": 5.0}, {"BTC": 100.0, "SOL": 500.0})
