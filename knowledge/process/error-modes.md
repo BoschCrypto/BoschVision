@@ -144,3 +144,110 @@ candidates and attack them with primary sources and controls in the SAME step,
 rather than reporting enthusiasm and attacking afterwards. Three of the six errors
 were preceded by a superlative — "most interesting", "standout". Treat that phrase
 as a signal to slow down, not as a conclusion.
+
+---
+
+# Second pass, 2026-10-14
+
+Added after auditing the signal tracker rather than reasoning about it. Nine
+defects, all demonstrated against the live log before being touched. They are
+three mechanisms, not nine mistakes, and two of them are already in the file
+above wearing different clothes.
+
+---
+
+## Mode 4 — a wrong number arriving with no error raised
+
+One primitive, `_value()`, skipped any holding it could not price (`if a in
+prices`). A missing price therefore became a sleeve quietly short by that
+holding's entire value. Five call sites hit it in three days:
+
+| Where | What it would have reported |
+|---|---|
+| `frozen()` | a benchmark short by a whole leg |
+| control arm | **raised** — the only one that failed loudly, and so the only one found on the day |
+| `follow()` | **$490.55 against a true ~$990**, live, silently |
+| `value_position()` | a duplicate guard with a *different* rule (any NAMED asset vs any asset HELD), so a zero-unit leftover raised from one path and valued cleanly from the other |
+| `hold()` | `KeyError` the day Adam drops BTC — the benchmark arm dying because the signal stopped mentioning its asset |
+
+The `follow()` instance stayed off the real log by luck: Monday's screenshot
+showed four lines and no SOL, and it was transcribed with an explicit `SOL: 0.0`
+instead of literally. A faithful transcription would have made the arm wrong.
+
+> **CHECK — prefer the loud failure, every time.** Between a function that
+> raises and one that returns a plausible number, take the raise. The control
+> arm's crash cost ten minutes. Its silent siblings would have cost weeks of a
+> wrong benchmark that nobody had reason to re-derive.
+>
+> **And one rule per question.** Two guards asking the same thing drift apart;
+> that is what they do. Delete the copy, keep the primitive strict.
+
+Corollary, learned the same day: **an asset absent from a published set is at
+zero, not unchanged.** The weights sum to 100% with cash named, so there is no
+room left for a holding the post omits. Reading an omission as "no change" is
+how a sold-out leg stayed in a book.
+
+---
+
+## Mode 5 — the error that agrees with you is the one that survives
+
+This is the mode with the worst record and no code fix. Six instances, one
+mechanism: **a result was not re-derived because it pointed where I was already
+pointing.**
+
+| Error | Direction it ran |
+|---|---|
+| `pending_deposits` added to `total_value` | flattered the portfolio (29% inflation; every concentration read safer) |
+| age stated wrong | flattered the portfolio |
+| `follow()` charged the full spread per leg | flattered my scepticism of the paid signal (made it look 2x as expensive) |
+| "a missed forward understates the cost of following" | flattered my scepticism — and was **false**: closing the gap moved the follower +$2.89, because a skipped rebalance removes its cost *and* its effect, and the effect dominates |
+| `follow()`'s cost parked as negative cash, escaping every price move | flattered the paid signal by $9.45 on a doubling — the one that ran the *other* way, and it sat unfound longest |
+| a duplicate log reading as a free no-change | flattered the signal: implied drag 11.7%/yr → 9.4%/yr, $30/yr cheaper |
+
+Note the fifth row. Four errors ran toward scepticism, two toward the signal,
+and the one that contradicted my prior survived longest of all — which rules out
+"I am biased against the subscription" and leaves the plainer reading: **whatever
+agrees with the last thing I concluded does not get checked.**
+
+> **CHECK — when a result agrees with you, re-derive it a second way before
+> reporting it.** Cheap version: before saying "X would cause Y", compute X both
+> ways. That took one script and killed a claim I had made twice.
+>
+> This is also why `knowledge/process/hypotheses.md` exists: a prediction
+> written down *before* the data arrives cannot be quietly reshaped by it.
+
+---
+
+## Mode 6 — a percentage with no stated base
+
+Four instances, all the same missing noun.
+
+- `pending_deposits` inside `total_value` — inflated the denominator 29%.
+- the crypto sleeve used as the base for whole-signal weights, **twice** —
+  reported BTC 12.9pp off target when the real drift was 2.1pp.
+- the risk limits in `knowledge/process/risk-limits.md` still do not name their
+  base, which is why tech reads 23% one way and 43% the other. Unresolved, and
+  Waldo's call, not mine.
+
+> **CHECK — no bare percentage.** Every figure carries its base in the same
+> sentence it appears in. `total_value` already excludes `pending_deposits`;
+> signal weights sum to 100% *with cash as a named slice*, so the invested
+> sleeve is never the denominator.
+
+---
+
+## What actually caught these
+
+Not care. Of the nine, **five were found by computing something that had been
+asserted**, and the audit that found the live `follow()` bug was mechanical:
+grep every call site of the primitive that had already failed twice, and check
+each one. No judgement involved.
+
+The two that intuition did find were found while *sizing a real trade* — doing
+the arithmetic on live money, not reviewing code.
+
+Consistent with "Where weight belongs" above: the errors are in generative
+judgement, the saves are in verification. Operating consequence for this
+project specifically: **when a bug is found, grep for its shape rather than
+fixing the instance.** Every one of the five `_value` call sites was the same
+bug; four were still live after the first was fixed.
