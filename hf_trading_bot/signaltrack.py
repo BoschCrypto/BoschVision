@@ -406,9 +406,33 @@ def opening_report(pos: Position, signals: list[Signal]) -> str:
     return "\n".join(lines)
 
 
+def latest_prices(signals: list[Signal], extra: dict | None = None) -> tuple[dict, dict]:
+    """The most recent price the log holds for EVERY asset it has ever priced.
+
+    The control arm keeps holding what it bought, so once a signal drops an
+    asset the latest signal's price dict no longer covers the whole frozen
+    sleeve and marking it raises. This walks the log newest-first and carries
+    forward the last price seen for each asset.
+
+    Returns (prices, as_of). `as_of` names the signal each price came from, so a
+    caller can say which legs are being marked on a stale row instead of
+    presenting a mixed-date valuation as though it were current. `extra`
+    overrides with live quotes, which is always preferable when they are to hand.
+    """
+    prices: dict[str, float] = {}
+    as_of: dict[str, str] = {}
+    for sig in reversed(signals):          # newest first
+        for a, px in sig.prices.items():
+            if a not in prices:
+                prices[a], as_of[a] = px, sig.at
+    for a, px in (extra or {}).items():
+        prices[a], as_of[a] = px, "live"
+    return prices, as_of
+
+
 def report(start_usd: float | None = None, own_weights: dict | None = None,
            path: Path = LOG, position: Position | None = None,
-           opening: Position | None = None) -> str:
+           opening: Position | None = None, prices: dict | None = None) -> str:
     """Compare following the signal against the alternatives.
 
     `position` is the LIVE sleeve and supplies the starting capital, so every
@@ -445,8 +469,11 @@ def report(start_usd: float | None = None, own_weights: dict | None = None,
         a = actual(position, sigs)
         lines.append(f"  your sleeve, live    : ${a['value']:>10,.2f}  ({a['ret']:+.2%})")
     if opening is not None and position is not None and opening.units != position.units:
-        c = value_position(opening, sigs[-1].prices)
-        lines.append(f"  had you never traded : ${c['value']:>10,.2f}  ({c['ret']:+.2%})")
+        px, as_of = latest_prices(sigs, prices)
+        c = value_position(opening, px)
+        stale = [a for a in opening.units if as_of.get(a) not in ("live", sigs[-1].at)]
+        note = f"  [{', '.join(sorted(stale))} marked at {as_of[stale[0]][:10]}]" if stale else ""
+        lines.append(f"  had you never traded : ${c['value']:>10,.2f}  ({c['ret']:+.2%}){note}")
     if own_weights:
         z = frozen(own_weights, sigs, start_usd)
         lines.append(f"  a paper sleeve frozen: ${z['value']:>10,.2f}  ({z['value']/start_usd-1:+.2%})")

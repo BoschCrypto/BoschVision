@@ -12,7 +12,8 @@ from dataclasses import asdict
 import pytest
 from hf_trading_bot.signaltrack import (
     Signal, Position, Trade, follow, hold, frozen, actual, value_position,
-    apply_trades, read_trades, turnover, turnover_summary, unit_lattice, LEDGER,
+    apply_trades, read_trades, turnover, turnover_summary, unit_lattice,
+    latest_prices, LEDGER,
     entry_premium, load_position, read_signals, report,
     SPREAD_PCT, LOG, POSITION)
 
@@ -362,3 +363,26 @@ def test_the_turnover_interval_is_reported_and_is_wide_at_small_n():
     assert s["ci"][1] > s["mean"] > s["ci"][0], "a varying sample must yield a real interval"
     assert s["ci"][0] == 0.0, "turnover cannot be negative; the bound is clipped at zero"
     assert turnover_summary(sigs[:1])["n"] == 0
+
+
+def test_a_dropped_asset_is_still_priced_for_the_control_arm():
+    """The control arm keeps holding what it bought. When a signal drops an asset
+    the newest price row no longer covers the frozen sleeve, and marking it
+    raised instead of printing -- the exact failure this guards."""
+    p = {"BTC": 100.0, "SOL": 50.0}
+    sigs = [_sig("2026-10-09T00:00:00Z", {"BTC": 0.5, "SOL": 0.5}, p),
+            _sig("2026-10-13T00:00:00Z", {"BTC": 1.0}, {"BTC": 120.0})]
+    px, as_of = latest_prices(sigs)
+    assert px == {"BTC": 120.0, "SOL": 50.0}
+    assert as_of["BTC"] == sigs[-1].at and as_of["SOL"] == sigs[0].at
+    value_position(_pos(), px)          # must not raise
+
+
+def test_a_live_quote_overrides_the_carried_forward_price():
+    """A price carried forward from an older row is stale by construction. When a
+    live quote is to hand it must win, and be labelled as live."""
+    sigs = [_sig("2026-10-09T00:00:00Z", {"BTC": 0.5, "SOL": 0.5},
+                 {"BTC": 100.0, "SOL": 50.0}),
+            _sig("2026-10-13T00:00:00Z", {"BTC": 1.0}, {"BTC": 120.0})]
+    px, as_of = latest_prices(sigs, {"SOL": 107.68})
+    assert px["SOL"] == 107.68 and as_of["SOL"] == "live"
