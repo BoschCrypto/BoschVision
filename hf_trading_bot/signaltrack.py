@@ -33,6 +33,7 @@ Honest limits, stated because they bound every number this produces:
 from __future__ import annotations
 import json
 from dataclasses import dataclass, field, asdict
+from datetime import datetime
 from pathlib import Path
 
 LOG = Path("data/signals/adam.jsonl")
@@ -46,6 +47,27 @@ SPREAD_PCT = 0.0189
 MIN_TRADE_USD = 10.0
 
 
+def _ts(at: str) -> datetime:
+    """Parse an ISO8601 stamp into an instant, for ORDERING.
+
+    Sorting the raw strings is wrong the moment two stamps carry different UTC
+    offsets. "2026-10-09T21:00:00Z" is 17:00 ET -- EARLIER than
+    "2026-10-09T20:00:00-04:00" -- yet it sorts after it, so the log would be
+    replayed out of order and every turnover figure computed between the wrong
+    pair. The real log happens to be all -04:00 today, which is exactly why this
+    stayed invisible: it stops being true on 2026-11-01 when ET moves to -05:00,
+    and the tests already write "Z". Compare instants, never text.
+
+    A stamp with no offset is refused rather than assumed to be local: guessing
+    the zone is how a one-hour error becomes a silent one.
+    """
+    d = datetime.fromisoformat(at.replace("Z", "+00:00"))
+    if d.tzinfo is None:
+        raise ValueError(f"{at!r} carries no UTC offset -- an instant without a "
+                         f"zone cannot be ordered against one that has it")
+    return d
+
+
 @dataclass
 class Signal:
     """One published allocation. `weights` are fractions of the whole sleeve,
@@ -57,29 +79,77 @@ class Signal:
     note: str = ""
 
     def validate(self) -> None:
+        _ts(self.at)                      # refuse an unorderable stamp at the door
         s = sum(self.weights.values())
         if abs(s - 1.0) > 0.005:
             raise ValueError(f"weights sum to {s:.4f}, not 1.0 -- cash slice missing?")
-        for k in self.weights:
+        for k, w in self.weights.items():
+            if w < 0:
+                raise ValueError(f"{k} is weighted {w:.4f}; a published long-only "
+                                 f"allocation has no negative slice")
             if k != "CASH" and k not in self.prices:
                 raise ValueError(f"no price for {k}")
+        for a, px in self.prices.items():
+            # A zero or negative price is not a data gap, it is a data error, and
+            # it divides: follow() sizes units as delta/price and frozen() as
+            # notional/price. Both would produce an infinity that then propagates
+            # through every arm of the report as a plausible-looking number.
+            if px <= 0:
+                raise ValueError(f"{a} priced at {px} -- a price must be positive")
 
 
 def log_signal(sig: Signal, path: Path = LOG) -> None:
+    """Append one signal. Refuses a stamp the log already holds.
+
+    Double-logging is the likeliest real mistake here, because signals arrive as
+    screenshots and get transcribed by hand. It is also the one that lies in the
+    useful direction: a repeated post reads as a no-change transition, which
+    lowers mean turnover and so UNDERSTATES what following costs. Measured on
+    the live log, one duplicate moved the implied drag from 11.7%/yr to 9.4%/yr
+    -- it made the subscription look $30/yr cheaper than it is, with no error
+    anywhere. Re-publishing an identical allocation is real and must be logged;
+    logging the same publication twice is not.
+    """
     sig.validate()
+    existing = {s.at for s in read_signals(path)}
+    if sig.at in existing:
+        raise ValueError(f"the log already holds a signal stamped {sig.at}. A "
+                         f"repeated post is real, a repeated LOG is not -- it "
+                         f"shows up as a free no-change and understates turnover.")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         f.write(json.dumps(asdict(sig)) + "\n")
 
 
 def read_signals(path: Path = LOG) -> list[Signal]:
+    """Load the log, ordered by instant, every row validated.
+
+    Validation used to happen only on the way in, which left the file itself
+    unchecked: a hand-edited row with a broken weight sum flowed straight into
+    the arithmetic and produced a confident number. The log IS hand-edited --
+    that is how the missing 2026-10-11 signal was recovered -- so the read is
+    the only place a check reliably runs.
+    """
     if not path.exists():
         return []
     out = []
-    for line in path.read_text().splitlines():
-        if line.strip():
-            out.append(Signal(**json.loads(line)))
-    return sorted(out, key=lambda s: s.at)
+    for i, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            sig = Signal(**json.loads(line))
+            sig.validate()
+        except Exception as e:
+            raise ValueError(f"{path}:{i} is not a usable signal -- {e}") from e
+        out.append(sig)
+    seen: dict[str, int] = {}
+    for s in out:
+        seen[s.at] = seen.get(s.at, 0) + 1
+    dupes = sorted(a for a, c in seen.items() if c > 1)
+    if dupes:
+        raise ValueError(f"{path} holds duplicate stamps {dupes} -- a repeated log "
+                         f"reads as a free no-change and understates turnover")
+    return sorted(out, key=lambda s: _ts(s.at))
 
 
 def _value(units: dict, cash: float, prices: dict) -> float:
@@ -115,15 +185,27 @@ def follow(signals: list[Signal], start_usd: float,
     the convention: they landed 0.99% above the mark, half of the 1.89% round
     trip, exactly as one leg should.
 
+    THE COST COMPOUNDS, and that was wrong too. The accumulated spread used to
+    be parked as negative cash and subtracted only after the walk, so it never
+    participated in any price move. hold() subtracted its entry cost BEFORE
+    buying units, so hold()'s cost did compound. On an identical 100%-BTC
+    position through a doubling, follow() therefore came out $9.45 ahead of
+    hold() -- the paid signal's arm escaping a toll its own benchmark paid.
+    Spread is charged to cash at the moment of the fill, so the position bought
+    is smaller and every subsequent return is earned on the smaller position,
+    which is what actually happens to the money.
+
     Returns the final value plus the running cost, so the drag is never hidden
     inside the return.
     """
     if not signals:
-        return {"value": start_usd, "cost": 0.0, "trades": 0, "n": 0}
+        return {"value": start_usd, "cost": 0.0, "trades": 0, "n": 0,
+                "units": {}, "cash": start_usd, "shortfall": 0.0}
     units: dict[str, float] = {}
     cash = start_usd
     cost = 0.0
     trades = 0
+    shortfall = 0.0
     px: dict[str, float] = {}        # carried forward, so a held leg is always priceable
     for sig in signals:
         px.update(sig.prices)
@@ -133,35 +215,84 @@ def follow(signals: list[Signal], start_usd: float,
         # Iterating sig.weights alone left such a holding untouched AND then
         # unpriced, and the follower's sleeve was reported short by its whole
         # value with no error raised.
-        targets = {a: sig.weights.get(a, 0.0) for a in set(sig.weights) | set(units)}
-        for asset, w in targets.items():
+        deltas = {}
+        for asset in sorted(set(sig.weights) | set(units)):
             if asset == "CASH":
                 continue
-            want = total * w
-            have = units.get(asset, 0.0) * px[asset]
-            delta = want - have
-            if abs(delta) < min_trade:
-                continue          # drift too small to be worth the spread
-            cost += abs(delta) * (spread / 2)   # one leg crosses half the spread
+            d = total * sig.weights.get(asset, 0.0) - units.get(asset, 0.0) * px[asset]
+            if abs(d) >= min_trade:       # below this, the spread exceeds the drift
+                deltas[asset] = d
+        # SELLS FIRST, then buys, and sorted within each -- the order a real
+        # rebalance runs in, because a sell is what funds the buy. Iterating a
+        # set() was also non-deterministic across runs: set order over strings
+        # depends on PYTHONHASHSEED, and a benchmark that moves between runs
+        # cannot be argued with.
+        for asset in sorted(deltas, key=lambda a: (deltas[a] > 0, a)):
+            delta = deltas[asset]
+            if delta > 0:
+                # A buy cannot spend money the sleeve does not have. Sizing
+                # targets on the pre-cost mark and charging the spread afterwards
+                # let cash go NEGATIVE: measured on a 100%-invested sleeve, the
+                # arm ended holding $990.55 of BTC against $971.74 of sleeve --
+                # 1.01x leverage, silently, on a signal whose own posts read
+                # "BTC Leverage Impermissible". A broker rejects that order; so
+                # does this. Spend at most the cash on hand, cost included:
+                #   delta + delta*(spread/2) <= cash
+                afford = max(cash, 0.0) / (1.0 + spread / 2)
+                if afford < delta:
+                    shortfall += delta - afford   # reported, never hidden
+                    delta = afford
+                if delta < min_trade:
+                    continue
+            leg = abs(delta) * (spread / 2)       # one leg crosses half the spread
+            cost += leg
             trades += 1
             units[asset] = units.get(asset, 0.0) + delta / px[asset]
-            cash -= delta
-    # charge the accumulated spread against cash at the end of the walk
-    cash -= cost
-    return {"value": _value(units, cash, px), "cost": cost,
-            "trades": trades, "n": len(signals), "units": units, "cash": cash}
+            # Charged NOW, not after the walk. Deferring it left every
+            # intermediate `total` overstated by the spread paid so far, so the
+            # follower rebalanced a sleeve still holding money it had spent --
+            # a small overstatement of the arm under test, compounding per post.
+            cash -= delta + leg
+        for asset in [a for a, u in units.items() if abs(u) < 1e-15]:
+            del units[asset]          # a fully exited leg leaves the book
+    if cash < -1e-9:
+        raise ValueError(f"the follow arm ended with ${cash:,.2f} of cash -- it "
+                         f"borrowed to hold its targets, which is not what the "
+                         f"signal says to do")
+    return {"value": _value(units, cash, px), "cost": cost, "trades": trades,
+            "n": len(signals), "units": units, "cash": cash,
+            "shortfall": shortfall}
 
 
-def hold(asset: str, signals: list[Signal], start_usd: float) -> dict:
-    """Buy once at the first signal's price, never trade again. Pays half a spread
-    on entry only -- the honest comparison, since the follower pays it too."""
+def hold(asset: str, signals: list[Signal], start_usd: float,
+         prices: dict | None = None) -> dict:
+    """Buy once at the earliest price the log holds, never trade again.
+
+    Pays half a spread on entry only -- the honest comparison, since the
+    follower pays it too.
+
+    Both ends are looked up across the WHOLE log rather than off signals[0] and
+    signals[-1] alone. Indexing the last signal's price dict is the same bug that
+    killed the control arm on 2026-10-13: the day Adam drops BTC from his book,
+    the BTC buy-and-hold benchmark stops being quoted in his posts and the arm
+    raises KeyError -- demonstrated, not supposed. A buy-and-hold benchmark must
+    not depend on the signal continuing to mention the asset; that is the entire
+    point of it. `prices` supplies live quotes, which is better than any mark.
+    """
     if not signals:
         return {"value": start_usd}
-    p0 = signals[0].prices[asset]
-    entry_cost = start_usd * SPREAD_PCT / 2
-    units = (start_usd - entry_cost) / p0
-    return {"value": units * signals[-1].prices[asset], "cost": entry_cost,
-            "units": units, "entry": p0}
+    first = next((s.prices[asset] for s in signals if asset in s.prices), None)
+    if first is None:
+        raise ValueError(f"{asset} is never priced in the log -- cannot hold it")
+    px, as_of = latest_prices(signals, prices)
+    # Deploying C of cash acquires C/(1 + spread/2) of notional, because the buy
+    # lifts the ask. NOT (C - C*spread/2): that charges half a spread on the
+    # whole outlay, the spread included. See the note on the cost convention in
+    # follow() -- one rule for one question, or the arms drift apart.
+    notional = start_usd / (1.0 + SPREAD_PCT / 2)
+    units = notional / first
+    return {"value": units * px[asset], "cost": start_usd - notional,
+            "units": units, "entry": first, "as_of": as_of[asset]}
 
 
 def latest_prices(signals: list[Signal], extra: dict | None = None) -> tuple[dict, dict]:
@@ -202,6 +333,10 @@ def frozen(weights: dict, signals: list[Signal], start_usd: float,
         return {"value": start_usd}
     p0 = signals[0].prices
     px = prices if prices is not None else latest_prices(signals)[0]
+    unpriced = [a for a in weights if a != "CASH" and a not in p0]
+    if unpriced:
+        raise ValueError(f"the first signal does not price {', '.join(sorted(unpriced))} "
+                         f"-- a frozen sleeve has to be bought at day-one prices")
     units = {a: (start_usd * w) / p0[a] for a, w in weights.items() if a != "CASH"}
     missing = [a for a in units if a not in px]
     if missing:
@@ -311,8 +446,12 @@ def value_position(pos: Position, prices: dict) -> dict:
     how they drift apart.
     """
     mark = _value(pos.units, pos.cash, prices)
-    return {"value": mark, "capital": pos.capital, "pnl": mark - pos.capital,
-            "ret": mark / pos.capital - 1}
+    cap = pos.capital
+    if cap <= 0:
+        raise ValueError(f"sleeve capital is ${cap:,.2f}; a return needs a "
+                         f"positive denominator")
+    return {"value": mark, "capital": cap, "pnl": mark - cap,
+            "ret": mark / cap - 1}
 
 
 def actual(pos: Position, signals: list[Signal]) -> dict:
@@ -432,9 +571,15 @@ def apply_trades(pos: Position, trades: list[Trade]) -> Position:
                              f"remains -- the disposal was mis-recorded")
         del units[a]
         del basis[a]
+    # Merge, do not replace: building the dict from `trades` alone threw away the
+    # opening order id of every asset that has not traded since, so the live
+    # sleeve lost the broker provenance for SUI and NEAR -- the two legs whose
+    # fills have never been revisited and are therefore the ones most likely to
+    # need looking up.
+    ids = {**pos.orders, **{t.asset: t.order_id for t in trades if t.order_id}}
     return Position(at=trades[-1].at if trades else pos.at,
                     units=units, basis=basis, cash=cash,
-                    orders={t.asset: t.order_id for t in trades} or pos.orders,
+                    orders={a: i for a, i in ids.items() if a in units},
                     note="derived by replaying the ledger onto the opening position",
                     committed=pos.capital, realized=realized)
 
@@ -505,7 +650,7 @@ def report(start_usd: float | None = None, own_weights: dict | None = None,
                 f"Forward the next update and this starts producing numbers.")
 
     f = follow(sigs, start_usd)
-    b = hold("BTC", sigs, start_usd)
+    b = hold("BTC", sigs, start_usd, prices)
     lines = [
         f"Signals logged: {f['n']}  ({sigs[0].at[:10]} -> {sigs[-1].at[:10]})",
         f"Starting capital: ${start_usd:,.2f}"
@@ -565,6 +710,17 @@ def unit_lattice(signals: list[Signal], denom: int = 44) -> dict:
     single post at, say, 20.0% breaks it, and the model should be dropped the
     day it does rather than quietly retained.
     """
+    # A published percentage carries one decimal, i.e. +/-0.0005 of weight, which
+    # is 0.0005*denom in units. Once that tolerance reaches half a unit, EVERY
+    # conceivable weight sits within half a unit of some lattice point and the
+    # test passes on anything -- it stops being evidence. Measured on the live
+    # log: denom=500 reports BROKEN while denom=2000 reports HOLDS, which is the
+    # signature of a vacuous test rather than a finer one.
+    if 0.0005 * denom >= 0.5:
+        raise ValueError(f"denom={denom} gives a tolerance of {0.0005 * denom:.2f} "
+                         f"units; at >=0.5 every weight passes and the test means "
+                         f"nothing. One-decimal weights can only resolve a lattice "
+                         f"finer than 1/1000.")
     worst, offender = 0.0, None
     for s in signals:
         for a, w in s.weights.items():
@@ -610,9 +766,21 @@ def turnover_summary(signals: list[Signal], posts_per_year: int = 365) -> dict:
         return {"n": n, "note": "need at least 2 transitions"}
     m = sum(ts) / n
     sd = (sum((t - m) ** 2 for t in ts) / (n - 1)) ** 0.5
-    # Student t, two-sided 95%, for the small n this will realistically see
-    t_crit = {2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
-              8: 2.306, 9: 2.262, 10: 2.228}.get(n - 1, 1.96)
+    # Student t, two-sided 95%, by degrees of freedom.
+    #
+    # df=1 was MISSING from this table and fell through to the 1.96 default, so
+    # the smallest possible sample -- two transitions, the state this log was
+    # actually in -- got an interval 6.5x too narrow (12.706 vs 1.96). The least
+    # information produced the most confident-looking answer, and the error ran
+    # toward "we have measured this", which is the direction that always needs
+    # checking hardest. The fallback past df=30 is now t(30) rather than the
+    # normal 1.96, so an unlisted df errs wide instead of narrow.
+    T = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365,
+         8: 2.306, 9: 2.262, 10: 2.228, 11: 2.201, 12: 2.179, 13: 2.160,
+         14: 2.145, 15: 2.131, 16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093,
+         20: 2.086, 21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064, 25: 2.060,
+         26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042}
+    t_crit = T.get(n - 1, 2.042)
     half = t_crit * sd / (n ** 0.5)
     return {"n": n, "mean": m, "sd": sd,
             "no_change_rate": sum(1 for t in ts if t == 0) / n,

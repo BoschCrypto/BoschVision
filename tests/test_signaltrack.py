@@ -14,7 +14,7 @@ from hf_trading_bot.signaltrack import (
     Signal, Position, Trade, follow, hold, frozen, actual, value_position,
     apply_trades, read_trades, turnover, turnover_summary, unit_lattice,
     latest_prices, naive_weights, _value, LEDGER,
-    entry_premium, load_position, read_signals, report,
+    entry_premium, load_position, read_signals, report, log_signal,
     SPREAD_PCT, LOG, POSITION)
 
 
@@ -75,7 +75,13 @@ def test_perfect_timing_still_pays_the_toll():
     r = follow(sigs, 1000.0)
     gross = 1000.0 * 2
     assert r["value"] < gross
-    assert math.isclose(gross - r["value"], r["cost"], rel_tol=1e-6)
+    # The toll is paid at ENTRY, so the sleeve doubles a smaller position and the
+    # shortfall at the end is the cost TIMES the return earned on it. This used
+    # to assert `gross - value == cost`, which only held because the spread was
+    # parked as negative cash and so escaped the price move entirely -- while
+    # hold() subtracted it before buying units and did not escape. On this exact
+    # test that handed follow() a $9.45 edge over hold() on an identical position.
+    assert math.isclose(gross - r["value"], r["cost"] * 2, rel_tol=1e-6)
 
 
 def test_hold_benchmark_pays_entry_only():
@@ -84,7 +90,12 @@ def test_hold_benchmark_pays_entry_only():
     sigs = [_sig("2026-10-01T00:00:00Z", {"BTC": 1.0, "CASH": 0.0}, {"BTC": 100.0}),
             _sig("2026-10-02T00:00:00Z", {"BTC": 1.0, "CASH": 0.0}, {"BTC": 100.0})]
     b = hold("BTC", sigs, 1000.0)
-    assert math.isclose(b["cost"], 1000.0 * SPREAD_PCT / 2, rel_tol=1e-9)
+    # Deploying $1,000 of cash acquires $1,000/(1 + s/2) of notional, so the cost
+    # is $9.36, not $1,000*s/2 = $9.45. The difference is half a spread charged
+    # on the spread itself. It is $0.09, and it is the whole reason follow() and
+    # hold() disagreed about an identical day-one purchase.
+    assert math.isclose(b["cost"], 1000.0 - 1000.0 / (1 + SPREAD_PCT / 2), rel_tol=1e-9)
+    assert math.isclose(b["units"] * 100.0, 1000.0 - b["cost"], rel_tol=1e-9)
     assert math.isclose(b["value"], 1000.0 - b["cost"], rel_tol=1e-9)
 
 
@@ -225,8 +236,17 @@ def test_a_rotation_costs_one_round_trip_not_two():
             _sig("2026-10-02T00:00:00Z", {"BTC": 1.0, "SOL": 0.0, "CASH": 0.0}, p0)]
     r = follow(sigs, 1000.0)
     entry = 1000.0 * SPREAD_PCT / 2          # cash -> SOL
-    rotation = 1000.0 * SPREAD_PCT           # SOL -> BTC, two legs
-    assert math.isclose(r["cost"], entry + rotation, rel_tol=1e-9)
+    rotation = r["cost"] - entry             # SOL -> BTC, two legs
+    # One round trip of the rotated notional. The old bug charged a full
+    # SPREAD_PCT per leg, which would make this $37.80 rather than ~$18.90.
+    assert rotation < 1000.0 * SPREAD_PCT * 1.001, "a rotation must not cost two round trips"
+    assert rotation > 1000.0 * SPREAD_PCT * 0.95, "a rotation of the sleeve costs ~one round trip"
+    # The exact invariant, which needs no arithmetic to agree with: prices never
+    # moved, so whatever the sleeve lost is exactly what the spread took. This
+    # replaces an assertion against a hand-computed $28.35, which was built on
+    # the premise that the sleeve still held the $9.45 it had already spent
+    # getting in. It does not: the money left the account at the fill.
+    assert math.isclose(r["value"], 1000.0 - r["cost"], rel_tol=1e-9)
 
 
 def test_the_strategy_and_its_benchmark_are_charged_on_the_same_scale():
@@ -237,6 +257,14 @@ def test_the_strategy_and_its_benchmark_are_charged_on_the_same_scale():
             _sig("2026-10-02T00:00:00Z", {"BTC": 1.0, "CASH": 0.0}, {"BTC": 100.0})]
     assert math.isclose(follow(sigs, 1000.0)["cost"],
                         hold("BTC", sigs, 1000.0)["cost"], rel_tol=1e-9)
+    # and the same must hold after a price move, which is the stronger claim: an
+    # equal entry cost is worth nothing if one arm lets its cost escape the return.
+    moved = [sigs[0], _sig("2026-10-02T00:00:00Z", {"BTC": 1.0, "CASH": 0.0},
+                           {"BTC": 200.0})]
+    assert math.isclose(follow(moved, 1000.0)["value"],
+                        hold("BTC", moved, 1000.0)["value"], rel_tol=1e-9), (
+        "follow() and hold() hold the identical position; after a doubling they "
+        "must still agree, or one of them is escaping its own entry cost")
 
 
 # --- the ledger --------------------------------------------------------------
@@ -445,3 +473,164 @@ def test_a_zero_unit_leftover_does_not_block_valuation():
     p = _pos(units={"BTC": 0.01, "SOL": 0.0}, basis={"BTC": 1000.0, "SOL": 0.0})
     v = value_position(p, {"BTC": 100000.0})
     assert math.isclose(v["value"], 1100.0, rel_tol=1e-9)
+
+
+# --- the eight failures found by auditing on 2026-10-14 ----------------------
+#
+# Each of these was demonstrated against the live log before being fixed. They
+# are grouped because they share one shape: a wrong answer arriving quietly, in
+# a direction that happened to support something already believed.
+
+
+def test_signals_are_ordered_by_INSTANT_not_by_text():
+    """"2026-10-09T21:00:00Z" is 17:00 ET -- EARLIER than "2026-10-09T20:00:00-04:00"
+    -- but it sorts after it as text. The real log is all -04:00 today, which is
+    exactly why this stayed invisible; ET goes to -05:00 on 2026-11-01 and the
+    tests already write "Z". Out-of-order replay computes every turnover figure
+    between the wrong pair of posts."""
+    log = _write([_sig("2026-10-09T20:00:00-04:00", {"BTC": 1.0}, {"BTC": 2.0}),
+                  _sig("2026-10-09T21:00:00Z", {"BTC": 1.0}, {"BTC": 1.0})])
+    assert [s.at for s in read_signals(log)] == ["2026-10-09T21:00:00Z",
+                                                 "2026-10-09T20:00:00-04:00"]
+
+
+def test_a_stamp_without_a_zone_is_refused():
+    """Assuming a zone is how a one-hour error becomes a silent one."""
+    with pytest.raises(ValueError, match="no UTC offset"):
+        _sig("2026-10-09T20:12:00", {"BTC": 1.0}, {"BTC": 1.0}).validate()
+
+
+def test_logging_the_same_post_twice_is_refused():
+    """Signals arrive as screenshots and are transcribed by hand, so a double-log
+    is the likeliest real mistake -- and it lies in the useful direction. A
+    repeated post reads as a free no-change, which lowers mean turnover and so
+    UNDERSTATES what following costs. Measured on the live log, one duplicate
+    moved the implied drag from 11.7%/yr to 9.4%/yr: it made the subscription
+    look $30/yr cheaper, with no error raised anywhere."""
+    log = _write([])
+    s = _sig("2026-10-09T20:12:00Z", {"BTC": 0.7, "CASH": 0.3}, {"BTC": 80000.0})
+    log_signal(s, log)
+    with pytest.raises(ValueError, match="already holds"):
+        log_signal(s, log)
+    assert len(read_signals(log)) == 1
+
+
+def test_a_duplicate_already_in_the_file_is_refused_on_read():
+    """The log IS hand-edited -- that is how the missing 2026-10-11 post was
+    recovered -- so the read has to check too."""
+    s = _sig("2026-10-09T20:12:00Z", {"BTC": 0.7, "CASH": 0.3}, {"BTC": 80000.0})
+    log = _write([s, s])
+    with pytest.raises(ValueError, match="duplicate stamps"):
+        read_signals(log)
+
+
+def test_a_malformed_row_is_caught_on_read_not_computed_with():
+    """Validation used to run only on the way in, leaving the file unchecked: a
+    row whose weights sum to 1.8 flowed straight into the arithmetic and
+    produced a confident $991.50."""
+    log = _write([])
+    log.write_text(json.dumps({"at": "2026-10-09T20:12:00Z",
+                               "weights": {"BTC": 0.9, "CASH": 0.9},
+                               "prices": {"BTC": 80000.0},
+                               "source": "d", "note": ""}) + "\n")
+    with pytest.raises(ValueError, match="not a usable signal"):
+        read_signals(log)
+
+
+def test_a_nonpositive_price_is_refused_because_it_divides():
+    """follow() sizes units as delta/price and frozen() as notional/price. A zero
+    price is an infinity that then propagates through every arm as a number."""
+    with pytest.raises(ValueError, match="must be positive"):
+        _sig("2026-10-09T20:12:00Z", {"BTC": 1.0}, {"BTC": 0.0}).validate()
+
+
+def test_the_buy_and_hold_benchmark_survives_its_asset_being_dropped():
+    """Indexing signals[-1].prices is the bug that killed the control arm on
+    2026-10-13. A buy-and-hold benchmark must not depend on the signal
+    continuing to mention the asset -- that is the whole point of it."""
+    sigs = [_sig("2026-10-09T00:00:00Z", {"BTC": 0.5, "SOL": 0.5},
+                 {"BTC": 80000.0, "SOL": 100.0}),
+            _sig("2026-10-13T00:00:00Z", {"SOL": 1.0}, {"SOL": 120.0})]
+    r = hold("BTC", sigs, 1000.0)
+    assert r["value"] > 0 and r["as_of"] == "2026-10-09T00:00:00Z"
+    with pytest.raises(ValueError, match="never priced"):
+        hold("DOGE", sigs, 1000.0)
+
+
+def test_the_follow_arm_never_borrows_to_reach_its_target():
+    """Sizing targets on the pre-cost mark and charging the spread afterwards let
+    cash go negative: on a 100%-invested sleeve the arm held $990.55 of BTC
+    against $971.74 of sleeve -- 1.01x leverage, silently, on a signal whose own
+    posts read "BTC Leverage Impermissible". A broker rejects that order."""
+    p0 = {"BTC": 100.0, "SOL": 100.0}
+    sigs = [_sig("2026-10-01T00:00:00Z", {"BTC": 0.0, "SOL": 1.0, "CASH": 0.0}, p0),
+            _sig("2026-10-02T00:00:00Z", {"BTC": 1.0, "SOL": 0.0, "CASH": 0.0}, p0)]
+    r = follow(sigs, 1000.0)
+    assert r["cash"] >= -1e-9, f"the arm borrowed ${-r['cash']:,.2f}"
+    assert r["shortfall"] > 0, "a target it could not fund must be reported, not hidden"
+    assert math.isclose(r["value"], 1000.0 - r["cost"], rel_tol=1e-9)
+
+
+def test_the_spread_leaves_the_account_when_the_trade_happens():
+    """Deferring the charge to the end of the walk left every intermediate sleeve
+    value overstated by the spread paid so far, so the arm rebalanced money it
+    had already spent. On the live log that $8.30 of entry cost moved NEAR's
+    2026-10-10 overweight from $9.31 to $10.25 -- across the $10 floor, and so
+    into a twelfth trade that really should happen."""
+    p0 = {"BTC": 100.0}
+    sigs = [_sig("2026-10-01T00:00:00Z", {"BTC": 0.5, "CASH": 0.5}, p0),
+            _sig("2026-10-02T00:00:00Z", {"BTC": 0.5, "CASH": 0.5}, p0)]
+    r = follow(sigs, 1000.0)
+    entry = 500.0 * SPREAD_PCT / 2
+    # The sleeve is now worth 1000 - entry, so a 50% target is half of THAT, and
+    # the drift it creates is under the $10 floor -- so no second trade.
+    assert r["trades"] == 1
+    assert math.isclose(r["value"], 1000.0 - entry, rel_tol=1e-9)
+    assert math.isclose(r["cash"], 500.0 - entry, rel_tol=1e-9)
+
+
+def test_the_smallest_sample_gets_the_widest_interval():
+    """df=1 was missing from the t table and fell through to a 1.96 default, so
+    two transitions -- the state this log was actually in -- got an interval 6.5x
+    too narrow. The least information produced the most confident-looking
+    answer, which is the direction that always needs checking hardest."""
+    p = {"BTC": 1.0, "SOL": 1.0}
+    sigs = [_sig("2026-10-01T00:00:00Z", {"BTC": 0.5, "SOL": 0.5}, p),
+            _sig("2026-10-02T00:00:00Z", {"BTC": 0.6, "SOL": 0.4}, p),
+            _sig("2026-10-03T00:00:00Z", {"BTC": 0.9, "SOL": 0.1}, p)]
+    T = turnover_summary(sigs)
+    assert T["n"] == 2
+    implied_t = (T["ci"][1] - T["mean"]) / (T["sd"] / math.sqrt(T["n"]))
+    assert math.isclose(implied_t, 12.706, rel_tol=1e-3), (
+        f"two observations were given t={implied_t:.2f}; t(df=1, 95%) is 12.706")
+
+
+def test_a_lattice_too_fine_to_resolve_is_refused_not_passed():
+    """Once the tolerance from one-decimal weights reaches half a unit, every
+    conceivable weight sits within half a unit of some lattice point and the test
+    passes on anything. On the live log denom=500 reports BROKEN while denom=2000
+    reports HOLDS -- the signature of a vacuous test, not a finer one."""
+    sigs = [_sig("2026-10-01T00:00:00Z", {"BTC": 0.318, "CASH": 0.682},
+                 {"BTC": 80000.0})]
+    assert unit_lattice(sigs, 44)["holds"] in (True, False)      # a real answer
+    with pytest.raises(ValueError, match="every weight passes"):
+        unit_lattice(sigs, 2000)
+
+
+def test_replaying_the_ledger_keeps_the_order_ids_it_already_had():
+    """Rebuilding the dict from the trade list alone threw away the opening order
+    id of every asset that has not traded since -- SUI and NEAR, the two legs
+    whose fills have never been revisited and so the ones most likely to need
+    looking up."""
+    op = _pos(units={"BTC": 1.0, "SUI": 100.0}, basis={"BTC": 100.0, "SUI": 100.0},
+              cash=50.0, orders={"BTC": "btc-open", "SUI": "sui-open"})
+    t = Trade(at="2026-10-11T10:00:00-04:00", asset="BTC", side="buy", units=0.5,
+              notional=50.0, basis_delta=50.0, order_id="btc-add")
+    live = apply_trades(op, [t])
+    assert live.orders == {"BTC": "btc-add", "SUI": "sui-open"}
+
+
+def test_a_return_needs_a_positive_denominator():
+    op = _pos(units={"BTC": 1.0}, basis={"BTC": 0.0}, cash=0.0)
+    with pytest.raises(ValueError, match="positive denominator"):
+        value_position(op, {"BTC": 100.0})
