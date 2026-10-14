@@ -13,7 +13,7 @@ import pytest
 from hf_trading_bot.signaltrack import (
     Signal, Position, Trade, follow, hold, frozen, actual, value_position,
     apply_trades, read_trades, turnover, turnover_summary, unit_lattice,
-    latest_prices, LEDGER,
+    latest_prices, naive_weights, LEDGER,
     entry_premium, load_position, read_signals, report,
     SPREAD_PCT, LOG, POSITION)
 
@@ -386,3 +386,31 @@ def test_a_live_quote_overrides_the_carried_forward_price():
             _sig("2026-10-13T00:00:00Z", {"BTC": 1.0}, {"BTC": 120.0})]
     px, as_of = latest_prices(sigs, {"SOL": 107.68})
     assert px["SOL"] == 107.68 and as_of["SOL"] == "live"
+
+
+def test_the_naive_benchmark_needs_no_foresight():
+    """Equal weight across whatever the FIRST signal named, at its cash level.
+    Anything derived from which legs later turned out to be static would be
+    hindsight dressed as a benchmark."""
+    sigs = [_sig("2026-10-09T00:00:00Z",
+                 {"BTC": 0.50, "SUI": 0.12, "SOL": 0.06, "CASH": 0.32},
+                 {"BTC": 1.0, "SUI": 1.0, "SOL": 1.0}),
+            _sig("2026-10-13T00:00:00Z", {"BTC": 0.68, "CASH": 0.32}, {"BTC": 1.0})]
+    w = naive_weights(sigs)
+    assert w["CASH"] == 0.32
+    assert math.isclose(w["BTC"], w["SUI"]) and math.isclose(w["BTC"], w["SOL"])
+    assert math.isclose(sum(w.values()), 1.0, rel_tol=1e-9)
+    assert "SOL" in w, "an asset the signal later dropped still belongs on day one"
+
+
+def test_a_frozen_sleeve_never_silently_drops_an_unpriceable_leg():
+    """_value() skips assets it cannot price. Marking a frozen sleeve on the
+    latest signal's prices after a drop would therefore under-report it by that
+    holding's whole value, with no error — the quiet failure this forbids."""
+    sigs = [_sig("2026-10-09T00:00:00Z", {"BTC": 0.5, "SOL": 0.5},
+                 {"BTC": 100.0, "SOL": 50.0}),
+            _sig("2026-10-13T00:00:00Z", {"BTC": 1.0}, {"BTC": 100.0})]
+    with pytest.raises(ValueError, match="cannot mark the frozen sleeve"):
+        frozen({"BTC": 0.5, "SOL": 0.5}, sigs, 1000.0, prices={"BTC": 100.0})
+    r = frozen({"BTC": 0.5, "SOL": 0.5}, sigs, 1000.0)   # carries SOL forward
+    assert math.isclose(r["value"], 1000.0 - 1000.0 * SPREAD_PCT / 2, rel_tol=1e-9)

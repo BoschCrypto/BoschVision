@@ -146,15 +146,67 @@ def hold(asset: str, signals: list[Signal], start_usd: float) -> dict:
             "units": units, "entry": p0}
 
 
-def frozen(weights: dict, signals: list[Signal], start_usd: float) -> dict:
-    """His own day-one allocation, never rebalanced."""
+def latest_prices(signals: list[Signal], extra: dict | None = None) -> tuple[dict, dict]:
+    """The most recent price the log holds for EVERY asset it has ever priced.
+
+    The control arm keeps holding what it bought, so once a signal drops an
+    asset the latest signal's price dict no longer covers the whole frozen
+    sleeve and marking it raises. This walks the log newest-first and carries
+    forward the last price seen for each asset.
+
+    Returns (prices, as_of). `as_of` names the signal each price came from, so a
+    caller can say which legs are being marked on a stale row instead of
+    presenting a mixed-date valuation as though it were current. `extra`
+    overrides with live quotes, which is always preferable when they are to hand.
+    """
+    prices: dict[str, float] = {}
+    as_of: dict[str, str] = {}
+    for sig in reversed(signals):          # newest first
+        for a, px in sig.prices.items():
+            if a not in prices:
+                prices[a], as_of[a] = px, sig.at
+    for a, px in (extra or {}).items():
+        prices[a], as_of[a] = px, "live"
+    return prices, as_of
+
+
+def frozen(weights: dict, signals: list[Signal], start_usd: float,
+           prices: dict | None = None) -> dict:
+    """A day-one allocation, bought once and never rebalanced.
+
+    Marked with `prices` when given, otherwise with the last price the log holds
+    for each asset. It must NOT be marked on the latest signal's price dict
+    alone: once a signal drops an asset, _value() would quietly skip the leg it
+    cannot price and report a sleeve short by that holding's entire value --
+    a silent undervaluation, which is worse than the raise it replaces.
+    """
     if not signals:
         return {"value": start_usd}
     p0 = signals[0].prices
-    entry_cost = start_usd * (1 - weights.get("CASH", 0.0)) * (SPREAD_PCT / 2)
+    px = prices if prices is not None else latest_prices(signals)[0]
     units = {a: (start_usd * w) / p0[a] for a, w in weights.items() if a != "CASH"}
+    missing = [a for a in units if a not in px]
+    if missing:
+        raise ValueError(f"no price for {', '.join(sorted(missing))} -- cannot mark the frozen sleeve")
+    entry_cost = start_usd * (1 - weights.get("CASH", 0.0)) * (SPREAD_PCT / 2)
     cash = start_usd * weights.get("CASH", 0.0) - entry_cost
-    return {"value": _value(units, cash, signals[-1].prices), "cost": entry_cost}
+    return {"value": _value(units, cash, px), "cost": entry_cost}
+
+
+def naive_weights(signals: list[Signal]) -> dict:
+    """Equal weight across whatever the FIRST signal named, at its own cash level.
+
+    The benchmark that needs no foresight. It keeps Adam's asset selection and
+    his risk level, and throws away only his weighting -- so beating it is the
+    narrowest honest claim the signal can make. A "hold the legs that never
+    moved" benchmark would be hindsight: which legs those are is only knowable
+    after watching them not move.
+    """
+    if not signals:
+        return {}
+    risky = [a for a in signals[0].weights if a != "CASH"]
+    cash = signals[0].weights.get("CASH", 0.0)
+    return {**{a: (1.0 - cash) / len(risky) for a in risky}, "CASH": cash}
 
 
 @dataclass
@@ -406,30 +458,6 @@ def opening_report(pos: Position, signals: list[Signal]) -> str:
     return "\n".join(lines)
 
 
-def latest_prices(signals: list[Signal], extra: dict | None = None) -> tuple[dict, dict]:
-    """The most recent price the log holds for EVERY asset it has ever priced.
-
-    The control arm keeps holding what it bought, so once a signal drops an
-    asset the latest signal's price dict no longer covers the whole frozen
-    sleeve and marking it raises. This walks the log newest-first and carries
-    forward the last price seen for each asset.
-
-    Returns (prices, as_of). `as_of` names the signal each price came from, so a
-    caller can say which legs are being marked on a stale row instead of
-    presenting a mixed-date valuation as though it were current. `extra`
-    overrides with live quotes, which is always preferable when they are to hand.
-    """
-    prices: dict[str, float] = {}
-    as_of: dict[str, str] = {}
-    for sig in reversed(signals):          # newest first
-        for a, px in sig.prices.items():
-            if a not in prices:
-                prices[a], as_of[a] = px, sig.at
-    for a, px in (extra or {}).items():
-        prices[a], as_of[a] = px, "live"
-    return prices, as_of
-
-
 def report(start_usd: float | None = None, own_weights: dict | None = None,
            path: Path = LOG, position: Position | None = None,
            opening: Position | None = None, prices: dict | None = None) -> str:
@@ -474,8 +502,13 @@ def report(start_usd: float | None = None, own_weights: dict | None = None,
         stale = [a for a in opening.units if as_of.get(a) not in ("live", sigs[-1].at)]
         note = f"  [{', '.join(sorted(stale))} marked at {as_of[stale[0]][:10]}]" if stale else ""
         lines.append(f"  had you never traded : ${c['value']:>10,.2f}  ({c['ret']:+.2%}){note}")
+    px_all, _ = latest_prices(sigs, prices)
+    nw = naive_weights(sigs)
+    if nw:
+        nv = frozen(nw, sigs, start_usd, px_all)
+        lines.append(f"  equal weight, no trade: ${nv['value']:>10,.2f}  ({nv['value']/start_usd-1:+.2%})")
     if own_weights:
-        z = frozen(own_weights, sigs, start_usd)
+        z = frozen(own_weights, sigs, start_usd, px_all)
         lines.append(f"  a paper sleeve frozen: ${z['value']:>10,.2f}  ({z['value']/start_usd-1:+.2%})")
     lines += [
         "",
@@ -565,3 +598,50 @@ def turnover_summary(signals: list[Signal], posts_per_year: int = 365) -> dict:
             "ci": (max(m - half, 0.0), m + half),
             "annual_ci": (max(m - half, 0.0) * SPREAD_PCT * posts_per_year,
                           (m + half) * SPREAD_PCT * posts_per_year)}
+
+
+def status(prices: dict | None = None, log: Path = LOG,
+           pos_path: Path = POSITION, led_path: Path = LEDGER) -> str:
+    """Everything the log can currently answer, in one call.
+
+    Exists so the daily routine holds a command rather than a copy of the
+    findings. Numbers quoted from a stored prompt go stale within a day; a
+    command does not.
+    """
+    sigs = read_signals(log)
+    if not sigs:
+        return "No signals logged."
+    out = [f"SIGNAL LOG  n={len(sigs)}  ({sigs[0].at[:10]} -> {sigs[-1].at[:10]})", ""]
+
+    L = unit_lattice(sigs)
+    out.append(f"unit lattice k/{L['denom']}: {'HOLDS' if L['holds'] else 'BROKEN'} "
+               f"(worst {L['max_error_units']:.4f} units, tol {L['tolerance_units']:.4f}; "
+               f"one unit = {L['unit_pct']:.3%})")
+    if not L["holds"]:
+        out.append(f"  -> {L['worst_case']} is off-lattice. The discrete-unit model is "
+                   f"falsified; drop it rather than keeping it.")
+
+    moved = {a for r in turnover(sigs) for a in r["moved"]}
+    never = sorted(set(sigs[-1].weights) - moved)
+    out.append(f"knobs that have moved: {', '.join(sorted(moved)) or 'none'}"
+               + (f"   never moved: {', '.join(never)}" if never else ""))
+
+    T = turnover_summary(sigs)
+    if T.get("n", 0) >= 2:
+        out += ["",
+                f"turnover  mean {T['mean']:.2%}/post over n={T['n']}   "
+                f"no-change {T['no_change_rate']:.0%}",
+                f"          implied drag {T['annual_drag']:.1%}/yr   "
+                f"95% CI [{T['annual_ci'][0]:.1%}, {T['annual_ci'][1]:.1%}]"]
+        if T["n"] < 16:
+            out.append(f"          n={T['n']}; ~16 posts buys +/-50% precision, ~61 buys +/-25%.")
+
+    opening = load_position(pos_path)
+    if opening is not None:
+        out += ["", report(path=log, position=live_position(pos_path, led_path),
+                           opening=opening, prices=prices)]
+    return "\n".join(out)
+
+
+if __name__ == "__main__":        # python -m hf_trading_bot.signaltrack
+    print(status())
