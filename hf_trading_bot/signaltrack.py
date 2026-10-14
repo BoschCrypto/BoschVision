@@ -83,6 +83,17 @@ def read_signals(path: Path = LOG) -> list[Signal]:
 
 
 def _value(units: dict, cash: float, prices: dict) -> float:
+    """Value a holding. STRICT: an unpriceable leg raises rather than vanishing.
+
+    This used to skip what it could not price (`if a in prices`), which turned a
+    missing price into a sleeve quietly short by that holding's entire value --
+    no error, no flag, just a wrong number that looked fine. Three separate
+    call sites hit that hole in two days. A loud failure is always preferable:
+    it gets fixed in minutes, a quiet one gets believed.
+    """
+    missing = [a for a, u in units.items() if a not in prices and u != 0.0]
+    if missing:
+        raise ValueError(f"no price for {', '.join(sorted(missing))} -- cannot value the holding")
     return cash + sum(u * prices[a] for a, u in units.items() if a in prices)
 
 
@@ -113,24 +124,31 @@ def follow(signals: list[Signal], start_usd: float,
     cash = start_usd
     cost = 0.0
     trades = 0
+    px: dict[str, float] = {}        # carried forward, so a held leg is always priceable
     for sig in signals:
-        total = _value(units, cash, sig.prices)
-        for asset, w in sig.weights.items():
+        px.update(sig.prices)
+        total = _value(units, cash, px)
+        # An asset ABSENT from a published set is at zero, not unchanged. The
+        # weights sum to 1.0, so there is no room left for a holding they omit.
+        # Iterating sig.weights alone left such a holding untouched AND then
+        # unpriced, and the follower's sleeve was reported short by its whole
+        # value with no error raised.
+        targets = {a: sig.weights.get(a, 0.0) for a in set(sig.weights) | set(units)}
+        for asset, w in targets.items():
             if asset == "CASH":
                 continue
             want = total * w
-            have = units.get(asset, 0.0) * sig.prices[asset]
+            have = units.get(asset, 0.0) * px[asset]
             delta = want - have
             if abs(delta) < min_trade:
                 continue          # drift too small to be worth the spread
             cost += abs(delta) * (spread / 2)   # one leg crosses half the spread
             trades += 1
-            units[asset] = units.get(asset, 0.0) + delta / sig.prices[asset]
+            units[asset] = units.get(asset, 0.0) + delta / px[asset]
             cash -= delta
     # charge the accumulated spread against cash at the end of the walk
     cash -= cost
-    last = signals[-1].prices
-    return {"value": _value(units, cash, last), "cost": cost,
+    return {"value": _value(units, cash, px), "cost": cost,
             "trades": trades, "n": len(signals), "units": units, "cash": cash}
 
 
@@ -284,10 +302,14 @@ def save_position(pos: Position, path: Path = POSITION) -> None:
 
 def value_position(pos: Position, prices: dict) -> dict:
     """Mark the real sleeve. Refuses to price a position it cannot price in full,
-    because a silently missing asset reads as a loss."""
-    missing = [a for a in pos.units if a not in prices]
-    if missing:
-        raise ValueError(f"no price for {', '.join(sorted(missing))} -- cannot mark the sleeve")
+    because a silently missing asset reads as a loss.
+
+    The check lives in _value and is NOT duplicated here. It used to be, with a
+    subtly different rule -- this one fired on any named asset, _value's on any
+    asset actually held -- so a fully exited leg left at zero units raised from
+    one path and valued cleanly from the other. Two rules for one question is
+    how they drift apart.
+    """
     mark = _value(pos.units, pos.cash, prices)
     return {"value": mark, "capital": pos.capital, "pnl": mark - pos.capital,
             "ret": mark / pos.capital - 1}

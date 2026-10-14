@@ -13,7 +13,7 @@ import pytest
 from hf_trading_bot.signaltrack import (
     Signal, Position, Trade, follow, hold, frozen, actual, value_position,
     apply_trades, read_trades, turnover, turnover_summary, unit_lattice,
-    latest_prices, naive_weights, LEDGER,
+    latest_prices, naive_weights, _value, LEDGER,
     entry_premium, load_position, read_signals, report,
     SPREAD_PCT, LOG, POSITION)
 
@@ -414,3 +414,34 @@ def test_a_frozen_sleeve_never_silently_drops_an_unpriceable_leg():
         frozen({"BTC": 0.5, "SOL": 0.5}, sigs, 1000.0, prices={"BTC": 100.0})
     r = frozen({"BTC": 0.5, "SOL": 0.5}, sigs, 1000.0)   # carries SOL forward
     assert math.isclose(r["value"], 1000.0 - 1000.0 * SPREAD_PCT / 2, rel_tol=1e-9)
+
+
+def test_an_asset_dropped_by_omission_is_sold_not_silently_lost():
+    """A signal that stops listing an asset has put it at zero -- the weights sum
+    to 1.0, leaving no room for it. Iterating only the published keys left the
+    holding untouched and then unpriced, and follow() reported the sleeve short
+    by its entire value with no error. Measured 2026-10-14: $490.55 against a
+    true ~$990 on a two-asset book."""
+    sigs = [_sig("2026-10-09T00:00:00Z", {"BTC": 0.5, "SOL": 0.5},
+                 {"BTC": 80000.0, "SOL": 100.0}),
+            _sig("2026-10-13T00:00:00Z", {"BTC": 1.0}, {"BTC": 80000.0})]
+    r = follow(sigs, 1000.0)
+    assert r["units"].get("SOL", 0.0) == 0.0, "the omitted asset must be sold"
+    assert r["value"] > 950.0, f"sleeve reported ${r['value']:.2f}; the SOL leg vanished"
+
+
+def test_valuing_an_unpriceable_holding_raises_rather_than_skipping():
+    """The primitive behind three separate failures. Skipping what it could not
+    price produced a wrong number that looked fine; raising gets it fixed."""
+    with pytest.raises(ValueError, match="cannot value the holding"):
+        value_position(_pos(), {"BTC": 100000.0})
+    with pytest.raises(ValueError, match="cannot value the holding"):
+        _value({"SOL": 1.0}, 0.0, {})
+
+
+def test_a_zero_unit_leftover_does_not_block_valuation():
+    """Strictness must not fire on a holding that is actually gone -- otherwise
+    every post-exit report raises for no reason."""
+    p = _pos(units={"BTC": 0.01, "SOL": 0.0}, basis={"BTC": 1000.0, "SOL": 0.0})
+    v = value_position(p, {"BTC": 100000.0})
+    assert math.isclose(v["value"], 1100.0, rel_tol=1e-9)
