@@ -448,6 +448,12 @@ def test_execute_sell_invalid_pct(storage, monkeypatch):
 # --- solana_wallet ---------------------------------------------------------
 
 def test_load_keypair_requires_env():
+    # `solders` is an optional extra (pip install -e ".[memecoin]"). Without it
+    # load_keypair raises on the missing module before it ever looks at the env,
+    # so this assertion is only meaningful when the extra is present. Skipping
+    # beats a permanently red suite: a test that always fails for a known,
+    # irrelevant reason trains you to stop reading the output.
+    pytest.importorskip("solders")
     with pytest.raises(solana_wallet.WalletError, match="SOLANA_PRIVATE_KEY"):
         solana_wallet.load_keypair({})
 
@@ -458,6 +464,7 @@ def test_load_keypair_rejects_garbage():
 
 
 def test_load_keypair_accepts_real_base58_key():
+    pytest.importorskip("solders")      # optional extra; see above
     from solders.keypair import Keypair
     kp = Keypair()
     loaded = solana_wallet.load_keypair({"SOLANA_PRIVATE_KEY": str(kp)})

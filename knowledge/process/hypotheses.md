@@ -1,0 +1,206 @@
+# Pre-registered predictions about Adam's signal
+
+**Why this file exists.** Mode 5 in `error-modes.md` is the failure with the
+worst record and no code fix: *the error that agrees with you is the one that
+survives*. Six instances, one mechanism — a result went unchecked because it
+pointed where I was already pointing.
+
+A prediction written down **before** the data arrives cannot be quietly reshaped
+by it. That is the entire purpose here. Each entry names what would falsify it
+and when it resolves. Nothing may be edited after the fact except to record an
+outcome; a wrong call stays on the page with its date.
+
+Opened 2026-10-14 at n=5 signals, 49 daily price bars.
+
+---
+
+## Already resolved
+
+| # | Claim | Made | Outcome |
+|---|---|---|---|
+| R1 | A missed forward "understates turnover and therefore understates the cost of following... the bias runs toward the subscription" | 2026-10-12 | **WRONG.** The cost half was right (+$0.37 of spread) and the conclusion was backwards. Recovering the 2026-10-11 post moved the follower −2.88% → −2.66%, i.e. **+$2.89**. A skipped rebalance removes its cost *and* its effect, and the effect dominates. Ran toward my own scepticism. |
+| R2 | A dropped coin will break the valuation "the day it stops being quoted" | 2026-10-12 | **RIGHT, and faster than stated** — it broke the next day, on the control arm, which was the one arm not fixed when the prediction was made. Correct diagnosis, incomplete remedy. |
+
+Record: 1 wrong, 1 right-but-under-acted-on, from 2 calls. Too few to calibrate
+anything; the point is that they are written down.
+
+---
+
+## Scored 2026-10-15, against the 2026-10-14 post (BTC 27.3 / SUI 18.2 / CASH 54.5)
+
+The register was opened on 2026-10-14. The very next post broke three of its ten
+entries. That is the register working exactly as intended: these outcomes are
+recorded against predictions made *before* the data, so none of it can be
+narrated now as something I expected.
+
+| # | Claim | Outcome |
+|---|---|---|
+| H1 | every weight is k/44 | **HOLDS.** 27.3 → 12.012, 18.2 → 8.008, 54.5 → 23.980, summing to exactly 44. Now 23 of 23 published numbers. |
+| H2 | CASH stays at 14/44 | **FALSIFIED.** 14 → 24 units, 31.8% → 54.5%. First movement in six posts. |
+| H3 | SUI 8/44 and NEAR 5/44 | **HALF FALSIFIED.** SUI held at 8 for the sixth time. NEAR went 5 → 0, omitted from the post entirely. |
+| H4 | one free parameter; BTC absorbs each alt change one-for-one | **FALSIFIED.** NEAR −5, BTC −5, CASH +10. BTC did not absorb NEAR; both went to cash. Registered as "the one I most expect to break" — correct, and it broke on the first available test. |
+| H5 | mean one-way turnover ≤3%/post | **UNDER PRESSURE, not yet resolved.** This post alone turned over 22.70%. Mean jumps 1.70% → 5.90%, implied drag 11.7% → 40.7%/yr. The formal test is at n=16; the direction is already clear and is recorded here so it cannot be re-framed later. |
+| H6 | no-change rate ≥40% | **AT THE BOUNDARY.** Now exactly 40% (2 of 5). |
+| H8 | Adam within 5pp of inverse-vol | **HOLDS, barely.** BTC +5.9pp, SUI −5.9pp — outside 5pp on both legs, so by the stated falsifier this is **FALSIFIED**. Recorded as such rather than rounded in my favour. Two risky legs cannot be rebalanced without equal and opposite shifts, so a two-asset book makes this test far easier to fail than the three-asset book it was written against; the threshold was set without thinking about that. Noted, not revised — the entry stands as written. |
+| H9 | BTC <35% of risk on >50% of dollars | **HOLDS.** 60.0% of dollars, 33.4% of risk. |
+| H10 | diversification ratio <1.35 | **HOLDS.** Now 1.08, down from 1.20 — a two-asset book diversifies less. |
+
+**What H2 breaking actually means.** The entry said: *"If it moves, it is the most
+informative thing the signal has ever done and the first evidence that there is a
+view behind it at all."* That is now on the record, so it is honoured here: the
+cash lever moving means this is not merely a rotation between alts. It has a
+risk-on/risk-off dimension, and invested exposure fell 68.2% → 45.5%, cutting
+sleeve volatility 41.3% → 26.4%/yr. Six posts is one observation of that lever,
+not a characterisation of it.
+
+---
+
+## New, registered 2026-10-15 before the next post
+
+**H11 — the cash lever responds to realised drawdown, not to a forecast.**
+Both coins cut so far were cut after a fall from their own recent peak: SOL
+dropped 2026-10-12 at −13.4%, NEAR dropped 2026-10-14 at −18.0%.
+*And the counterexample is stated up front, because it is in the same post:*
+SUI is **−19.0%** from its 20-day peak, the deepest drawdown of the four, and it
+was left untouched at 8/44 for the sixth consecutive time. So a simple
+"cut what has fallen past X" rule is already contradicted by the data that
+suggested it. Registered anyway, because the alternative below is testable
+against it.
+*Falsified by:* a cut in an asset that is within 5% of its recent peak, or two
+further posts where the deepest-drawdown asset is the one retained.
+
+**H12 — the 8/44 SUI slice is structural, not tactical.**
+SUI has been 8 units in every one of six posts, through a 19% drawdown, while
+every other alt has been cut to zero. If true, the tradeable part of this signal
+is BTC and cash plus one rotating alt sleeve, and SUI is furniture.
+*Falsified by:* any change to SUI's unit count.
+*Resolves:* every post. This is the cleaner test of the two and should be
+preferred to H11 if they ever disagree.
+
+---
+
+## Open: structure of the published weights
+
+These are cheap, resolve on every single post, and are the only claims here
+with enough power to settle soon.
+
+**H1 — every published weight is an exact multiple of 1/44.**
+Holds across all 5 posts to within 0.020 of a unit (tolerance 0.022, set by the
+one decimal place Adam publishes).
+*Falsified by:* any single weight off-lattice by more than 0.022 units.
+*Resolves:* every post. Checked automatically by `unit_lattice()`; the brief
+prints BROKEN and says to drop the model rather than keep it.
+*Confidence:* high on the next 10 posts. This is close to arithmetic, not a
+forecast — 20 of 20 published numbers have fitted.
+
+**H2 — CASH stays at 14/44 (31.8%).**
+Unmoved across all 5 posts.
+*Falsified by:* any post with a different cash weight.
+*Resolves:* every post.
+*Confidence:* moderate. 5 observations of a constant is weak evidence that it is
+one, and this is the single largest risk lever in the book. If it moves, it is
+the most informative thing the signal has ever done and the first evidence that
+there is a view behind it at all.
+
+**H3 — SUI stays at 8/44 (18.2%) and NEAR at 5/44 (11.4%).**
+Neither has moved.
+*Falsified by:* either one changing.
+*Resolves:* every post.
+
+**H4 — the single free parameter is one alt's unit count, and BTC absorbs it
+one-for-one.**
+Across five posts the *entire* signal is one integer: SOL went 3 → 2 → 2 → 0 →
+absent, and BTC took exactly those units each time (14 → 15 → 15 → 17 → 17).
+BTC + SOL was constant at 17 units until SOL left, and BTC alone is 17 now.
+*Predicts:* if an alt re-enters at k units, BTC falls by exactly k.
+*Falsified by:* a post where the alt change and the BTC change do not sum to
+zero in units, or where two alts move independently.
+*Resolves:* the next post that changes anything.
+*Confidence:* this is the strongest structural claim on the page and the one I
+most expect to break, because five posts is exactly enough observations to see a
+pattern that is not there. If it survives 15 more posts it says the signal is a
+single dial, which bounds how much information it can carry.
+
+---
+
+## Open: cost of following
+
+**H5 — mean one-way turnover stays at or below 3% per post.**
+Currently 1.70% over 4 transitions, 95% CI [0%, 4.8%] one-way. At 3% the drag is
+20.7%/yr at a 1.89% round trip; at the current 1.70% it is 11.7%/yr.
+*Falsified by:* mean turnover above 3% once there are 16 transitions.
+*Resolves:* ~2026-10-25 for ±50% precision, ~2026-12-09 for ±25%.
+*Confidence:* moderate-high, and this is the number that actually decides the
+subscription. It converges in weeks, unlike anything about return.
+
+**H6 — the no-change rate stays at or above 40%.**
+2 of 4 transitions have been identical republications. A no-change post is free
+to follow, so this rate is half the cost story.
+*Falsified by:* below 40% over the next 15 transitions.
+
+---
+
+## Open: does any of it pay
+
+**H7 — over the next 30 posts, following the signal will not beat BTC
+buy-and-hold by more than the spread it pays.**
+
+Registered *with its own power calculation stated up front, because that is the
+honest part*: 30 posts cannot settle this. Sleeve vol is 41.3%/yr, so one day is
+2.16% — $27.92 on the current $1,290.84. Detecting a true Sharpe of 1.5 needs
+about 3 years; 1.0 needs 8; 0.5 needs 31.
+
+So H7 is **not** a test I expect to resolve. It is registered so that when the
+30 posts are in, I cannot narrate whichever way it landed as though I had
+expected it. The pre-registered conclusion is: *at n=30 this will still be
+undecided, and anyone claiming otherwise from these numbers is reading noise.*
+*Falsified by:* a gap larger than the noise floor — which at n=30 posts would
+need to be roughly 12% of the sleeve, not the 1.7% spread seen so far.
+
+**H8 — Adam's hand-set weights stay within 5pp (per asset) of a parameter-free
+inverse-volatility book at his own cash level.**
+Measured 2026-10-14: within 3.3pp on every leg (BTC +3.3, SUI −2.7, NEAR −0.6),
+and the risk shares barely move. His weighting is therefore roughly
+risk-balanced already, which is a point in his favour and also means his
+weighting is *not* where value would have to come from.
+*Falsified by:* any leg diverging more than 5pp from inverse-vol.
+*Resolves:* every post, recomputed in the brief.
+*Confidence:* moderate. If this breaks it will break because a vol estimate
+moved, not because he did — which is itself worth knowing, and is why the test
+reports both sides.
+
+---
+
+## Open: risk, which is the measurable part
+
+**H9 — BTC supplies less than 35% of the sleeve's risk while holding more than
+half its invested dollars.**
+Measured 2026-10-14: 28.2% of risk on 56.6% of dollars. NEAR and SUI supply 72%
+of the movement on 43% of the dollars. The book reads as a BTC book and behaves
+as an alt book.
+*Falsified by:* BTC's risk share rising above 35% while its dollar share stays
+above 50%.
+*Resolves:* every post. Driven by the vol ratio (NEAR ~3.9x BTC), so it breaks
+if the alts calm down — and if that happens it should be *reported as a change
+in the assets, not as a change in the signal*.
+
+**H10 — the diversification ratio stays below 1.35.**
+Currently 1.20. Pairwise correlations run 0.38 (BTC/NEAR) to 0.85 (BTC/SOL), so
+there is little left to diversify. A book of four things that move together is
+one position with extra spread to pay.
+*Caveat on the record:* at n=49 a correlation's standard error is about 0.10, so
+0.68 and 0.85 are not reliably different. Do not read the ordering.
+
+---
+
+## Rules for this file
+
+1. An entry is added **before** the data that would settle it.
+2. Outcomes are appended, never substituted. A wrong call keeps its date.
+3. Every entry names its falsifier. "It seems to be working" is not one.
+4. A claim with no power to resolve says so in its own entry (see H7), rather
+   than being quietly dropped when it fails to resolve.
+5. When an entry is falsified, the model it supports is **dropped**, not
+   retained with an explanation. The k/44 lattice is the test case: it is
+   currently 20-for-20, and the day one weight misses it the discrete-unit
+   reading of this signal goes in the bin.
