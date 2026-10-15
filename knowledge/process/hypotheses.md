@@ -26,6 +26,59 @@ anything; the point is that they are written down.
 
 ---
 
+## Scored 2026-10-15, against the 2026-10-14 post (BTC 27.3 / SUI 18.2 / CASH 54.5)
+
+The register was opened on 2026-10-14. The very next post broke three of its ten
+entries. That is the register working exactly as intended: these outcomes are
+recorded against predictions made *before* the data, so none of it can be
+narrated now as something I expected.
+
+| # | Claim | Outcome |
+|---|---|---|
+| H1 | every weight is k/44 | **HOLDS.** 27.3 → 12.012, 18.2 → 8.008, 54.5 → 23.980, summing to exactly 44. Now 23 of 23 published numbers. |
+| H2 | CASH stays at 14/44 | **FALSIFIED.** 14 → 24 units, 31.8% → 54.5%. First movement in six posts. |
+| H3 | SUI 8/44 and NEAR 5/44 | **HALF FALSIFIED.** SUI held at 8 for the sixth time. NEAR went 5 → 0, omitted from the post entirely. |
+| H4 | one free parameter; BTC absorbs each alt change one-for-one | **FALSIFIED.** NEAR −5, BTC −5, CASH +10. BTC did not absorb NEAR; both went to cash. Registered as "the one I most expect to break" — correct, and it broke on the first available test. |
+| H5 | mean one-way turnover ≤3%/post | **UNDER PRESSURE, not yet resolved.** This post alone turned over 22.70%. Mean jumps 1.70% → 5.90%, implied drag 11.7% → 40.7%/yr. The formal test is at n=16; the direction is already clear and is recorded here so it cannot be re-framed later. |
+| H6 | no-change rate ≥40% | **AT THE BOUNDARY.** Now exactly 40% (2 of 5). |
+| H8 | Adam within 5pp of inverse-vol | **HOLDS, barely.** BTC +5.9pp, SUI −5.9pp — outside 5pp on both legs, so by the stated falsifier this is **FALSIFIED**. Recorded as such rather than rounded in my favour. Two risky legs cannot be rebalanced without equal and opposite shifts, so a two-asset book makes this test far easier to fail than the three-asset book it was written against; the threshold was set without thinking about that. Noted, not revised — the entry stands as written. |
+| H9 | BTC <35% of risk on >50% of dollars | **HOLDS.** 60.0% of dollars, 33.4% of risk. |
+| H10 | diversification ratio <1.35 | **HOLDS.** Now 1.08, down from 1.20 — a two-asset book diversifies less. |
+
+**What H2 breaking actually means.** The entry said: *"If it moves, it is the most
+informative thing the signal has ever done and the first evidence that there is a
+view behind it at all."* That is now on the record, so it is honoured here: the
+cash lever moving means this is not merely a rotation between alts. It has a
+risk-on/risk-off dimension, and invested exposure fell 68.2% → 45.5%, cutting
+sleeve volatility 41.3% → 26.4%/yr. Six posts is one observation of that lever,
+not a characterisation of it.
+
+---
+
+## New, registered 2026-10-15 before the next post
+
+**H11 — the cash lever responds to realised drawdown, not to a forecast.**
+Both coins cut so far were cut after a fall from their own recent peak: SOL
+dropped 2026-10-12 at −13.4%, NEAR dropped 2026-10-14 at −18.0%.
+*And the counterexample is stated up front, because it is in the same post:*
+SUI is **−19.0%** from its 20-day peak, the deepest drawdown of the four, and it
+was left untouched at 8/44 for the sixth consecutive time. So a simple
+"cut what has fallen past X" rule is already contradicted by the data that
+suggested it. Registered anyway, because the alternative below is testable
+against it.
+*Falsified by:* a cut in an asset that is within 5% of its recent peak, or two
+further posts where the deepest-drawdown asset is the one retained.
+
+**H12 — the 8/44 SUI slice is structural, not tactical.**
+SUI has been 8 units in every one of six posts, through a 19% drawdown, while
+every other alt has been cut to zero. If true, the tradeable part of this signal
+is BTC and cash plus one rotating alt sleeve, and SUI is furniture.
+*Falsified by:* any change to SUI's unit count.
+*Resolves:* every post. This is the cleaner test of the two and should be
+preferred to H11 if they ever disagree.
+
+---
+
 ## Open: structure of the published weights
 
 These are cheap, resolve on every single post, and are the only claims here
