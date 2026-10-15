@@ -308,17 +308,55 @@ def test_a_buy_that_removes_basis_is_rejected():
 
 @pytest.mark.skipif(not POSITION.exists() or not LEDGER.exists(),
                     reason="live records not present")
-def test_the_replayed_ledger_matches_the_brokers_own_records():
-    """The whole tracker rests on its baseline matching the account. Broker
-    figures read back after the fills on 2026-10-12."""
-    live = apply_trades(load_position(), read_trades())
-    for a, (u, b) in {"BTC": (0.00593502, 494.33), "SUI": (213.682, 234.95),
-                      "NEAR": (29.14, 147.08)}.items():
+def test_the_replayed_ledger_is_internally_consistent():
+    """The invariant that cannot go stale: every holding is its opening fill plus
+    the signed sum of its own ledger entries, and nothing else.
+
+    This replaces a hardcoded snapshot of the broker's figures, which was a test
+    that cried wolf -- it failed on 2026-10-15 for no reason except that real
+    trading had happened, which is the one thing it was guaranteed to do. An
+    assertion that has to be edited every time the thing it watches changes
+    legitimately is an assertion nobody reads; it just gets updated.
+
+    The authority check is reconcile() against live broker records, below.
+    """
+    opening, trades = load_position(), read_trades()
+    live = apply_trades(opening, trades)
+    for a in set(opening.units) | {t.asset for t in trades}:
+        u = opening.units.get(a, 0.0) + sum(
+            (1 if t.side == "buy" else -1) * t.units for t in trades if t.asset == a)
+        b = opening.basis.get(a, 0.0) + sum(
+            t.basis_delta for t in trades if t.asset == a)
+        if abs(u) < 1e-12:
+            assert a not in live.units, f"{a} is fully exited and must leave the sleeve"
+            continue
         assert abs(live.units[a] - u) < 1e-8, f"{a} units"
         assert abs(live.basis[a] - b) < 0.005, f"{a} basis"
+    cash = opening.cash + sum(
+        (-1 if t.side == "buy" else 1) * t.notional for t in trades)
+    assert abs(live.cash - cash) < 0.005
+    # the denominator must survive every trade: it is the money he put in, and
+    # realised losses must never be allowed to shrink it
+    assert abs(live.capital - 1290.84) < 0.005
+
+
+@pytest.mark.skipif(not POSITION.exists() or not LEDGER.exists(),
+                    reason="live records not present")
+def test_the_replayed_ledger_matches_the_brokers_own_records():
+    """The one check in this project where a number meets an authority instead of
+    another of our own numbers.
+
+    These figures are read back from get_crypto_positions and MUST be refreshed
+    from the broker after every rebalance -- unlike the test above, which holds
+    on its own. Last read 2026-10-15T01:52 ET, after the NEAR exit.
+    """
+    live = apply_trades(load_position(), read_trades())
+    reconcile(live, {"BTC": 0.00416866, "SUI": 227.893},
+              {"BTC": 347.03, "SUI": 249.03})
+    assert "NEAR" not in live.units, "NEAR was fully exited 2026-10-15"
     assert "SOL" not in live.units, "SOL was fully exited 2026-10-12"
-    assert abs(live.cash - 408.98) < 0.005
-    assert abs(live.capital - 1290.84) < 0.005   # float sum of the four fills
+    assert abs(live.cash - 669.89) < 0.005
+    assert abs(live.realized - -24.89) < 0.005
 
 
 def test_a_fully_exited_asset_leaves_the_sleeve():
