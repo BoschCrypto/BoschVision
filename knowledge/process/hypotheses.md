@@ -55,6 +55,73 @@ not a characterisation of it.
 
 ---
 
+## Scored 2026-10-16, against the 2026-10-15 post (BTC 38.6 / SUI 18.2 / ZRO 11.4 / CASH 31.8)
+
+A near-exact reversal of the post that broke three entries the day before. BTC
+12 -> 17 units, CASH 24 -> 14, and **ZRO enters at 5 units, taking the slot NEAR
+vacated one day earlier**. The cash lever has now gone 14 -> 24 -> 14 in two days.
+
+| # | Claim | Outcome |
+|---|---|---|
+| H1 | every weight is k/44 | **HOLDS.** 16.984 + 8.008 + 5.016 + 13.992, summing to exactly 44. Now 27 of 27 published numbers. |
+| H5 | mean turnover <=3%/post | **BELOW THE LINE, formally open.** Two consecutive 22.70% posts take the mean to 8.70%, 2.9x the threshold; implied drag 11.7% -> 60.0%/yr. The stated test resolves at n=16 transitions and there are 6, so it is not called yet — but recording now that the direction is unambiguous, so it cannot be presented later as a surprise. |
+| H6 | no-change rate >=40% | **BELOW THE LINE, formally open.** Now 33% (2 of 6). Same treatment as H5: the falsifier named 15 transitions. |
+| H12 | SUI's 8/44 slice is structural | **HOLDS, seventh consecutive post.** Through a 19% drawdown, while every other alt has been cut to zero and replaced. Strengthening. |
+| H11 | the cash lever tracks realised drawdown | **STRAINED, not yet falsified by its own terms.** No drawdown rule produces a one-day round trip, and the re-risk came while the market RALLIED between posts — BTC +1.73%, SUI +5.92% on Robinhood marks. Its stated falsifier has still not occurred, so it stands as written. |
+
+**What replaced H4.** H4 (BTC absorbs each alt change one-for-one) died on
+2026-10-14. The two posts since show a different and sharper structure, which is
+registered below as H13 rather than claimed here.
+
+---
+
+## New, registered 2026-10-16 before the next post
+
+**H13 — BTC and the alt slot move TOGETHER, and cash is the counterweight.**
+Not against each other, as H4 had it. Observed twice:
+
+    2026-10-14   BTC -5   NEAR -5   CASH +10
+    2026-10-15   BTC +5   ZRO  +5   CASH -10
+
+The whole risky book moves as one block against cash: 30 units invested, then
+20, then 30. **And this is a CHANGE in behaviour, which is the real content of
+the entry.** The earlier posts did the opposite — 2026-10-10 moved SOL 3 -> 2 and
+BTC 14 -> 15 with cash untouched, a pure rotation at constant risk. So the signal
+appears to have two modes, and switched between them on 2026-10-14.
+*Falsified by:* a post where BTC and the alt move in opposite directions, or
+where either moves without cash moving by the sum of the risky changes.
+*Resolves:* the next post that changes anything.
+*Confidence:* low. Two observations of a pattern that contradicts the previous
+four is exactly the sample size at which H4 was registered and then died.
+
+**H14 — names enter on strength and leave on weakness.**
+Three events, all in one direction:
+
+    SOL   CUT    2026-10-12   -13.4% from its 20-day peak
+    NEAR  CUT    2026-10-14   -18.0% from its 20-day peak
+    ZRO   ADDED  2026-10-15    -2.3% from its 20-day peak, on a +19.5% day
+                               (and +124% over the preceding month)
+
+*Falsified by:* a name entering while more than 10% below its 20-day peak, or a
+name being cut within 5% of its peak.
+*Caveat that must travel with this entry:* this project has MEASURED that
+52-week-high proximity carries a negative standalone edge and that momentum
+continuation on its universe is survivorship bias. **Those were measured on 141
+US equities, not on crypto, and must not be transferred.** H14 describes what
+Adam does. It says nothing about whether it works, and nothing here should be
+read as evidence that it does.
+
+**H15 — the Short Module stays flat.**
+The 2026-10-15 post carries a section that none of the first six did: "Short
+Module: No short positions (flat)". Registered because the consequence is
+operational rather than analytical: **a non-flat short module cannot be followed
+at Robinhood at all** — a cash account cannot short crypto there. If it ever
+turns on, the sleeve stops being able to track this signal, and that is a fact
+about the product worth knowing before it happens rather than after.
+*Falsified by:* any post naming a short position.
+
+---
+
 ## New, registered 2026-10-15 before the next post
 
 **H11 — the cash lever responds to realised drawdown, not to a forecast.**

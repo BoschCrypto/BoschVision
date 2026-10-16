@@ -228,6 +228,23 @@ def portfolio_risk(weights: dict, periods: int = 365, **kw) -> dict:
     risky = {a: w for a, w in weights.items() if a != "CASH" and w != 0.0}
     if not risky:
         raise ValueError("no risky weight to measure")
+    # Name what is missing AND how much of the book it is, before computing
+    # anything. Decomposing only the assets that happen to have history would
+    # hand back shares that sum to 1.0 across a subset of the sleeve -- a number
+    # that looks like an answer and is not one. ZRO arrived 2026-10-15 with no
+    # usable series anywhere reachable: Crypto.com's ZRO_USD does ~$13k/day and
+    # breaks continuity on 17 of 30 transitions, ZRO_USDT does ~$1.4k/day, and
+    # Robinhood serves no crypto history at all.
+    store = kw.get("store", STORE)
+    absent = sorted(a for a in risky if not (store / f"{a}.csv").exists())
+    if absent:
+        share = sum(risky[a] for a in absent)
+        raise ValueError(
+            f"no price history for {', '.join(absent)}, which is "
+            f"{share:.1%} of the sleeve ({share / sum(risky.values()):.1%} of the "
+            f"invested part). Refusing to decompose the rest: shares computed over "
+            f"the assets that happen to have data would sum to 1.0 across a subset "
+            f"of the book and read as a full answer.")
     names = sorted(risky)
     cov, vols, k = covariance(names, periods, **kw)
     var = sum(risky[i] * risky[j] * cov[(i, j)] for i in names for j in names)
