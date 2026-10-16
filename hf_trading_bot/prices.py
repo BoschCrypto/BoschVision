@@ -30,10 +30,18 @@ Marking the sleeve is signaltrack's job and it uses broker marks, deliberately.
 """
 from __future__ import annotations
 import csv
+import json
 import math
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
+
+# The project's single definition of "parse an ISO stamp into an orderable
+# instant", imported rather than written again. A second copy of a rule is how
+# two copies drift apart -- see the duplicate valuation guard removed from
+# signaltrack on 2026-10-14. signaltrack does not import this module at module
+# scope (only inside its __main__), so there is no cycle.
+from .signaltrack import _ts
 
 STORE = Path("data/prices")
 
@@ -310,3 +318,92 @@ def drawdown(px: list[float]) -> dict:
         if dd < worst:
             worst, at = dd, i
     return {"max": worst, "at": at}
+
+
+# --- the store that needs no third party ------------------------------------
+#
+# Everything above comes from Crypto.com. That is fine for BTC, SOL, SUI and
+# NEAR and useless for anything smaller: ZRO arrived on 2026-10-15 and none of
+# Crypto.com's three ZRO venues carries real flow -- ZRO_USD ~$13k/day, ZRO_USDT
+# ~$1.4k/day, ZROUSD-PERP ~$4k/day with one session at $33. All three break the
+# continuity check. The obvious alternatives are all refused by this
+# environment's network policy: api.coingecko.com, min-api.cryptocompare.com,
+# api.binance.com and api.kraken.com each answer 403 to CONNECT at the gateway.
+#
+# So this records OUR OWN series, from the venue we actually trade on. It needs
+# no outside host, it cannot be revoked by a policy, and its prices are the ones
+# Waldo's orders really fill against rather than a third party's approximation.
+# The cost is that it has no past: it starts the day it starts, and a volatility
+# wants roughly 30 observations. That is the trade, stated plainly.
+
+MARKS = Path("data/prices/marks.jsonl")
+
+
+def record_marks(marks: dict, at: str | None = None, source: str = "robinhood",
+                 path: Path = MARKS) -> int:
+    """Append one dated snapshot of broker marks. One row per asset.
+
+    `at` is when the quote was READ, and defaults to now. It is emphatically not
+    the signal's publication time: passing that stamped marks observed at 00:13
+    with a 20:12 timestamp, putting prices four hours in their own past and
+    smuggling an exact duplicate of the next day's snapshot past the one-per-day
+    guard under a different date. A price row's stamp is a claim about when the
+    price existed, and it has to be true.
+
+    Refuses to write twice for the same asset on the same calendar day: a
+    double capture would put two observations of one day into a series of daily
+    ones, which quietly halves that day's apparent return and biases the
+    volatility built on it. Same failure as the duplicate signal, same refusal.
+    """
+    at = at or datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    day = _ts(at).date().isoformat()
+    existing = set()
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if line.strip():
+                r = json.loads(line)
+                existing.add((r["asset"], r["at"][:10]))
+    dupes = sorted(a for a in marks if (a, day) in existing)
+    if dupes:
+        raise ValueError(f"{', '.join(dupes)} already has a mark for {day} -- "
+                         f"two observations of one day is not a daily series")
+    for a, px in marks.items():
+        if px <= 0:
+            raise ValueError(f"{a} marked at {px}; a price must be positive")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        for a in sorted(marks):
+            f.write(json.dumps({"at": at, "asset": a, "mark": marks[a],
+                                "source": source}) + "\n")
+    return len(marks)
+
+
+def read_marks(path: Path = MARKS) -> dict:
+    """asset -> [(date, mark)], oldest first."""
+    if not path.exists():
+        return {}
+    out: dict[str, list] = {}
+    for i, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            r = json.loads(line)
+            d = _ts(r["at"]).date()
+        except Exception as e:
+            raise ValueError(f"{path}:{i} is not a usable mark -- {e}") from e
+        out.setdefault(r["asset"], []).append((d, float(r["mark"])))
+    return {a: sorted(v) for a, v in out.items()}
+
+
+def marks_status(path: Path = MARKS, need: int = 30) -> dict:
+    """How far this store is from being able to carry a volatility.
+
+    Exists so the gap is a countdown with a date on it rather than a standing
+    apology. `need` is 30 because a volatility from n returns carries a standard
+    error near vol/sqrt(2n): 30 gives about +/-13% relative, which is roughly
+    what the Crypto.com series already provide at 49 bars.
+    """
+    m = read_marks(path)
+    return {a: {"n": len(v), "first": v[0][0].isoformat(),
+                "last": v[-1][0].isoformat(), "short_by": max(need - len(v), 0)}
+            for a, v in sorted(m.items())}

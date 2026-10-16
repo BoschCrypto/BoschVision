@@ -115,7 +115,8 @@ def rebalance_plan(pos, sig: Signal, px: dict,
             "target_cash": total * sig.weights.get("CASH", 0.0)}
 
 
-def render(log=LOG, px: dict | None = None, store=P.STORE) -> str:
+def render(log=LOG, px: dict | None = None, store=P.STORE,
+           at: str | None = None) -> str:
     sigs = read_signals(log)
     if not sigs:
         return "No signals logged."
@@ -140,11 +141,31 @@ def render(log=LOG, px: dict | None = None, store=P.STORE) -> str:
         out.append(f"  -> {L['worst_case']} is off-lattice. The discrete-unit model is "
                    f"falsified. Drop it; do not quietly keep it.")
 
+    # --- capture tonight's broker marks before anything else ------------------
+    # Done here, on every run that is given live quotes, so the series builds
+    # itself instead of depending on anyone remembering. A second capture on a
+    # day already recorded is a no-op rather than an error: the brief must not
+    # fail because it was run twice.
+    if px:
+        try:
+            P.record_marks(px, at=at)        # None -> now, never the post's time
+        except ValueError as e:
+            if "already has a mark" not in str(e):
+                raise
+
     # --- risk, which is the part that is actually measurable at this n --------
     try:
         R = P.portfolio_risk(cur.weights, store=store)
     except Exception as e:                      # loud, not skipped
         out += ["", f"RISK: unavailable -- {e}"]
+        st = P.marks_status()
+        held = sorted(a for a in cur.weights if a != "CASH")
+        short = [st[a]["short_by"] for a in held if a in st]
+        if short:
+            out.append(f"      Own broker-mark series building: "
+                       f"{min(st[a]['n'] for a in held if a in st)} of 30 days. "
+                       f"A volatility needs about {max(short)} more daily captures, "
+                       f"so roughly {max(short)} days from now.")
     else:
         out += ["",
                 f"RISK  sleeve vol {R['sigma']:.1%}/yr +/-{R['sigma_se']:.1%} "

@@ -168,3 +168,52 @@ def test_misaligned_series_cannot_be_correlated():
 def test_drawdown_is_peak_to_trough_not_first_to_last():
     assert math.isclose(drawdown([100.0, 50.0, 100.0])["max"], -0.5, rel_tol=1e-12)
     assert drawdown([100.0, 110.0, 120.0])["max"] == 0.0
+
+
+def test_a_second_mark_on_the_same_day_is_refused(tmp_path):
+    """Two observations of one day inside a series of daily ones quietly halves
+    that day's apparent return and biases every volatility built on it. Same
+    failure as the duplicate signal, same refusal."""
+    from hf_trading_bot.prices import marks_status, read_marks, record_marks
+    f = tmp_path / "marks.jsonl"
+    record_marks({"BTC": 80000.0, "ZRO": 2.0}, at="2026-10-16T00:13:24-04:00", path=f)
+    record_marks({"BTC": 81000.0}, at="2026-10-17T00:10:00-04:00", path=f)
+    with pytest.raises(ValueError, match="already has a mark"):
+        record_marks({"BTC": 82000.0}, at="2026-10-17T20:00:00-04:00", path=f)
+    assert [m for _, m in read_marks(f)["BTC"]] == [80000.0, 81000.0]
+    # a different asset on that day is fine; it is the (asset, day) pair that is unique
+    record_marks({"ZRO": 2.2}, at="2026-10-17T20:00:00-04:00", path=f)
+    assert marks_status(f)["ZRO"]["n"] == 2
+
+
+def test_a_nonpositive_mark_is_refused_before_anything_is_written(tmp_path):
+    from hf_trading_bot.prices import read_marks, record_marks
+    f = tmp_path / "marks.jsonl"
+    with pytest.raises(ValueError, match="must be positive"):
+        record_marks({"BTC": 80000.0, "ZRO": 0.0}, at="2026-10-16T00:13:24-04:00", path=f)
+    assert read_marks(f) == {}, "a rejected snapshot must not half-write"
+
+
+def test_the_countdown_says_how_far_off_a_volatility_is(tmp_path):
+    """The gap is a countdown with a date on it, not a standing apology."""
+    from hf_trading_bot.prices import marks_status, record_marks
+    f = tmp_path / "marks.jsonl"
+    for i in range(3):
+        record_marks({"ZRO": 2.0 + i}, at=f"2026-10-{16 + i}T00:00:00-04:00", path=f)
+    st = marks_status(f, need=30)["ZRO"]
+    assert st["n"] == 3 and st["short_by"] == 27
+    assert st["first"] == "2026-10-16" and st["last"] == "2026-10-18"
+
+
+def test_a_mark_is_stamped_when_it_was_observed_not_when_the_signal_posted(tmp_path):
+    """Passing the post's publication time stamped marks read at 00:13 as 20:12 the
+    previous day -- four hours in their own past, and an exact duplicate of the
+    next snapshot wearing a different date, which walked straight past the
+    one-per-day guard. A price row's stamp is a claim about when the price
+    existed."""
+    from datetime import datetime, timezone
+    from hf_trading_bot.prices import read_marks, record_marks
+    f = tmp_path / "marks.jsonl"
+    record_marks({"ZRO": 2.15}, path=f)              # no `at` -> observed now
+    (d,), = [[d for d, _ in v] for v in read_marks(f).values()]
+    assert d == datetime.now(timezone.utc).astimezone().date()
