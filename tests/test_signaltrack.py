@@ -348,15 +348,15 @@ def test_the_replayed_ledger_matches_the_brokers_own_records():
 
     These figures are read back from get_crypto_positions and MUST be refreshed
     from the broker after every rebalance -- unlike the test above, which holds
-    on its own. Last read 2026-10-15T01:52 ET, after the NEAR exit.
+    on its own. Last read 2026-10-16T00:12 ET, after ZRO was opened.
     """
     live = apply_trades(load_position(), read_trades())
-    reconcile(live, {"BTC": 0.00416866, "SUI": 227.893},
-              {"BTC": 347.03, "SUI": 249.03})
+    reconcile(live, {"BTC": 0.00585316, "SUI": 227.893, "ZRO": 65.58},
+              {"BTC": 486.29, "SUI": 249.03, "ZRO": 141.89})
     assert "NEAR" not in live.units, "NEAR was fully exited 2026-10-15"
     assert "SOL" not in live.units, "SOL was fully exited 2026-10-12"
-    assert abs(live.cash - 669.89) < 0.005
-    assert abs(live.realized - -24.89) < 0.005
+    assert abs(live.cash - 388.74) < 0.005
+    assert abs(live.realized - -24.89) < 0.005   # both fills were buys
 
 
 def test_a_fully_exited_asset_leaves_the_sleeve():
