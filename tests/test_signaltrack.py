@@ -348,15 +348,17 @@ def test_the_replayed_ledger_matches_the_brokers_own_records():
 
     These figures are read back from get_crypto_positions and MUST be refreshed
     from the broker after every rebalance -- unlike the test above, which holds
-    on its own. Last read 2026-10-16T00:12 ET, after ZRO was opened.
+    on its own. Last read 2026-10-17T11:21 ET, after the signal went to 100% cash
+    and the whole sleeve was liquidated.
     """
     live = apply_trades(load_position(), read_trades())
-    reconcile(live, {"BTC": 0.00585316, "SUI": 227.893, "ZRO": 65.58},
-              {"BTC": 486.29, "SUI": 249.03, "ZRO": 141.89})
-    assert "NEAR" not in live.units, "NEAR was fully exited 2026-10-15"
-    assert "SOL" not in live.units, "SOL was fully exited 2026-10-12"
-    assert abs(live.cash - 388.74) < 0.005
-    assert abs(live.realized - -24.89) < 0.005   # both fills were buys
+    reconcile(live, {}, {})          # get_crypto_positions returns an empty list
+    assert live.units == {}, "the signal went to 100% cash; nothing should be held"
+    assert abs(live.cash - 1206.75) < 0.005
+    assert abs(live.realized - -84.09) < 0.005
+    # the denominator survives a full liquidation: it is the money he put in, not
+    # what is left of it. This is the case the `committed` field was written for.
+    assert abs(live.capital - 1290.84) < 0.005
 
 
 def test_a_fully_exited_asset_leaves_the_sleeve():

@@ -75,6 +75,44 @@ registered below as H13 rather than claimed here.
 
 ---
 
+## Scored 2026-10-17, against the 2026-10-16 post (100.0% CASH)
+
+A full exit. 44/44 units in cash; BTC, SUI and ZRO all to zero. One-way turnover
+68.20%, three times the previous record.
+
+| # | Claim | Outcome |
+|---|---|---|
+| H1 | every weight is k/44 | **HOLDS.** 44/44, trivially but validly. 28 of 28 published numbers. |
+| H12 | SUI's 8/44 slice is structural | **FALSIFIED.** Seven consecutive posts at 8 units, then zero. It was the strongest claim on this page and it was wrong: SUI was not furniture, it was simply the leg that had not yet been its turn to cut. Registered 2026-10-15, dead in two days. |
+| H13 | BTC and the alt move together, cash is the counterweight | **HOLDS**, in its most extreme form: every risky unit to zero, all 30 into cash. Third consecutive post consistent with it. |
+| H15 | the Short Module stays flat | **HOLDS.** Second appearance, still flat. |
+| H5 | mean turnover <=3%/post | **DEAD IN ALL BUT NAME.** 17.20% at n=7, 5.7x the threshold; implied drag 118.7%/yr. |
+| H6 | no-change rate >=40% | **DEAD IN ALL BUT NAME.** 29% (2 of 7). |
+
+**H12's death is the most useful thing on this page.** It was registered with
+"this is the cleaner test of the two and should be preferred to H11 if they ever
+disagree" -- maximum confidence, by the standards of this file -- on the
+strength of seven identical observations. Seven repetitions of a constant were
+not evidence that it was one. That is the same error as H4, which also died on
+its first real test, and it is worth stating as a rule rather than an anecdote:
+**on this signal, a weight that has never moved is not a weight that will not
+move; it is a weight whose turn has not come.**
+
+**What the three days actually cost.** Units by post:
+
+              BTC  SUI  NEAR  ZRO  CASH
+    10-13      17    8     5    -    14
+    10-14      12    8     0    -    24
+    10-15      17    8     -    5    14
+    10-16       0    0     -    0    44
+
+113.6% of one-way turnover in 72 hours -- more than a full turn of the sleeve.
+ZRO was bought at 2.1635654 on 10-16 00:12 and sold at 1.8718515 on 10-17 11:21,
+held 35 hours for -13.5% on price alone before a ~2% round-trip spread.
+Cumulative spread paid is now $23.45, 1.82% of committed capital, in eight days.
+
+---
+
 ## New, registered 2026-10-16 before the next post
 
 **H13 — BTC and the alt slot move TOGETHER, and cash is the counterweight.**
