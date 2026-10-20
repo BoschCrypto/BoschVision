@@ -210,10 +210,22 @@ make the agreement look stronger than it is** — which is error Mode 5 in
    say so. This is the same mistake the document exists to prevent, made inside
    the review of it.
 4. **"The $2,500 deposit that vanished on 10-06 is unresolved, and it sits in
-   the cash leg — 30% of total."** `FREEDOM-PLAN.md:181` describes $2,500
-   *arriving* as planned **Schwab Roth** funding. It is not in this book, has
-   never been in this book, and `pending_deposits` is 0 on all three Robinhood
-   accounts. The objection it was supporting does not survive.
+   the cash leg — 30% of total."** The conclusion stands; **the reason I first
+   gave for it was wrong, and is corrected here on 2026-10-20.** I wrote that
+   the claim rested on misreading `FREEDOM-PLAN.md:181`, which describes $2,500
+   *arriving* as planned Schwab Roth funding. But the Morning Market Monitor
+   routine carries an independent, earlier record: "a $2,500 deposit went
+   pending 2026-10-06 and vanished 2026-10-08 without crediting. Cause
+   unresolved." So the event is most likely real and I was wrong to attribute
+   the agent's claim to a misread.
+   What is still wrong is the part the objection needed: a deposit that never
+   credited is **not in the cash balance**, so it cannot be inflating the cash
+   denominator by 30%. `pending_deposits` is 0 on all three accounts and the
+   $4,679.53 of cash is settled money. The objection fails because the money is
+   absent, not because the record of it was a misreading.
+   **Recording this because a right conclusion reached by a wrong route is
+   exactly Mode 5** — and catching it in my own correction of someone else's
+   error is the most flattering possible place for it to hide.
 
 What survived review intact: the split itself, the cash-direction test, the
 observation that "total less designated reserve" is where the real ambiguity
