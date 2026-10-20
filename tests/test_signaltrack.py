@@ -348,14 +348,14 @@ def test_the_replayed_ledger_matches_the_brokers_own_records():
 
     These figures are read back from get_crypto_positions and MUST be refreshed
     from the broker after every rebalance -- unlike the test above, which holds
-    on its own. Last read 2026-10-18T22:00 ET, after the signal went back to
-    50% BTC and the position was re-entered.
+    on its own. Last read 2026-10-19T22:10 ET, after the signal went to 100%
+    cash and the BTC leg was sold; the broker returns an empty result set.
     """
     live = apply_trades(load_position(), read_trades())
-    reconcile(live, {"BTC": 0.00725741}, {"BTC": 603.41})
-    assert set(live.units) == {"BTC"}, "the signal holds BTC and cash, nothing else"
-    assert abs(live.cash - 603.34) < 0.005
-    assert abs(live.realized - -84.09) < 0.005   # the fill was a buy, nothing closed
+    reconcile(live, {}, {})            # broker: results == [], no open legs
+    assert live.units == {} and live.basis == {}, "the signal is 100% cash"
+    assert abs(live.cash - 1189.24) < 0.005
+    assert abs(live.realized - -101.60) < 0.005
     # the denominator survives a full liquidation: it is the money he put in, not
     # what is left of it. This is the case the `committed` field was written for.
     assert abs(live.capital - 1290.84) < 0.005

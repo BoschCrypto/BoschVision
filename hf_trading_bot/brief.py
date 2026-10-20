@@ -133,6 +133,19 @@ def render(log=LOG, px: dict | None = None, store=P.STORE,
         out.append(f"  one-way turnover {t['turnover']:.2%} of the sleeve, "
                    f"implying {t['cost']:.3%} in spread to follow it")
 
+    # The price series does not build itself -- say so, loudly, on any run that
+    # did not capture. Named assets are everything the log has ever priced,
+    # because the frozen control arm still holds legs the signal has dropped.
+    watch = sorted({a for s in sigs for a in s.prices})
+    stale = P.marks_missing_today(watch)
+    if stale:
+        out += ["", f"!! MARKS NOT CAPTURED TODAY for {', '.join(stale)} "
+                    f"({len(stale)} of {len(watch)}).",
+                "   Re-run with --prices to record them. The series is built only "
+                "by runs that are given",
+                "   live quotes; a scheduled run has no broker access and records "
+                "nothing."]
+
     L = unit_lattice(sigs)
     out += ["", f"LATTICE k/44: {'holds' if L['holds'] else 'BROKEN'} "
                 f"(worst {L['max_error_units']:.4f} of a {L['unit_pct']:.3%} unit, "

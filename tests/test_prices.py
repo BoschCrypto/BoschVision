@@ -217,3 +217,22 @@ def test_a_mark_is_stamped_when_it_was_observed_not_when_the_signal_posted(tmp_p
     record_marks({"ZRO": 2.15}, path=f)              # no `at` -> observed now
     (d,), = [[d for d, _ in v] for v in read_marks(f).values()]
     assert d == datetime.now(timezone.utc).astimezone().date()
+
+
+def test_a_day_with_no_capture_is_reported_not_silent(tmp_path):
+    """The capture does not run by itself: record_marks fires inside the brief
+    only when live quotes are passed, and a scheduled routine has no broker
+    access, so it records nothing. Six routine runs recorded nothing between
+    2026-10-14 and 2026-10-19 while the commit that added the store claimed it
+    'builds itself'. The series cannot be made self-populating, so the absence
+    is made loud instead."""
+    from datetime import datetime, timedelta, timezone
+    from hf_trading_bot.prices import marks_missing_today, record_marks
+    f = tmp_path / "marks.jsonl"
+    assert marks_missing_today(["BTC", "SOL"], f) == ["BTC", "SOL"], "empty store: all missing"
+    record_marks({"BTC": 80000.0}, path=f)
+    assert marks_missing_today(["BTC", "SOL"], f) == ["SOL"], "only the uncaptured one"
+    # a capture from an earlier day does NOT count as today's
+    y = (datetime.now(timezone.utc) - timedelta(days=1)).astimezone().isoformat(timespec="seconds")
+    record_marks({"SOL": 100.0}, at=y, path=f)
+    assert marks_missing_today(["BTC", "SOL"], f) == ["SOL"], "yesterday is not today"

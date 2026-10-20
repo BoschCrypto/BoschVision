@@ -395,6 +395,30 @@ def read_marks(path: Path = MARKS) -> dict:
     return {a: sorted(v) for a, v in out.items()}
 
 
+def marks_missing_today(assets: list[str], path: Path = MARKS) -> list[str]:
+    """Which of `assets` have no mark recorded for the current UTC day.
+
+    Exists because the capture does NOT run by itself, contrary to what the
+    commit that added it claimed. record_marks fires inside the brief only when
+    live quotes are passed, and the scheduled routines invoke the module with no
+    quotes at all -- they have no broker access from the command line. Six
+    routine runs between 2026-10-14 and 2026-10-19 recorded nothing, and the
+    series that did accumulate came entirely from hand-typed --prices calls. It
+    shows in the data: BTC got four captures because it was quoted most often,
+    while NEAR and SOL -- the two legs the frozen control arm still holds and
+    most needs priced -- got two each.
+
+    A series that depends on someone remembering is the same failure as a
+    routine holding stale facts instead of a command. It cannot be fixed by
+    making the CLI fetch prices it has no credentials for, so instead the
+    ABSENCE is made loud: every brief says plainly when today's marks are
+    missing, and who is missing them.
+    """
+    today = _today_utc()
+    have = {a for a, v in read_marks(path).items() if v and v[-1][0] >= today}
+    return sorted(set(assets) - have)
+
+
 def marks_status(path: Path = MARKS, need: int = 30) -> dict:
     """How far this store is from being able to carry a volatility.
 
