@@ -10,18 +10,27 @@ within weeks of being written. Fixed-dollar limits on a growing account are not 
 **Rule: all limits are percentages of the current total, recomputed at each review.
 No dollar figure is ever hardcoded again.**
 
+**Rule, added 2026-10-20: every limit names its base in the table.** Three bases
+exist — TOTAL, INVESTED, COMMITTED — and they are not interchangeable; cash is
+56% of the book, so the base decides whether half his money counts as armour or
+as nothing. The ruling and the reasoning that produced it are in
+`denominators.md`. A percentage printed without its base is a bug, not a
+shorthand: the routines raise rather than print one.
+
 ## The limits
 
-| limit | value | why |
-|---|---|---|
-| Risk budget per position | **1.5% of total** | Position size = budget ÷ distance-to-stop. A name whose honest stop is 25% away cannot be a 6% position. |
-| Max single non-diversified name | **10% of total** | |
-| Max single-name look-through | **12% of total** | Must count **every** fund that holds it — see below. |
-| Max sector look-through | **35% of total** | |
-| Max open single-name positions | **5** | Raised from 3: the account can now carry them. |
-| Halt new risk | portfolio **−15%** from high-water mark | |
-| Emergency fund | **6 × fixed monthly expenses**, in savings | Never invested. Not part of the risk calculation. |
-| Core allocation | **≥70%** broad index | The satellite is what is left, not a fixed $439. |
+| limit | value | base | why |
+|---|---|---|---|
+| Risk budget per position | **1.5%** | TOTAL | Position size = budget ÷ distance-to-stop. A name whose honest stop is 25% away cannot be a 6% position. |
+| Max single non-diversified name | **10%** | TOTAL | |
+| Max single-name look-through | **12%** | TOTAL | Must count **every** fund that holds it — see below. |
+| Max sector look-through | **35%** | TOTAL | |
+| Max third-party-directed mandate | **10%** | TOTAL | Added 2026-10-20. The *mandate* is the exposure, not tonight's position: when someone else sets the size, the whole committed amount is live. Currently 15.48% — **over**. |
+| Max open single-name positions | **5** | — | Raised from 3: the account can now carry them. |
+| Halt new risk | **−15%** from high-water mark | TOTAL | |
+| Emergency fund | **6 × fixed monthly expenses**, in savings | — | Never invested. Carved out of TOTAL before any cap is computed. **No dollar figure is designated yet, so TOTAL is currently undefined — see `denominators.md` §5.** |
+| Core allocation | **≥70%** broad index | **INVESTED** | The one limit that is not on TOTAL: it is a mix limit, and on TOTAL it could only ever be satisfied by spending the emergency fund on equities. QQQ does not count as broad. |
+| Strategy return / drag / realised P&L | — | **COMMITTED** | Frozen at the moment capital was assigned. Every other base flatters the result by growing the denominator. |
 
 ## Look-through is computed across ALL funds, always
 

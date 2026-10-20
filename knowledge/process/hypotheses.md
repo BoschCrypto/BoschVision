@@ -113,6 +113,89 @@ Cumulative spread paid is now $23.45, 1.82% of committed capital, in eight days.
 
 ---
 
+## New, registered 2026-10-20 before the next post
+
+These two exist because of a specific failure mode I want closed off in advance.
+The cost of following is converging — nine transitions in, the interval is
+already narrow enough to be decision-relevant. The benefit is not converging and
+by H7's own power calculation will not converge for years. The tempting move,
+eight posts from now, is to look at whichever way the sleeve happens to be
+sitting and call that the answer. So the rule goes down first, while the answer
+is still unknown.
+
+**H16 — the measured drag's lower bound already exceeds any gross edge worth
+crediting to this signal, and stays there.**
+
+As of 2026-10-20, n=9 transitions: mean one-way turnover **24.5%/post**, sd
+25.8pp, no-change rate 22.2%. At the measured round-trip spread of 1.89% and a
+roughly daily cadence that implies **168.9%/yr of drag**, 95% CI
+**[32.3%, 305.6%]**.
+
+The registered ceiling on plausible gross edge is **E_max = 30%/yr** of
+outperformance against an equal-weight buy-and-hold of the same coins. That
+number is set now, before it is needed, and here is the reasoning so it cannot
+be revised toward whatever the data wants: 30%/yr of sustained gross
+outperformance would put the signal at roughly the 95th percentile of long-run
+manager performance in any liquid asset class. Crediting more than that to an
+unaudited allocation post is not a forecast, it is a wish.
+
+The claim: **D_lo > E_max**, i.e. the bottom of the drag interval sits above the
+top of the credible-edge range, so following is negative-expectation *without
+needing to measure the edge at all*. Currently 32.3% > 30% — it passes, but by
+2.3pp, which is nothing. This is a live test, not a foregone one.
+
+*Falsified by:* D_lo falling to or below 30%/yr. The realistic route is more
+no-change posts (two of the nine transitions were zero; the 2026-10-16 and
+2026-10-19 posts were both 100% cash). A run of flat weeks pulls the mean down
+and widens nothing, and the test flips. If that happens the conclusion flips
+with it, and the cost case against following is **dropped**, not re-argued at a
+different ceiling.
+*Resolves:* every post, in the brief, from the same `turnover_summary()` call
+that produced the numbers above.
+*Confidence:* moderate on the direction, low on the margin. 2.3pp of headroom
+on a bound computed from nine observations is not a result; it is the first
+reading that happens to point somewhere.
+
+**H17 — the subscription fee, not the trading drag, is the binding cost at this
+sleeve size — and that is decidable today, with no further data.**
+
+Let F be the signal's annual fee in dollars. On the $1,290.84 committed to this
+sleeve:
+
+| fee | $/yr | % of sleeve/yr |
+|---|---|---|
+| $20/mo | $240 | **18.6%** |
+| $35/mo | $420 | **32.5%** |
+| $50/mo | $600 | **46.5%** |
+
+A normal all-in advisory load is about 1%/yr. The pre-registered rule, written
+before the fee is even known to me:
+
+> **Do not pay for the signal while the sleeve is smaller than 100 × F.**
+> ($24,000 at $20/mo. $60,000 at $50/mo.)
+
+That threshold has one virtue the alpha question will never have: it is
+measurable right now, to the dollar, and it does not care whether the signal is
+any good. A fee that eats a fifth of the account per year has to be beaten
+before the first trade is placed, and no edge we could detect in under eight
+years (H7) can clear it.
+
+*Falsified by:* nothing in the data — this is arithmetic, not a prediction. It
+is registered as a **commitment**, so that the decision cannot later be made on
+a good month. What *would* change it is the sleeve growing past the threshold,
+which is a fact about the account, not about Adam.
+*What explicitly does not count as evidence, decided now:* Adam's own posted
+returns; a profitable stretch in this sleeve; the sleeve beating BTC over any
+window shorter than H7's power calculation allows; or the feeling that we are
+learning something. The last one is the dangerous one, because it is true — the
+logging is worth it. **Logging is free. Following costs 169%/yr and paying costs
+more. Those are three separate decisions and they get three separate answers.**
+*Resolves:* now, and again whenever the sleeve crosses 100 × F.
+
+**Open input needed:** I do not know F. The rule above is written so that it
+binds whatever F turns out to be, but the table should be replaced with the real
+number when he tells me.
+
 ## New, registered 2026-10-16 before the next post
 
 **H13 — BTC and the alt slot move TOGETHER, and cash is the counterweight.**
