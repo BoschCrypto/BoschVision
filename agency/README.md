@@ -6,8 +6,8 @@ work, and **six agents** that run the business around the clock.
 
 ## Get it running on Windows (first time)
 
-1. **Install Python.** Download it from [python.org/downloads](https://www.python.org/downloads/).
-   In the installer, tick **"Add python.exe to PATH"** before you click Install.
+1. **Install Python** (3.12 or newer) from [python.org/downloads](https://www.python.org/downloads/).
+   If the installer offers **"Add python.exe to PATH"**, tick it.
 2. **Have the code in a folder that stays put.** This is the `BoschVision`
    folder, the same one that holds `run-dashboard.bat`. Don't keep it inside
    OneDrive, and don't move it later: the setup in step 4 is tied to its location.
@@ -35,18 +35,20 @@ work, and **six agents** that run the business around the clock.
    Python environment and installs everything. That downloads about 270 MB,
    because it shares an install with the trading bot, and takes a few minutes.
    Then your browser opens the HQ login page, with your **HQ token already
-   copied to the clipboard**: click the box and press Ctrl+V.
+   copied to the clipboard**: click the box and press Ctrl+V. Bookmark HQ
+   (`http://127.0.0.1:8500/hq`): the login lasts 30 days in that browser.
 5. **Keep it running.** The agents work while that black window stays open and
    the PC is awake:
    - *Settings → System → Power → Screen and sleep → "When plugged in, put my
      device to sleep after" → Never.*
    - Double-click **`make-agency-autostart.bat`** once, so the agency starts by
      itself whenever you sign in to Windows (after restarts and updates).
-   - To stop it, click the window, press Ctrl+C, then type `Y`.
+   - To stop it, bring that window to the front, press Ctrl+C, then type `Y`.
 
 The window shows a line each time an agent finishes a run, and the startup
 banner shows which settings file (`.env`) and database it is using. Lost the
-token? Run `run-agency.bat` again: it copies it to the clipboard every time.
+token? Double-click `run-agency.bat` again. It copies the token to the
+clipboard every time, and if the agency is already running it just opens HQ.
 
 **Important:** at this stage the website is visible **only on this PC**.
 Customers can't reach it until you put it on a domain (see
@@ -56,7 +58,8 @@ Customers can't reach it until you put it on a domain (see
 
 1. Open HQ. The overview shows every agent, today's numbers, and what's waiting.
 2. **Approvals:** read each draft, edit it if you like, then approve or reject it.
-   - An approved **blog post** goes live on your site immediately.
+   - An approved **blog post** goes live on your site immediately. To take one
+     down, open it in HQ and press **Unpublish**: it goes back to Approvals.
    - An **email** has an *Open in email* button, so you send it from your own inbox.
    - **Ads** and **social posts** you copy into Google Ads, Meta, or the platform yourself.
    - Rejecting teaches the agent: it sees your rejected titles next time.
@@ -153,9 +156,12 @@ can bring anyone in. You need:
    ```
 
    The agents put this address into every link they write, and SENTRY starts
-   checking your real HTTPS certificate from outside. **Don't send drafts
-   written before this was set: their links point to `127.0.0.1`, which only
-   works on your PC.**
+   checking your real HTTPS certificate from outside. Blog posts you published
+   earlier are fixed automatically. **But check any email, social post or ad
+   drafted before this was set before you send it: its links point to
+   `127.0.0.1`, which only works on your PC.**
+4. Once HQ is reachable from the internet, keep the long generated HQ token.
+   Don't replace it with a short `AGENCY_HQ_TOKEN` of your own.
 
 Optional: get a phone ping for every new lead and every security alert by
 setting `AGENCY_WEBHOOK_URL` to a Discord or Slack incoming webhook, or an

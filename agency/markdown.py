@@ -110,6 +110,17 @@ def render(md: str, heading_offset: int = 1) -> str:
     return "\n".join(out)
 
 
+_LOCAL_URL = re.compile(r"https?://(?:127\.0\.0\.1|localhost)(?::\d+)?(/[^\s)\]>\"']*)?", re.I)
+
+
+def relink_local(md: str, site_url: str) -> str:
+    """Point links an agent wrote while the site only ran locally
+    ('http://127.0.0.1:8500/contact') at the site's current address, so posts
+    approved before going live don't send visitors to 127.0.0.1."""
+    base = (site_url or "").rstrip("/")
+    return _LOCAL_URL.sub(lambda m: base + (m.group(1) or "/"), md or "")
+
+
 def plain_excerpt(md: str, length: int = 180) -> str:
     """First words of a Markdown body as plain text, for cards and meta tags."""
     text = re.sub(r"[#*_>`\[\]]|\(https?://[^)]*\)", "", md or "")

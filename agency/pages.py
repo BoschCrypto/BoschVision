@@ -24,7 +24,7 @@ KIND_LABELS = {
     "alert": "Alert",
 }
 APPROVE_EFFECT = {
-    "blog_post": "Approving publishes this post on the public blog.",
+    "blog_post": "Approving publishes this post on the public blog. You can unpublish it later from this page.",
     "social_post": "Approving marks it ready to post. Copy it into the platform when you're ready.",
     "newsletter": "Approving marks it ready to send from your email tool.",
     "ad_campaign": "Approving marks it ready to launch. Nothing is spent until you build it in "
@@ -472,9 +472,9 @@ def overview(b: dict, *, states: dict, snap: Optional[dict], pending: list[dict]
   <span class="what">{e(text)}</span><span class="when">{ago(r['started_ts'], now)}</span></li>""")
     offline_note = ""
     if backend == "offline":
-        offline_note = """<div class="notice">No model is connected, so BEACON, FLARE, SCOUT and FORGE draft from
-        templates. SENTRY and PRISM work fully without one. Connect a model in <code>.env</code> (see
-        <code>agency/README.md</code>) and restart.</div>"""
+        offline_note = """<div class="notice">No AI is connected, so BEACON, FLARE and SCOUT draft from templates
+        and FORGE waits. SENTRY and PRISM work fully without it. Connect the AI (see
+        <code>agency/README.md</code>, step 3) and restart.</div>"""
     return f"""{offline_note}
 <section class="kpis">{kpis}</section>
 <section><h2 class="section-title">Your agents</h2><div class="agents">{cards}</div></section>
@@ -537,6 +537,8 @@ def work_detail(item: dict, lead: Optional[dict], csrf: str, now: float, site_ur
         extras.append(f'<a class="btn ghost" href="{e(mailto)}">Open in email</a>')
     if item["status"] == "published" and item.get("slug"):
         extras.append(f'<a class="btn ghost" href="/blog/{e(item["slug"])}" target="_blank" rel="noopener">View on site ↗</a>')
+        extras.append(action_form(csrf, "unpublish", "Unpublish (back to drafts)", cls="btn ghost danger",
+                                  next_url=f"/hq/work/{item['id']}", id=item["id"]))
     status_note = "" if item["status"] in ("pending", "info") else f' · <span class="st st-{e(item["status"])}">{e(item["status"])}</span>'
     return f"""<p class="crumbs"><a href="/hq/approvals">← Approvals</a> · <a href="/hq/work">All work</a></p>
 <h1>{e(item['title'])}</h1>

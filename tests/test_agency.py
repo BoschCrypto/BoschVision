@@ -452,3 +452,63 @@ def test_agents_registry_matches_prompts():
     assert list(AGENTS) == ["marketing", "ads", "security", "analytics", "sales", "delivery"]
     for agent in AGENTS.values():
         assert agent.codename and agent.mission
+
+
+# -- fixes from the adversarial review ---------------------------------------
+def test_draft_finished_after_its_lead_was_deleted_is_not_filed(ctx):
+    lead_id = ctx.store.add_lead(name="Bo", email="bo@x.example")
+    ctx.store.delete_lead(lead_id)  # erasure request while SCOUT was still drafting
+    assert ctx.store.add_work("sales", None, "email_draft", "Hi Bo", "body", "pending", lead_id) is None
+    assert ctx.store.list_work() == []
+    assert ctx.store.add_lead(name="Next") != lead_id  # ids are never reused
+
+
+def test_forged_forwarded_for_cannot_dodge_the_login_limit(site):
+    ctx, client = site
+    ctx.settings = replace(ctx.settings, trust_proxy=True)
+    for i in range(10):  # each attempt claims a different client; the proxy appends the real one
+        client.request("POST", "/hq/login", {"token": "wrong"},
+                       headers={"X-Forwarded-For": f"10.0.0.{i}, 203.0.113.7"})
+    status, _, _ = client.request("POST", "/hq/login", {"token": ctx.settings.hq_token},
+                                  headers={"X-Forwarded-For": "10.9.9.9, 203.0.113.7"})
+    assert status == 429
+
+
+def test_public_blog_relinks_local_urls_and_posts_can_be_unpublished(site):
+    ctx, client = site
+    port = ctx.settings.site_url.rsplit(":", 1)[1]
+    work_id = ctx.store.add_work("marketing", None, "blog_post", "Local Links",
+                                 "Book: [here](http://127.0.0.1:8500/contact)", "pending")
+    slug = ctx.store.decide_work(work_id, approve=True)["slug"]
+    assert f"http://127.0.0.1:{port}/contact" in client.request("GET", f"/blog/{slug}")[2]
+    ctx.settings = replace(ctx.settings, site_url="https://biz.example")
+    body = client.request("GET", f"/blog/{slug}")[2]
+    assert 'href="https://biz.example/contact"' in body and "127.0.0.1" not in body
+    client.login(ctx.settings.hq_token)
+    client.request("POST", "/hq/action", {"csrf": client.csrf(), "action": "unpublish", "id": work_id})
+    assert ctx.store.get_work(work_id)["status"] == "pending"
+    assert client.request("GET", f"/blog/{slug}")[0] == 404
+
+
+def test_up_reports_an_agency_already_running(site, tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from agency import cli as cli_module
+    ctx, client = site
+    monkeypatch.setattr(cli_module.webbrowser, "open", lambda url: None)
+    env = {"AGENCY_DB": str(tmp_path / "second.db"), "AGENCY_LLM": "offline"}
+    result = CliRunner().invoke(cli_module.cli, ["up", "--port", str(client.port), "--open"], env=env)
+    assert result.exit_code == cli_module.ALREADY_RUNNING
+    assert "already running" in result.output
+
+
+def test_up_explains_a_port_taken_by_another_program(tmp_path):
+    import socket
+    from click.testing import CliRunner
+    from agency import cli as cli_module
+    with socket.socket() as other:
+        other.bind(("127.0.0.1", 0))
+        other.listen()
+        port = other.getsockname()[1]
+        env = {"AGENCY_DB": str(tmp_path / "x.db"), "AGENCY_LLM": "offline"}
+        result = CliRunner().invoke(cli_module.cli, ["up", "--port", str(port)], env=env)
+    assert result.exit_code == 1 and "AGENCY_PORT" in result.output

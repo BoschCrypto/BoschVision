@@ -14,6 +14,7 @@ import logging
 import os
 import signal
 import time
+import urllib.request
 import webbrowser
 from dataclasses import replace
 from typing import Optional
@@ -50,13 +51,44 @@ def build_context(**overrides) -> Context:
 
 def _model_line(ctx: Context) -> str:
     if not ctx.llm.connected:
-        line = "offline: writing agents file templates (agency/README.md > Connect a model)"
+        line = "offline: writing agents file templates (agency/README.md, step 3: Connect the AI)"
     else:
         line = f"{ctx.llm.backend} · {ctx.llm.model} · cap {ctx.llm.cap} calls/day"
     if os.environ.get("ANTHROPIC_API_KEY") and not importlib.util.find_spec("anthropic"):
         line += ("\n            ANTHROPIC_API_KEY is set but the Claude SDK isn't installed: "
                  'run  pip install -e ".[agency]"')
     return line
+
+
+# `agency up` exits with this when another copy already holds the port, so
+# run-agency.bat can say so instead of "stopped".
+ALREADY_RUNNING = 3
+
+
+def _agency_answers(url: str) -> bool:
+    try:
+        with urllib.request.urlopen(f"{url}/healthz", timeout=3) as resp:
+            return resp.read().decode().strip() == "ok"
+    except (OSError, ValueError):
+        return False
+
+
+def _disable_quick_edit() -> None:
+    """In the classic Windows console a click inside the window starts a text
+    selection that pauses every write to it; the agents log each run, so they
+    would all freeze until a key is pressed. Turn QuickEdit off for this window."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            # clear ENABLE_QUICK_EDIT_MODE (0x40); ENABLE_EXTENDED_FLAGS (0x80) makes it stick
+            kernel32.SetConsoleMode(handle, (mode.value & ~0x0040) | 0x0080)
+    except (AttributeError, OSError):
+        pass
 
 
 def _stop_on_sigterm(signum, frame):
@@ -84,15 +116,24 @@ def up(host: Optional[str], port: Optional[int], no_agents: bool, open_browser: 
     """Serve the website and HQ and keep all six agents working."""
     ctx = build_context(host=host, port=port)
     s = ctx.settings
+    local = f"http://{'127.0.0.1' if s.host in ('0.0.0.0', '::') else s.host}:{s.port}"
     try:
         srv = serve(ctx, s.host, s.port)
     except OSError as ex:
-        raise click.ClickException(f"could not listen on {s.host}:{s.port}: {ex}") from ex
+        ctx.store.close()
+        if _agency_answers(local):
+            click.echo(f"The agency is already running in another window. HQ: {local}/hq")
+            if open_browser:
+                webbrowser.open(f"{local}/hq/login")
+            click.get_current_context().exit(ALREADY_RUNNING)
+        raise click.ClickException(
+            f"could not listen on {s.host}:{s.port} ({ex}). Another program is using that "
+            "port: set AGENCY_PORT in .env to a free one, e.g. AGENCY_PORT=8501") from ex
+    _disable_quick_edit()
     scheduler = None
     if not no_agents:
         scheduler = Scheduler(ctx)
         scheduler.start()
-    local = f"http://{'127.0.0.1' if s.host in ('0.0.0.0', '::') else s.host}:{s.port}"
     names = " ".join(a.codename for a in AGENTS.values())
     click.echo("\n" + "=" * 68)
     click.echo(f"  {ctx.business['brand']} is open for business")

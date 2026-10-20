@@ -30,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional
 from urllib.parse import parse_qs, urlsplit
 
-from . import pages
+from . import markdown, pages
 from .agents import AGENTS, Context
 from .config import PACKAGE_DIR
 from .scheduler import register_agents
@@ -134,7 +134,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.ctx.settings.trust_proxy:
             fwd = self.headers.get("X-Forwarded-For", "")
             if fwd:
-                return fwd.split(",")[0].strip()
+                # The right-most entry is the one our own proxy (Cloudflare
+                # Tunnel, Caddy, nginx) appended; anything left of it was sent
+                # by the client and could be forged to dodge rate limits.
+                return fwd.split(",")[-1].strip()
         return self.client_address[0]
 
     def _client_key(self) -> str:
@@ -201,7 +204,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect("/static/favicon.svg")
 
         if path == "/":
-            html = pages.home(b, store.published_posts(limit=3))
+            html = pages.home(b, self._posts(limit=3))
         elif path == "/contact":
             prefill = {}
             if self._q("package"):
@@ -212,16 +215,22 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/privacy":
             html = pages.privacy(b)
         elif path in ("/blog", "/blog/"):
-            html = pages.blog_index(b, store.published_posts())
+            html = pages.blog_index(b, self._posts())
         elif path.startswith("/blog/"):
             post = store.post_by_slug(path[len("/blog/"):].strip("/"))
             if not post:
                 return self._send(404, pages.not_found(b))
-            html = pages.blog_post(b, post)
+            html = pages.blog_post(b, self._relinked(post))
         else:
             return self._send(404, pages.not_found(b))
         self._track(path)
         self._send(200, html)
+
+    def _relinked(self, post: dict) -> dict:
+        return {**post, "body": markdown.relink_local(post["body"], self.ctx.settings.site_url)}
+
+    def _posts(self, limit: int = 50) -> list[dict]:
+        return [self._relinked(p) for p in self.ctx.store.published_posts(limit=limit)]
 
     def _static(self, name: str) -> None:
         # Exact names from one flat directory: no traversal is possible.
@@ -406,6 +415,8 @@ class Handler(BaseHTTPRequestHandler):
             store.add_task(agent, form["instruction"].strip()[:2000])
         elif action == "lead_status" and form.get("id", "").isdigit() and form.get("status") in LEAD_STATUSES:
             store.update_lead(int(form["id"]), status=form["status"])
+        elif action == "unpublish" and form.get("id", "").isdigit():
+            store.unpublish(int(form["id"]))
         elif action == "delete_lead" and form.get("id", "").isdigit():
             store.delete_lead(int(form["id"]))
         elif action == "add_prospect" and form.get("company", "").strip():

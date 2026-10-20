@@ -24,7 +24,7 @@ CREATE INDEX IF NOT EXISTS ix_pageviews_ts ON pageviews(ts);
 CREATE INDEX IF NOT EXISTS ix_pageviews_visitor ON pageviews(visitor);
 
 CREATE TABLE IF NOT EXISTS leads (
-    id INTEGER PRIMARY KEY, ts REAL NOT NULL, name TEXT, email TEXT,
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, name TEXT, email TEXT,
     company TEXT, website TEXT, vertical TEXT, message TEXT,
     source TEXT, campaign TEXT, status TEXT NOT NULL DEFAULT 'new',
     score INTEGER, notes TEXT, updated_ts REAL);
@@ -239,11 +239,21 @@ class Store:
 
     # -- work + approvals --------------------------------------------------
     def add_work(self, agent: str, run_id: Optional[int], kind: str, title: str,
-                 body: str, status: str, lead_id: Optional[int] = None) -> int:
-        return self.execute(
-            "INSERT INTO work(ts, agent, run_id, kind, title, body, status, lead_id) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            time.time(), agent, run_id, kind, title, body, status, lead_id)
+                 body: str, status: str, lead_id: Optional[int] = None) -> Optional[int]:
+        """File a work item. Work about a lead is filed only while that lead
+        still exists: an agent may finish drafting after the owner deleted the
+        lead (an erasure request), and that draft must not come back. Returns
+        None when nothing was filed."""
+        if lead_id is None:
+            return self.execute(
+                "INSERT INTO work(ts, agent, run_id, kind, title, body, status) VALUES(?,?,?,?,?,?,?)",
+                time.time(), agent, run_id, kind, title, body, status)
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO work(ts, agent, run_id, kind, title, body, status, lead_id) "
+                "SELECT ?,?,?,?,?,?,?,? WHERE EXISTS (SELECT 1 FROM leads WHERE id=?)",
+                (time.time(), agent, run_id, kind, title, body, status, lead_id, lead_id))
+            return cur.lastrowid if cur.rowcount else None
 
     def get_work(self, work_id: int) -> Optional[dict]:
         return self.one("SELECT * FROM work WHERE id=?", work_id)
@@ -287,6 +297,12 @@ class Store:
             self.execute("UPDATE work SET status=?, slug=?, decided_ts=? WHERE id=?",
                          status, slug, time.time(), work_id)
             return self.get_work(work_id)
+
+    def unpublish(self, work_id: int) -> None:
+        """Take a published blog post down and put it back in Approvals as a
+        draft, so it can be edited and approved again."""
+        self.execute("UPDATE work SET status='pending', slug=NULL, decided_ts=NULL "
+                     "WHERE id=? AND status='published'", work_id)
 
     def published_posts(self, limit: int = 50) -> list[dict]:
         return self.query("SELECT * FROM work WHERE status='published' ORDER BY decided_ts DESC "

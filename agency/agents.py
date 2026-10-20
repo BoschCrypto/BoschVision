@@ -53,8 +53,8 @@ never promise guaranteed outcomes. Write a visible [PLACEHOLDER] wherever real \
 information is missing.
 """
 
-OFFLINE_NOTE = ("_Drafted from a template because no model is connected. Connect one "
-                "(agency/README.md → Connect a model) and this agent writes the real piece._")
+OFFLINE_NOTE = ("_Drafted from a template because no AI is connected. Connect it "
+                "(agency/README.md, step 3: Connect the AI) and this agent writes the real piece._")
 
 
 @dataclass
