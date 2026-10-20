@@ -7,7 +7,7 @@ Two sources, kept apart on purpose:
 * environment / ``.env`` — *how* it runs (ports, model, budget, the HQ
   token). Secrets live here and never in the YAML.
 
-    AGENCY_DB                     SQLite file (default agency.db)
+    AGENCY_DB                     SQLite file (default agency.db in the project folder)
     AGENCY_HOST / AGENCY_PORT     bind address (default 127.0.0.1:8500)
     AGENCY_SITE_URL               public URL; links and SENTRY's checks use it
     AGENCY_HQ_TOKEN               HQ login token (generated and stored if unset)
@@ -30,14 +30,31 @@ import yaml
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 DEFAULT_BUSINESS = PACKAGE_DIR / "business.yaml"
+# Where a relative AGENCY_DB lives: the project folder when running from a
+# checkout (where .env is found too), so every command — whatever folder it is
+# run from — opens the same database and the same HQ token.
+DATA_DIR = PACKAGE_DIR.parent if (PACKAGE_DIR.parent / "pyproject.toml").is_file() else Path.cwd()
+
+
+class BusinessFileError(ValueError):
+    pass
 
 
 def load_business(path: Optional[str] = None) -> dict:
     """Read business.yaml, filling the keys the site and agents rely on so a
     trimmed-down file still renders."""
     p = Path(path or os.environ.get("AGENCY_BUSINESS") or DEFAULT_BUSINESS)
-    with open(p, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except yaml.YAMLError as ex:
+        mark = getattr(ex, "problem_mark", None)
+        where = f" near line {mark.line + 1}" if mark else ""
+        raise BusinessFileError(
+            f"{p} has a formatting mistake{where}. Text that contains a colon (:) must be "
+            "wrapped in double quotes, and indentation must use spaces.") from ex
+    if not isinstance(data, dict):
+        raise BusinessFileError(f"{p} should contain settings like 'brand: ...', one per line.")
     data.setdefault("brand", "Your Agency")
     data.setdefault("tagline", "AI assistants and automations for local businesses")
     data.setdefault("pitch", "")
@@ -52,14 +69,18 @@ def load_business(path: Optional[str] = None) -> dict:
 
 
 def price_label(pkg: dict, currency: str) -> str:
-    """'$1,500 setup + $150/mo', '$490 one-time', or '$250/mo'."""
+    """'$1,500 setup + $150/mo', '$490 one-time', or '$250/mo'. A price typed
+    as text ('1 500', '15000 kr') is shown as written rather than crashing."""
+    def money(v) -> str:
+        return f"{currency}{v:,}" if isinstance(v, (int, float)) else f"{currency}{v}"
+
     setup, monthly = pkg.get("setup"), pkg.get("monthly")
     if setup and monthly:
-        return f"{currency}{setup:,} setup + {currency}{monthly:,}/mo"
+        return f"{money(setup)} setup + {money(monthly)}/mo"
     if setup:
-        return f"{currency}{setup:,} one-time"
+        return f"{money(setup)} one-time"
     if monthly:
-        return f"{currency}{monthly:,}/mo"
+        return f"{money(monthly)}/mo"
     return "Custom quote"
 
 
@@ -88,7 +109,7 @@ class Settings:
     def from_env(cls, env: Optional[dict] = None, **overrides) -> "Settings":
         e = env if env is not None else os.environ
         s = cls(
-            db_path=e.get("AGENCY_DB") or cls.db_path,
+            db_path=str(DATA_DIR / (e.get("AGENCY_DB") or cls.db_path)),
             host=e.get("AGENCY_HOST") or cls.host,
             port=_int(e.get("AGENCY_PORT"), cls.port),
             site_url=(e.get("AGENCY_SITE_URL") or "").rstrip("/"),

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import http.client
+import json
 import re
 import threading
 import time
@@ -11,10 +12,10 @@ from urllib.parse import urlencode
 
 import pytest
 
-from agency import analytics, markdown, security
+from agency import analytics, llm as llm_module, markdown, pages, security
 from agency.agents import AGENTS, MAX_PENDING, Context
-from agency.config import Settings, load_business, price_label
-from agency.llm import LLM, BudgetExceeded, LLMError, normalize, parse_json_lenient
+from agency.config import DATA_DIR, BusinessFileError, Settings, load_business, price_label
+from agency.llm import OUTPUT_SCHEMA, LLM, BudgetExceeded, LLMError, normalize, parse_json_lenient
 from agency.scheduler import Scheduler
 from agency.store import Store
 from agency.web import AgencyServer, ensure_hq_token
@@ -57,6 +58,31 @@ def test_price_label():
     assert price_label({"setup": 1500, "monthly": 150}, "$") == "$1,500 setup + $150/mo"
     assert price_label({"setup": 490}, "€") == "€490 one-time"
     assert price_label({}, "$") == "Custom quote"
+    # Prices typed as text render as written instead of crashing the site.
+    assert price_label({"setup": "1 500", "monthly": "150 kr"}, "") == "1 500 setup + 150 kr/mo"
+
+
+def test_business_yaml_mistakes_get_a_plain_error(tmp_path):
+    bad = tmp_path / "business.yaml"
+    bad.write_text("brand: Acme\ntagline: AI: done right\n", encoding="utf-8")
+    with pytest.raises(BusinessFileError, match="colon"):
+        load_business(str(bad))
+
+
+def test_relative_db_lives_in_the_project_folder_whatever_the_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert Settings.from_env({}).db_path == str(DATA_DIR / "agency.db")
+    assert Settings.from_env({"AGENCY_DB": "x/y.db"}).db_path == str(DATA_DIR / "x" / "y.db")
+    absolute = str(tmp_path / "abs.db")
+    assert Settings.from_env({"AGENCY_DB": absolute}).db_path == absolute
+
+
+def test_privacy_text_comes_from_business_yaml():
+    b = load_business()
+    html = pages.privacy(b)
+    assert "Anthropic" in html and f"mailto:{b['contact_email']}" in html and "{brand}" not in html
+    b["privacy"] = "## Custom\nOnly what {brand} needs."
+    assert "Only what Mainstreet AI needs." in pages.privacy(b)
 
 
 # -- model layer ---------------------------------------------------------------
@@ -140,15 +166,23 @@ def test_every_agent_runs_offline_and_files_work(ctx):
     ctx.store.add_lead(name="Ana Lind", email="ana@smile.example", company="Smile Dental",
                        vertical="Dental and medical clinics", message="We miss calls.")
     sched = Scheduler(ctx)
-    for key in ("analytics", "sales", "marketing", "ads", "delivery"):
+    for key in ("analytics", "sales", "marketing", "ads"):
         result = sched.run_agent(key)
         assert result.status == "ok", (key, result.summary)
         assert result.items, key
     pending = {w["agent"] for w in ctx.store.list_work(status="pending")}
     assert pending == {"sales", "marketing", "ads"}  # outward-facing work waits for the owner
-    assert {w["kind"] for w in ctx.store.list_work(status="info")} == {"report", "blueprint"}
+    assert {w["kind"] for w in ctx.store.list_work(status="info")} == {"report"}
     lead = ctx.store.list_leads()[0]
     assert lead["score"] and "Template reply" in lead["notes"]
+
+
+def test_forge_waits_for_a_model_instead_of_filing_skeletons(ctx):
+    lead_id = ctx.store.add_lead(name="Cy", company="Cy's Cuts")
+    ctx.store.update_lead(lead_id, status="won")
+    result = Scheduler(ctx).run_agent("delivery")
+    assert result.status == "idle" and not result.items and "model" in result.summary
+    assert ctx.store.get_kv("delivery_templates") is None  # nothing marked done
 
 
 def test_sales_handles_each_lead_once(ctx):
@@ -170,8 +204,54 @@ def test_content_agents_hold_when_drafts_pile_up(ctx):
 def test_won_lead_gets_a_blueprint(ctx):
     lead_id = ctx.store.add_lead(name="Cy", company="Cy's Cuts", vertical="Hair and beauty salons")
     ctx.store.update_lead(lead_id, status="won")
+    ctx.llm, _ = anthropic_llm(ctx, fake_response(
+        '{"summary": "plan", "score": 0, "items": [{"kind": "blueprint", "title": "Plan", "body": "Steps"}]}'))
     result = Scheduler(ctx).run_agent("delivery")
     assert result.items[0]["kind"] == "blueprint" and result.items[0]["lead_id"] == lead_id
+
+
+def _cli_llm(ctx, monkeypatch, binary, stdout, returncode=0):
+    """An LLM on the claude-cli backend whose subprocess call is captured."""
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["kwargs"] = kwargs
+        prompt_file = cmd[cmd.index("--system-prompt-file") + 1]
+        with open(prompt_file, encoding="utf-8") as f:
+            seen["system"] = f.read()
+        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(llm_module.subprocess, "run", fake_run)
+    llm = LLM(replace(ctx.settings, llm_backend="claude-cli"), ctx.store)
+    llm._claude_bin = binary
+    return llm, seen
+
+
+def test_cli_backend_passes_instructions_by_file_and_reads_structured_output(ctx, monkeypatch):
+    out = '{"structured_output": {"summary": "hej å", "score": 0, "items": []}, "total_cost_usd": 0.01}'
+    llm, seen = _cli_llm(ctx, monkeypatch, "/usr/bin/claude", out)
+    assert llm.generate("sales", "SYSTEM ÅÄÖ | & < >", "user", lambda: {})["summary"] == "hej å"
+    cmd = seen["cmd"]
+    assert "--system-prompt" not in cmd and "SYSTEM ÅÄÖ | & < >" == seen["system"]
+    assert cmd[cmd.index("--tools") + 1] == "" and "--json-schema" in cmd
+    assert seen["kwargs"]["encoding"] == "utf-8"
+    assert ctx.store.llm_usage_since(0)["cost_usd"] == pytest.approx(0.01)
+
+
+def test_cli_backend_on_a_windows_shim_keeps_quotes_off_the_command_line(ctx, monkeypatch):
+    reply = '```json\n{"summary": "ok", "score": 0, "items": []}\n```'
+    llm, seen = _cli_llm(ctx, monkeypatch, r"C:\npm\claude.cmd", json.dumps({"result": reply}))
+    assert llm.generate("sales", "SYS", "user", lambda: {})["summary"] == "ok"
+    assert "--json-schema" not in seen["cmd"]
+    assert json.dumps(OUTPUT_SCHEMA) in seen["system"]  # the schema rides in the instructions file
+
+
+def test_cli_backend_explains_a_logged_out_claude_code(ctx, monkeypatch):
+    out = '{"is_error": true, "result": "Invalid API key · Please run /login"}'
+    llm, _ = _cli_llm(ctx, monkeypatch, "/usr/bin/claude", out)
+    with pytest.raises(LLMError, match="not logged in"):
+        llm.generate("sales", "SYS", "user", lambda: {})
 
 
 def test_tasks_run_first_and_are_marked_done(ctx):
@@ -339,6 +419,10 @@ def test_hq_actions_drive_agents_and_leads(site):
                                           "status": "won"})
     state = ctx.store.get_agent("ads")
     assert state["requested"] == 1 and state["enabled"] == 0
+    other = ctx.store.add_lead(name="Erase Me", email="erase@x.example")
+    ctx.store.add_work("sales", None, "email_draft", "Hi Erase", "body", "pending", other)
+    client.request("POST", "/hq/action", {"csrf": csrf, "action": "delete_lead", "id": other})
+    assert ctx.store.get_lead(other) is None and ctx.store.list_work(lead_id=other) == []
     assert ctx.store.agents_with_queued_tasks() == {"sales"}
     assert ctx.store.get_lead(lead["id"])["status"] == "won"
     status, _, body = client.request("GET", "/hq/api/status")

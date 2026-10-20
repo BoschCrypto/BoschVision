@@ -20,6 +20,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import re
 import secrets
 import threading
@@ -68,6 +69,9 @@ def _derive(token: str, purpose: str) -> str:
 
 class AgencyServer(ThreadingHTTPServer):
     daemon_threads = True
+    # On Windows SO_REUSEADDR lets a second copy bind a port that is already
+    # in use (two schedulers, one site); refuse instead, with a clear error.
+    allow_reuse_address = os.name != "nt"
 
     def __init__(self, address, ctx: Context):
         self.ctx = ctx
@@ -402,6 +406,8 @@ class Handler(BaseHTTPRequestHandler):
             store.add_task(agent, form["instruction"].strip()[:2000])
         elif action == "lead_status" and form.get("id", "").isdigit() and form.get("status") in LEAD_STATUSES:
             store.update_lead(int(form["id"]), status=form["status"])
+        elif action == "delete_lead" and form.get("id", "").isdigit():
+            store.delete_lead(int(form["id"]))
         elif action == "add_prospect" and form.get("company", "").strip():
             store.add_lead(**{k: (form.get(k) or "").strip()[:4000] for k in
                               ("name", "email", "company", "website", "vertical", "message")},

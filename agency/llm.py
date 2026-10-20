@@ -23,6 +23,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -129,6 +130,15 @@ def normalize(data: dict) -> dict:
     return {"summary": str(data.get("summary") or "").strip()[:400], "score": score, "items": items}
 
 
+_LOGGED_OUT = re.compile(r"/login|not logged in|authenticat|invalid api key", re.I)
+
+
+def _raise_if_logged_out(detail: str) -> None:
+    if _LOGGED_OUT.search(detail or ""):
+        raise LLMError("Claude Code is installed but not logged in: open a terminal, run "
+                       "`claude`, type /login, then restart the agency")
+
+
 def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> Optional[float]:
     price = PRICES.get(model)
     if not price:
@@ -223,20 +233,35 @@ class LLM:
         if not self._claude_bin:
             raise LLMError("the `claude` CLI is not on PATH")
         # No tools: an agent drafting copy has no business editing files or
-        # running commands. The prompt goes on stdin (no argv length limit),
-        # and the CLI runs outside the repo so no project hooks fire.
+        # running commands. The instructions go in a file and the prompt on
+        # stdin, so nothing long or full of quotes passes through a command
+        # line; the CLI runs outside the repo so no project hooks fire.
+        # Windows' npm shim (claude.cmd) runs through cmd.exe, which would
+        # mangle the JSON schema's quotes, so there the schema rides in the
+        # instructions instead and the reply is parsed leniently.
+        shim = self._claude_bin.lower().endswith((".cmd", ".bat"))
+        if shim:
+            system += "\n\nReply with a single JSON object matching this JSON Schema:\n" + json.dumps(OUTPUT_SCHEMA)
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
+            f.write(system)
         cmd = [self._claude_bin, "-p", "--model", self.model, "--tools", "",
-               "--system-prompt", system, "--output-format", "json",
-               "--json-schema", json.dumps(OUTPUT_SCHEMA), "--no-session-persistence"]
+               "--system-prompt-file", f.name, "--output-format", "json", "--no-session-persistence"]
+        if not shim:
+            cmd += ["--json-schema", json.dumps(OUTPUT_SCHEMA)]
         try:
-            p = subprocess.run(cmd, input=user, capture_output=True, text=True,
-                               timeout=900, cwd=tempfile.gettempdir())
+            p = subprocess.run(cmd, input=user, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=900, cwd=tempfile.gettempdir())
         except subprocess.TimeoutExpired as ex:
             raise LLMError("`claude -p` timed out after 15 minutes") from ex
+        finally:
+            os.unlink(f.name)
         if p.returncode != 0:
-            raise LLMError(f"`claude -p` exited {p.returncode}: {(p.stderr or p.stdout)[-300:]}")
+            detail = (p.stderr or p.stdout or "").strip()
+            _raise_if_logged_out(detail)
+            raise LLMError(f"`claude -p` exited {p.returncode}: {detail[-300:]}")
         outer = parse_json_lenient(p.stdout)
         if outer.get("is_error"):
+            _raise_if_logged_out(str(outer.get("result")))
             raise LLMError(f"`claude -p` reported an error: {str(outer.get('result'))[:300]}")
         structured = outer.get("structured_output")
         data = structured if isinstance(structured, dict) else (

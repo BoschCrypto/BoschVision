@@ -236,20 +236,30 @@ def thanks(b: dict) -> str:
     return public_page(b, f"Thank you | {b['brand']}", body)
 
 
+DEFAULT_PRIVACY = """\
+{brand} keeps this short because we collect very little.
+
+## What we collect
+- **When you contact us:** the details you type into the form (name, email, business, website, message). We use them to reply to you and, if you become a client, to deliver the work.
+- **When you browse:** which pages are viewed and where the visit came from (for example a search engine or an ad). Visits are counted with an anonymous code that changes every day, so we cannot follow you from one day to the next. This site sets no cookies for visitors and loads no third-party trackers.
+
+## Who helps us
+We use AI tools from Anthropic (Claude) to help draft our replies and proposals, so the details in your enquiry are processed by Anthropic for that purpose. A person at {brand} reviews every message before it is sent.
+
+## How long we keep it
+We keep an enquiry only as long as we need it to reply and follow up, and we delete it sooner if you ask.
+
+## Your rights
+You can ask what we hold about you, have it corrected or deleted, or object to how we use it. Email [{contact_email}](mailto:{contact_email}).
+"""
+
+
 def privacy(b: dict) -> str:
-    email = e(b["contact_email"])
+    text = (b.get("privacy") or DEFAULT_PRIVACY)
+    text = text.replace("{brand}", b["brand"]).replace("{contact_email}", b["contact_email"])
     body = f"""<section class="section"><div class="wrap narrow prose">
   <h1>Privacy notice</h1>
-  <p>{e(b['brand'])} keeps this short because we collect very little.</p>
-  <h2>What we collect</h2>
-  <ul>
-    <li><strong>When you contact us:</strong> the details you type into the form (name, email, business, website, message). We use them only to reply and, if you become a client, to deliver the work.</li>
-    <li><strong>When you browse:</strong> which pages are viewed and where the visit came from (for example a search engine or an ad). Visits are counted with an anonymous code that changes every day, so we cannot follow you from one day to the next. This site sets no cookies for visitors and loads no third-party trackers.</li>
-  </ul>
-  <h2>How long we keep it</h2>
-  <p>Enquiries that don't become clients are deleted within 12 months. Visit statistics are kept in aggregate.</p>
-  <h2>Your rights</h2>
-  <p>You can ask us what we hold about you, ask us to correct or delete it, or object to how we use it. Email <a href="mailto:{email}">{email}</a>.</p>
+  {markdown.render(text)}
 </div></section>"""
     return public_page(b, f"Privacy | {b['brand']}", body)
 
@@ -554,14 +564,20 @@ def leads_page(b: dict, leads: list[dict], csrf: str, now: float) -> str:
   <td><form method="post" action="/hq/action" class="inline">{csrf_field(csrf)}
     <input type="hidden" name="action" value="lead_status"><input type="hidden" name="id" value="{lead['id']}">
     <input type="hidden" name="next" value="/hq/leads"><select name="status" aria-label="Status">{options}</select>
-    <button class="btn btn-sm ghost" type="submit">Save</button></form></td>
+    <button class="btn btn-sm ghost" type="submit">Save</button></form>
+    <form method="post" action="/hq/action" class="inline">{csrf_field(csrf)}
+    <input type="hidden" name="action" value="delete_lead"><input type="hidden" name="id" value="{lead['id']}">
+    <input type="hidden" name="next" value="/hq/leads">
+    <button class="btn btn-sm ghost danger" type="submit"
+      data-confirm="Delete this lead and every draft written for them? This can't be undone.">Delete</button></form></td>
 </tr>""")
     table = ("""<div class="table-wrap"><table class="table"><thead><tr><th>Received</th><th>Who</th><th>Trade</th>
 <th>Source</th><th>Fit</th><th>SCOUT's note</th><th>Status</th></tr></thead><tbody>""" + "".join(rows)
              + "</tbody></table></div>") if rows else '<p class="empty">No leads yet. They appear here the moment someone fills in the contact form.</p>'
     verticals = "".join(f"<option>{e(v)}</option>" for v in [*b["verticals"], "Other"])
     return f"""<h1>Leads</h1>
-<p class="hint">Set a lead to <strong>won</strong> and FORGE writes the delivery blueprint. Add a <strong>prospect</strong> below and SCOUT drafts first-touch outreach.</p>
+<p class="hint">Set a lead to <strong>won</strong> and FORGE writes the delivery blueprint. Add a <strong>prospect</strong> below and SCOUT drafts first-touch outreach.
+<strong>Delete</strong> removes a lead and every draft about them, for when someone asks you to erase their data.</p>
 <div class="panel">{table}</div>
 <section class="panel"><h2>Add a prospect</h2>
 <form method="post" action="/hq/action" class="grid-form">{csrf_field(csrf)}

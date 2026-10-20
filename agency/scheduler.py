@@ -123,6 +123,8 @@ class Scheduler:
                         runs=(state.get("runs") or 0) + 1)
         if task:
             store.finish_task(task["id"], "failed" if result.status == "error" else "done", run_id)
+        log.info("%-7s %-7s %s%s", agent.codename, result.status, result.summary,
+                 f" ({error})" if error else "")
         return result
 
     def _persist(self, agent: Agent, run_id: int, result: RunResult) -> None:

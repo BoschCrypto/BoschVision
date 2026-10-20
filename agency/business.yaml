@@ -6,8 +6,15 @@
 # site, the ads, the posts and the sales emails all follow. Restart
 # `agency up` after editing.
 #
-# Before going live: set `brand`, `region` and `contact_email`. SENTRY (the
-# security agent) flags the placeholder email until you do.
+# Before going live: set `brand`, `region` and `contact_email`, your prices,
+# and read the FAQ and privacy text at the bottom as promises you will keep.
+# SENTRY (the security agent) flags the placeholder email until you change it.
+#
+# Writing values safely:
+#   - Prices are plain numbers: 1500 (not 1 500, 1,500 or 1500 kr).
+#     The currency goes in `currency`, e.g.  currency: "SEK "  (note the space).
+#   - Text that contains a colon (:) must be wrapped in double quotes.
+#   - Indent with spaces, never tabs.
 # ---------------------------------------------------------------------------
 
 brand: Mainstreet AI
@@ -119,3 +126,21 @@ agents:
   analytics: 60
   sales: 15
   delivery: 180
+
+# The privacy notice at /privacy. {brand} and {contact_email} are filled in
+# for you. Keep it true: it is a promise to everyone who contacts you.
+privacy: |
+  {brand} keeps this short because we collect very little.
+
+  ## What we collect
+  - **When you contact us:** the details you type into the form (name, email, business, website, message). We use them to reply to you and, if you become a client, to deliver the work.
+  - **When you browse:** which pages are viewed and where the visit came from (for example a search engine or an ad). Visits are counted with an anonymous code that changes every day, so we cannot follow you from one day to the next. This site sets no cookies for visitors and loads no third-party trackers.
+
+  ## Who helps us
+  We use AI tools from Anthropic (Claude) to help draft our replies and proposals, so the details in your enquiry are processed by Anthropic for that purpose. A person at {brand} reviews every message before it is sent.
+
+  ## How long we keep it
+  We keep an enquiry only as long as we need it to reply and follow up, and we delete it sooner if you ask.
+
+  ## Your rights
+  You can ask what we hold about you, have it corrected or deleted, or object to how we use it. Email [{contact_email}](mailto:{contact_email}).

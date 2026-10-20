@@ -8,6 +8,7 @@
     PRISM     Analytics   1h     recomputes the numbers; once a day, a report plus insights
     SCOUT     Sales       15m    qualifies new leads, drafts the reply or the cold outreach
     FORGE     Delivery    3h     blueprints for won clients; otherwise builds the template library
+                                 (needs a model: offline it waits rather than file skeletons)
 
 (Cadences live in business.yaml.) Every run returns a RunResult. Outward-facing
 work — posts, newsletters, ads, emails, proposals — is filed *pending* and
@@ -428,6 +429,10 @@ class Sales(Agent):
                 "items": [{"kind": "email_draft", "title": title, "body": body + "\n\n" + OFFLINE_NOTE}]}
 
 
+def _unreachable() -> dict:
+    raise LLMError("no model connected")
+
+
 class Delivery(Agent):
     key, codename, title = "delivery", "FORGE", "Delivery"
     mission = "Designs what we sell: blueprints for every won client and a library of trade templates."
@@ -436,6 +441,11 @@ class Delivery(Agent):
     def run(self, ctx: Context, task: Optional[str] = None) -> RunResult:
         if task:
             return self.task_run(ctx, task)
+        if not ctx.llm.connected:
+            # A skeleton would count as this client's (or trade's) blueprint and
+            # block the real one, so FORGE waits for a model instead.
+            return RunResult("Waiting for a model: blueprints need one, so nothing was drafted.",
+                             status="idle")
         won = ctx.store.leads_awaiting(self.key, ("won",), limit=2)
         if won:
             items = []
@@ -445,8 +455,7 @@ class Delivery(Agent):
                 extra = lead_block(lead) + (("\n\n## What sales sent them\n" + history) if history else "")
                 data = self.ask(ctx, "This client just signed. Write their delivery blueprint "
                                      "(kind blueprint), following your standing instructions.",
-                                extra=extra, fallback=lambda lead=lead: self.offline(
-                                    lead.get("vertical") or "this client", ctx))
+                                extra=extra, fallback=_unreachable)
                 produced = data["items"] or [{"kind": "report", "title": f"Blueprint pending for lead #{lead['id']}",
                                               "body": data["summary"] or "No blueprint produced."}]
                 for item in produced:
@@ -461,18 +470,9 @@ class Delivery(Agent):
         vertical = todo[0]
         data = self.ask(ctx, f"There is no client project right now. Build the productized solution "
                              f"template (kind blueprint) for {vertical}.",
-                        fallback=lambda: self.offline(vertical, ctx))
+                        fallback=_unreachable)
         ctx.store.set_kv("delivery_templates", sorted(done | {vertical}))
         return RunResult(data["summary"] or f"Template built for {vertical}", data["items"])
-
-    def offline(self, vertical: str, ctx: Context) -> dict:
-        sections = ["Discovery checklist", "Solution design", "Assistant system prompt",
-                    "Automations (trigger → steps → output)", "Timeline (10 working days)",
-                    "Acceptance tests", "Handover and monthly care", "Data and privacy"]
-        body = "\n\n".join(f"## {s}\n[DRAFT]" for s in sections)
-        return {"summary": f"Blueprint skeleton for {vertical} (offline)",
-                "items": [{"kind": "blueprint", "title": f"Delivery blueprint: {vertical}",
-                           "body": body + "\n\n" + OFFLINE_NOTE}]}
 
 
 AGENTS: dict[str, Agent] = {a.key: a for a in (Marketing(), Ads(), Security(), Analytics(),

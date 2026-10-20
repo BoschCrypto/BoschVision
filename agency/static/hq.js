@@ -24,6 +24,12 @@
   }
   if (cards.length) setInterval(refresh, 8000);
 
+  document.querySelectorAll("[data-confirm]").forEach((btn) => {
+    btn.addEventListener("click", (ev) => {
+      if (!window.confirm(btn.dataset.confirm)) ev.preventDefault();
+    });
+  });
+
   document.querySelectorAll("[data-copy]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const src = document.getElementById(btn.dataset.copy);

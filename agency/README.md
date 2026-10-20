@@ -1,12 +1,69 @@
 # The agency: an AI & automation business run by six agents
 
-A complete small business in one command: a public **website** that sells AI
+A complete small business in one folder: a public **website** that sells AI
 and automation services to local businesses, an **HQ** where you supervise the
 work, and **six agents** that run the business around the clock.
 
-```
-agency up --open        # or double-click run-agency.bat on Windows
-```
+## Get it running on Windows (first time)
+
+1. **Install Python.** Download it from [python.org/downloads](https://www.python.org/downloads/).
+   In the installer, tick **"Add python.exe to PATH"** before you click Install.
+2. **Have the code in a folder that stays put.** This is the `BoschVision`
+   folder, the same one that holds `run-dashboard.bat`. Don't keep it inside
+   OneDrive, and don't move it later: the setup in step 4 is tied to its location.
+3. **Connect the AI.** Do this before the first start, because drafts written
+   without AI stay templates. Pick one option:
+   - **A. Claude API key (pay per use).** Create a key at
+     [console.anthropic.com](https://console.anthropic.com) → API keys, and add
+     some credit. This is billed separately from a Claude Pro/Max subscription.
+     Then, in the `BoschVision` folder (next to `run-agency.bat`), create a file
+     named exactly `.env` containing one line:
+
+     ```
+     ANTHROPIC_API_KEY=sk-ant-your-key-here
+     ```
+
+     To do that in Notepad, choose *File → Save as*, set *Save as type* to
+     **All files**, and type `.env` as the name, so it doesn't become `.env.txt`.
+     If a `.env` already exists for the trading bot, add the line to it.
+   - **B. Claude Code (uses your Claude plan).** If Claude Code is installed,
+     open a terminal, run `claude`, type `/login` and finish in the browser.
+     The agents then use your plan, and no key is needed.
+   - **Neither?** It still runs. SENTRY and PRISM work fully, SCOUT, BEACON and
+     FLARE file templates, and FORGE waits.
+4. **Double-click `run-agency.bat`.** The first time, it creates a private
+   Python environment and installs everything. That downloads about 270 MB,
+   because it shares an install with the trading bot, and takes a few minutes.
+   Then your browser opens the HQ login page, with your **HQ token already
+   copied to the clipboard**: click the box and press Ctrl+V.
+5. **Keep it running.** The agents work while that black window stays open and
+   the PC is awake:
+   - *Settings → System → Power → Screen and sleep → "When plugged in, put my
+     device to sleep after" → Never.*
+   - Double-click **`make-agency-autostart.bat`** once, so the agency starts by
+     itself whenever you sign in to Windows (after restarts and updates).
+   - To stop it, click the window, press Ctrl+C, then type `Y`.
+
+The window shows a line each time an agent finishes a run, and the startup
+banner shows which settings file (`.env`) and database it is using. Lost the
+token? Run `run-agency.bat` again: it copies it to the clipboard every time.
+
+**Important:** at this stage the website is visible **only on this PC**.
+Customers can't reach it until you put it on a domain (see
+[Going live](#going-live-so-customers-can-find-you)).
+
+## Your routine: about 10 minutes a day
+
+1. Open HQ. The overview shows every agent, today's numbers, and what's waiting.
+2. **Approvals:** read each draft, edit it if you like, then approve or reject it.
+   - An approved **blog post** goes live on your site immediately.
+   - An **email** has an *Open in email* button, so you send it from your own inbox.
+   - **Ads** and **social posts** you copy into Google Ads, Meta, or the platform yourself.
+   - Rejecting teaches the agent: it sees your rejected titles next time.
+3. **Leads:** update each lead's status as it moves (contacted → proposal →
+   won/lost). Set **won** and FORGE writes that client's delivery plan.
+4. **Give an agent a task** whenever you want something specific, for example
+   "FLARE: plan a spring campaign for salons, 300 USD budget".
 
 ## The business, and why this one
 
@@ -23,128 +80,140 @@ for three reasons:
   financial records or sign off on their accounts.
 
 Everything about the business (name, region, offers, prices, target trades,
-FAQ) lives in [`business.yaml`](business.yaml). The site and all six agents
-read it, so edit it once and everything follows.
+FAQ, privacy text) lives in [`business.yaml`](business.yaml). The site and all
+six agents read it, so edit it once and everything follows. Open it with
+Notepad, and restart the agency after saving.
 
 ## The six agents
 
 | Agent | Role | Wakes every | Each run |
 |---|---|---|---|
 | **BEACON** | Marketing | 6 h | Rotates through blog posts, social batches, lead magnets, newsletters, and local-SEO plans, one target trade at a time |
-| **FLARE** | Ads | 12 h | Google Search and Meta campaigns ready to paste in (keywords, ad copy, audiences, budgets, UTM links), optimisation reviews, and A/B test plans. **Never spends.** |
+| **FLARE** | Ads | 12 h | Google Search and Meta campaigns ready to paste in (keywords, ad copy, audiences, budgets, tracking links), optimisation reviews, and A/B test plans. **Never spends.** |
 | **SENTRY** | Security | 30 min | Probes the live site and HQ the way an attacker would: uptime, HTTPS certificate, security headers, HQ lock, exposed files, login guessing, form abuse, token strength, model spend. Alerts when a check starts failing. |
-| **PRISM** | Analytics | 1 h | Traffic, sources, campaigns, leads, conversion, and pipeline from the site's own logs. A daily report with recommendations for the other agents. |
+| **PRISM** | Analytics | 1 h | Traffic, sources, campaigns, leads, conversion, and pipeline from the site's own logs. A daily report, plus written recommendations when AI is connected. |
 | **SCOUT** | Sales | 15 min | Qualifies every new lead (fit score 1–10), drafts the reply or a proposal, and drafts cold outreach for prospects you add |
-| **FORGE** | Delivery | 3 h | When you mark a lead *won*, writes the delivery blueprint: solution design, the assistant's system prompt, automations, timeline, acceptance tests, GDPR notes. Otherwise builds a reusable template per target trade. |
+| **FORGE** | Delivery | 3 h | When you mark a lead *won*, writes the delivery plan: solution design, the assistant's instructions, automations, timeline, acceptance tests, GDPR notes. Otherwise builds a reusable template per target trade. Needs AI connected. |
 
 Change the cadences under `agents:` in `business.yaml`. Each agent's standing
 instructions (voice, standards, what it must never do) are plain Markdown in
 [`prompts/`](prompts/), so edit them to tune an agent.
 
-**SENTRY and PRISM do their core jobs without any AI model**: their checks and
-numbers are exact. BEACON, FLARE, SCOUT and FORGE need a model to write; without
-one they file clearly marked templates.
+**Nothing leaves the business without you.** No agent publishes, posts, sends
+email or spends money on its own. Their only outside contacts are the AI
+provider and, if you set one up, your phone-notification webhook. BEACON and
+FLARE pause once six drafts are waiting, so a week away doesn't bury you, or
+your budget, in drafts.
 
-### You stay in control
+## Costs
 
-Nothing leaves the business without you. Blog posts, social posts, newsletters,
-ad campaigns, emails and proposals land in **HQ → Approvals**. Open one, edit it
-if you like, then approve or reject it:
+The agents count every AI call and stop for the day at
+`AGENCY_MAX_LLM_CALLS_PER_DAY` (default **40**). Failed calls count too, so a
+retry loop can't run up a bill. HQ shows the day's calls and estimated spend.
 
-- An approved **blog post** publishes on the site's blog immediately.
-- An approved **email** gets an *Open in email* button, so you send it from your own inbox.
-- Approved **ads** and **social posts** are marked ready to paste into Google
-  Ads, Meta Ads Manager, or the platform.
+With an API key on the default model (Claude Opus 5.5):
 
-Rejected titles are shown to the agent next time, so it learns what you don't
-want. BEACON and FLARE pause once six drafts are waiting, so a week away
-doesn't bury you, or your budget, in drafts.
+- **Day one:** about 12–17 calls, roughly **$1–3**, while FORGE builds its seven trade templates.
+- **A typical day after that:** about 7 calls plus one per new lead, usually **under $1**.
+- **Worst case:** the 40-call cap holds it to roughly **$10–15**.
 
-## Quick start
+Add `AGENCY_MODEL=claude-sonnet-5-5` to `.env` to roughly halve those figures.
+With Claude Code (option B), usage counts against your Claude plan instead of
+being billed per call.
+
+On the API, requests opt into Anthropic's server-side refusal fallback: if a
+safety filter declines a request, which security wording occasionally trips,
+the API retries it on a recommended fallback model instead of failing.
+
+## Going live (so customers can find you)
+
+The website must be reachable at your own address before ads, posts or emails
+can bring anyone in. You need:
+
+1. **A domain**, e.g. `yourbusiness.com`, from any registrar.
+2. **A way to reach the agency from the internet.** Either option works:
+   - **Keep it on your PC** and connect the domain with
+     [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+     (`cloudflared`), which needs no router changes and provides HTTPS.
+   - **Run it on a small server** (a $5–10/month VPS) with
+     [Caddy](https://caddyserver.com) in front for automatic HTTPS:
+
+     ```
+     # /etc/caddy/Caddyfile
+     yourbusiness.com {
+         reverse_proxy 127.0.0.1:8500
+     }
+     ```
+
+3. Then add to `.env` and restart:
+
+   ```
+   AGENCY_SITE_URL=https://yourbusiness.com
+   AGENCY_TRUST_PROXY=1
+   ```
+
+   The agents put this address into every link they write, and SENTRY starts
+   checking your real HTTPS certificate from outside. **Don't send drafts
+   written before this was set: their links point to `127.0.0.1`, which only
+   works on your PC.**
+
+Optional: get a phone ping for every new lead and every security alert by
+setting `AGENCY_WEBHOOK_URL` to a Discord or Slack incoming webhook, or an
+[ntfy.sh](https://ntfy.sh) topic URL.
+
+## Before you go live: checklist
+
+- [ ] `business.yaml`: your **brand** (check the name is free to use), **region**,
+      real **contact_email**, **currency** and **prices**. Write prices as plain
+      numbers: `1500`, not `1 500` or `1500 kr`. SENTRY stays amber until the
+      email is real.
+- [ ] Read the **FAQ** and the **privacy** text in `business.yaml` as promises
+      you'll keep, and change anything that isn't true for you. HQ → Leads →
+      **Delete** erases a person's lead and drafts if they ask.
+- [ ] Domain and HTTPS, then `AGENCY_SITE_URL` (above).
+- [ ] AI connected, and a daily cap you're comfortable with.
+
+## Mac / Linux and the command line
 
 ```bash
-pip install -e ".[agency]"     # from the repo root
-agency up --open               # website on :8500, HQ at /hq, agents running
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[agency]"
+agency up --open
 ```
 
-The console prints the **HQ token**. Paste it into the login page. It is
-generated once and kept in the database; `agency hq-token` prints it again, and
-`agency hq-token --rotate` replaces it.
-
-Other commands:
+`agency up` serves the website on port 8500 with HQ at `/hq`, and runs all six
+agents. It prints the HQ token. Other commands:
 
 ```bash
-agency status                          # each agent's state, the model, today's spend
-agency run sales                       # run one agent now and print what it made
-agency run ads --task "Spring campaign for salons, $300 budget"
-agency up --no-agents                  # website + HQ only
+agency status                       # each agent's state, the model, today's spend
+agency hq-token                     # print the HQ login token (--rotate for a new one)
+agency run sales                    # run one agent now and print what it made
+agency run ads --task "Spring campaign for salons, 300 USD budget"
+agency up --no-agents               # website + HQ only
 ```
 
-You can also assign a task to any agent from HQ ("Give an agent a task"). It
-runs within seconds, ahead of the agent's routine work.
+The `.env` file and the database (`agency.db`) live in the project folder,
+whatever folder you run the commands from. Under systemd, the default stop
+signal shuts the agency down cleanly.
 
-## Connect a model
+<details>
+<summary>All settings (<code>.env</code>)</summary>
 
-The agents pick a backend automatically (`AGENCY_LLM=auto`):
+| Setting | Default | What it does |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | none | Use the Claude API (option A) |
+| `AGENCY_LLM` | `auto` | `auto`, `anthropic`, `claude-cli` or `offline`. Auto picks the API when a key is set, else a logged-in Claude Code, else offline. |
+| `AGENCY_MODEL` | `claude-opus-5-5` | e.g. `claude-sonnet-5-5` for lower cost |
+| `AGENCY_EFFORT` | `medium` | `low`, `medium` or `high` |
+| `AGENCY_MAX_LLM_CALLS_PER_DAY` | `40` | Hard daily cap, failed calls included; resets at midnight |
+| `AGENCY_SITE_URL` | `http://127.0.0.1:8500` | Your public address once live |
+| `AGENCY_TRUST_PROXY` | off | Set to `1` behind Cloudflare Tunnel, Caddy or nginx |
+| `AGENCY_WEBHOOK_URL` | none | Phone pings for leads and alerts |
+| `AGENCY_HQ_TOKEN` | generated | Set your own HQ password, or leave unset to have one generated and kept |
+| `AGENCY_HOST`, `AGENCY_PORT` | `127.0.0.1`, `8500` | Where the server listens |
+| `AGENCY_DB` | `agency.db` | Database file, relative to the project folder |
 
-1. **Claude API**: set `ANTHROPIC_API_KEY` in `.env` and `pip install -e ".[agency]"`.
-   This uses the official `anthropic` SDK with structured JSON output.
-2. **Claude Code**: if you're logged in to the `claude` CLI, the agents use
-   `claude -p` with every tool disabled. No API key is needed; usage counts
-   against your Claude plan.
-3. **Offline**: no model. SENTRY and PRISM work fully; the writing agents use templates.
-
-The default model is `claude-opus-5-5` at `medium` effort. Set
-`AGENCY_MODEL=claude-sonnet-5-5` to roughly halve the cost. On the API, requests
-opt into Anthropic's server-side refusal fallback (`fallbacks: "default"`): if a
-safety classifier declines a request, which security wording occasionally
-trips, the API retries it on a recommended fallback model instead of failing.
-
-**Spend is capped.** `AGENCY_MAX_LLM_CALLS_PER_DAY` (default 40) is a hard
-limit counted before each call, failures included, so a retry loop can't run up
-a bill. HQ shows calls and estimated spend for the day. As a rough guide, a
-typical day is 10–20 calls; on Opus 5.5 that is about $1–2/day. Expect more
-while FORGE builds its template library in the first day, and more on days
-with more leads. Watch the HQ tile for your real number.
-
-## Running it 24/7
-
-The agents work as long as `agency up` is running, so "24/7" means an always-on
-machine:
-
-- **Your PC**: run `run-agency.bat` and keep the PC awake. To start it at
-  logon, add the .bat to Task Scheduler (trigger: *At log on*).
-- **A small server (recommended for a real business)**: any $5–10/month VPS.
-  Run `agency up` under systemd or in `tmux`, put [Caddy](https://caddyserver.com)
-  in front for automatic HTTPS, and point your domain at it:
-
-  ```
-  # /etc/caddy/Caddyfile
-  yourdomain.com {
-      reverse_proxy 127.0.0.1:8500
-  }
-  ```
-
-  with `.env`:
-
-  ```
-  AGENCY_SITE_URL=https://yourdomain.com
-  AGENCY_TRUST_PROXY=1
-  ```
-
-  SENTRY then checks your real HTTPS certificate and headers from outside.
-
-Phone pings for new leads and security alerts: set `AGENCY_WEBHOOK_URL` to a
-Discord or Slack incoming webhook, or an [ntfy.sh](https://ntfy.sh) topic URL.
-
-## Before you go live
-
-- [ ] `business.yaml`: your brand, region, real `contact_email`, and your prices.
-      SENTRY's *launch readiness* check stays amber until the email is real.
-- [ ] Read the FAQ and the privacy page (`/privacy`) as promises you'll keep. Change anything that isn't true for you.
-- [ ] Domain and HTTPS (above), then set `AGENCY_SITE_URL`.
-- [ ] Connect a model, and set the spend cap you're comfortable with.
-- [ ] Optional: `AGENCY_WEBHOOK_URL` for phone notifications.
+</details>
 
 ## What the agents don't do
 

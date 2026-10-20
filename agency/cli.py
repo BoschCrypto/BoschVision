@@ -9,17 +9,20 @@
 """
 from __future__ import annotations
 
+import importlib.util
 import logging
+import os
+import signal
 import time
 import webbrowser
 from dataclasses import replace
 from typing import Optional
 
 import click
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from .agents import AGENTS, Context
-from .config import Settings, load_business
+from .config import BusinessFileError, Settings, load_business
 from .llm import LLM
 from .notify import make_notifier
 from .pages import ago, until
@@ -28,25 +31,48 @@ from .store import Store, start_of_day
 from .web import ensure_hq_token, serve
 
 
+# The .env this run loaded (found next to the project, whatever folder the
+# command is run from); shown in the banner so a misnamed file is obvious.
+_ENV_FILE = ""
+
+
 def build_context(**overrides) -> Context:
+    try:
+        business = load_business()
+    except BusinessFileError as ex:
+        raise click.ClickException(str(ex)) from ex
     settings = Settings.from_env(**overrides)
     store = Store(settings.db_path)
     settings = replace(settings, hq_token=ensure_hq_token(store, settings.hq_token))
-    return Context(store=store, llm=LLM(settings, store), business=load_business(),
+    return Context(store=store, llm=LLM(settings, store), business=business,
                    settings=settings, notify=make_notifier(settings.webhook_url))
 
 
 def _model_line(ctx: Context) -> str:
     if not ctx.llm.connected:
-        return "offline: content agents draft from templates (see agency/README.md → Connect a model)"
-    return f"{ctx.llm.backend} · {ctx.llm.model} · cap {ctx.llm.cap} calls/day"
+        line = "offline: writing agents file templates (agency/README.md > Connect a model)"
+    else:
+        line = f"{ctx.llm.backend} · {ctx.llm.model} · cap {ctx.llm.cap} calls/day"
+    if os.environ.get("ANTHROPIC_API_KEY") and not importlib.util.find_spec("anthropic"):
+        line += ("\n            ANTHROPIC_API_KEY is set but the Claude SDK isn't installed: "
+                 'run  pip install -e ".[agency]"')
+    return line
+
+
+def _stop_on_sigterm(signum, frame):
+    raise KeyboardInterrupt  # same clean shutdown as Ctrl+C (systemd sends SIGTERM)
 
 
 @click.group()
 def cli():
     """Run the agency: public website, HQ, and six always-on agents."""
-    load_dotenv()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    global _ENV_FILE
+    _ENV_FILE = find_dotenv()
+    if _ENV_FILE:
+        load_dotenv(_ENV_FILE)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M")
+    for noisy in ("httpx", "httpx2", "anthropic"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 @cli.command()
@@ -74,9 +100,14 @@ def up(host: Optional[str], port: Optional[int], no_agents: bool, open_browser: 
     click.echo(f"  HQ        {local}/hq      token: {s.hq_token}")
     click.echo(f"  Model     {_model_line(ctx)}")
     click.echo(f"  Agents    {'working: ' + names if scheduler else 'off (--no-agents)'}")
-    click.echo("=" * 68 + "\n  Keep this window open. Ctrl+C stops everything.\n")
+    click.echo(f"  Settings  {_ENV_FILE or 'no .env file found (using defaults)'}")
+    click.echo(f"  Data      {s.db_path}")
+    click.echo("=" * 68)
+    click.echo("  Keep this window open: closing it stops the website and the agents.")
+    click.echo("  To stop on purpose, press Ctrl+C.\n")
     if open_browser:
         webbrowser.open(f"{local}/hq/login")
+    signal.signal(signal.SIGTERM, _stop_on_sigterm)
     try:
         while True:
             time.sleep(3600)
@@ -112,6 +143,7 @@ def status():
     ctx = build_context()
     states, now = ctx.store.agent_states(), time.time()
     click.echo(f"Model: {_model_line(ctx)}")
+    click.echo(f"Data:  {ctx.settings.db_path}  ·  settings: {_ENV_FILE or 'no .env file'}")
     usage = ctx.store.llm_usage_since(start_of_day())
     click.echo(f"Today: {usage['calls']} model calls, ~${usage['cost_usd']:.2f} · "
                f"{ctx.store.pending_count()} item(s) waiting for approval\n")

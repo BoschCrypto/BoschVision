@@ -176,6 +176,12 @@ class Store:
         self.execute(f"UPDATE leads SET {sets}, updated_ts=? WHERE id=?",
                      *cols.values(), time.time(), lead_id)
 
+    def delete_lead(self, lead_id: int) -> None:
+        """Erase a lead and every work item about them (a data-deletion request)."""
+        with self._lock:
+            self.execute("DELETE FROM work WHERE lead_id=?", lead_id)
+            self.execute("DELETE FROM leads WHERE id=?", lead_id)
+
     def leads_awaiting(self, agent: str, statuses: Iterable[str], limit: int = 3) -> list[dict]:
         """Leads in one of `statuses` that `agent` hasn't produced work for yet."""
         statuses = tuple(statuses)
