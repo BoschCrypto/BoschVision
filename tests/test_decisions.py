@@ -154,3 +154,57 @@ def test_the_stage_breakdown_survives_an_empty_log():
     s = summary([])
     assert s["n"] == 0 and s["is_a_result"] is False
     assert set(s["by_stage"]) == {"scan", "evaluate", "risk", "decide"}
+
+
+# --- HALT: added on the pipeline's first live run ----------------------------
+
+
+def test_a_halt_must_be_recorded_against_cash():
+    """A halt is a portfolio-level refusal to add any risk, not a verdict on a
+    name. Attaching one to a ticker would put a guaranteed-zero row in the
+    hit-rate denominator roughly 25 times a month."""
+    with pytest.raises(ValueError, match="must be 'CASH'"):
+        _d(verdict="HALT", ticker="ASTS")
+    _d(verdict="HALT", ticker="CASH")          # must not raise
+
+
+def test_cash_is_reserved_for_halts():
+    """The constraint runs both ways, so a name verdict cannot be filed as a
+    halt and quietly escape scoring."""
+    with pytest.raises(ValueError, match="reserved for HALT rows"):
+        _d(verdict="NO", ticker="CASH")
+
+
+def test_halts_are_excluded_from_the_hit_rate():
+    """The point of the whole change. A month of halts must not manufacture a
+    hit rate, and must not dilute one either."""
+    halts = [Decision(at=f"2026-10-2{i}T08:48:00-04:00", ticker="CASH",
+                      verdict="HALT", stage="risk", rationale="reserve short",
+                      price=766.48, benchmark=766.48) for i in range(3)]
+    real = _d(verdict="NO", price=50.0, benchmark=600.0)
+    s = summary(halts + [real], {"ASTS": 50.0, "SPY": 660.0})
+    assert s["n"] == 4
+    assert s["by_verdict"]["HALT"] == 3
+    # one scorable verdict, not four: ASTS flat while SPY rose, so the NO won.
+    assert s["hit_rate"] == 1.0
+    assert len(score(halts + [real], {"ASTS": 50.0, "SPY": 660.0})) == 1
+
+
+def test_a_halt_needs_no_price_for_its_own_ticker():
+    """score() must not demand a price for CASH -- it filters halts before the
+    missing-price check, or every scored run would raise."""
+    halt = Decision(at="2026-10-20T08:48:00-04:00", ticker="CASH",
+                    verdict="HALT", stage="risk", rationale="reserve short",
+                    price=766.48, benchmark=766.48)
+    assert score([halt], {"SPY": 800.0}) == []
+
+
+def test_a_refusal_does_not_queue_for_approval():
+    """Only a BUY or SELL waits on Waldo. Counting refusals would show him a
+    queue of decisions needing attention on exactly the mornings when none do."""
+    ds = [Decision(at="2026-10-20T08:48:00-04:00", ticker="CASH", verdict="HALT",
+                   stage="risk", rationale="reserve short", price=766.48,
+                   benchmark=766.48),
+          _d(verdict="NO"),
+          _d(at="2026-10-21T09:40:00-04:00", verdict="BUY", size_usd=96.0)]
+    assert summary(ds)["pending_approval"] == 1

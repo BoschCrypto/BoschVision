@@ -32,9 +32,13 @@ and get `get_accounts` → `get_portfolio` for all three accounts.
 Compute **TOTAL = book − designated emergency reserve ($7,065, set 2026-10-20)**
 and **INVESTED = equity + crypto**.
 
-> **If INVESTED > TOTAL, new risk is halted.** Log a single `NO` at stage
+> **If INVESTED > TOTAL, new risk is halted.** Log a single `HALT` at stage
 > `risk` with the shortfall as the rationale, report one line, and stop. Do not
-> spawn the scanner. There is no candidate good enough to justify adding risk
+> spawn the scanner. A `HALT` is filed against `CASH`, not against a name, and
+> is excluded from the hit rate — it is a portfolio-level refusal, and roughly
+> 25 of them a month would dilute every real verdict if they were scored. (This
+> file said `NO` until the first live run on 2026-10-20, when logging one
+> revealed it would have been a measurement bug.) There is no candidate good enough to justify adding risk
 > while the emergency fund is short, and running a four-agent pipeline to reach
 > a foregone conclusion is theatre that costs real tokens.
 

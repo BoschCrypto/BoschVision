@@ -42,7 +42,25 @@ LOG = Path("data/decisions/log.jsonl")
 BENCHMARK = "SPY"
 
 # Every verdict the pipeline may reach. NO is the expected one on most days.
-VERDICTS = ("BUY", "SELL", "NO")
+#
+# HALT was added on the pipeline's FIRST live run, 2026-10-20, because the gate
+# fired and there was no honest way to record it. A halt is not a verdict on a
+# name -- it is a portfolio-level refusal to add any risk at all -- and forcing
+# it into a name row would have been a measurement bug, not a bookkeeping
+# nicety: ~25 guaranteed-zero rows a month would sit in the hit-rate denominator
+# and dilute whatever real signal the name verdicts ever develop.
+#
+# It also exposed a limit of this module worth stating plainly rather than
+# hiding behind the new value. Every verdict here is scored AGAINST SPY, so
+# "we declined to buy the market" is unmeasurable by construction: the formula
+# returns exactly zero for it. The true cost of a halt is the market's return
+# over the halted window, which needs a cash-vs-SPY comparison this module does
+# not do. HALT rows therefore carry SPY's price so that cost CAN be computed
+# later, and are excluded from the hit rate so they cannot fake one meanwhile.
+VERDICTS = ("BUY", "SELL", "NO", "HALT")
+
+# A HALT is recorded against cash, not against any name.
+HALT_TICKER = "CASH"
 
 # Where in the pipeline the verdict was reached. Recorded because "the scanner
 # found nothing" and "the risk gate vetoed a good idea" are different facts, and
@@ -100,9 +118,16 @@ class Decision:
                 raise ValueError(f"{self.ticker}: {name} must be a positive number, got {v!r}")
         if self.size_usd < 0:
             raise ValueError(f"{self.ticker}: size_usd cannot be negative")
-        if self.verdict == "NO" and self.size_usd:
+        if self.verdict in ("NO", "HALT") and self.size_usd:
             raise ValueError(
-                f"{self.ticker}: a NO carries no size, got ${self.size_usd}")
+                f"{self.ticker}: a {self.verdict} carries no size, got ${self.size_usd}")
+        if self.verdict == "HALT" and self.ticker != HALT_TICKER:
+            raise ValueError(
+                f"a HALT is a portfolio-level refusal to add risk, not a verdict "
+                f"on {self.ticker}; its ticker must be {HALT_TICKER!r}")
+        if self.verdict != "HALT" and self.ticker == HALT_TICKER:
+            raise ValueError(
+                f"{HALT_TICKER!r} is reserved for HALT rows, got verdict {self.verdict}")
         if self.executed and self.approved is not True:
             raise ValueError(
                 f"{self.ticker}: marked executed without approval. No order is "
@@ -161,6 +186,7 @@ def score(decisions: list[Decision], prices: dict[str, float]) -> list[dict]:
     survivorship bias this log exists to prevent, so it cannot be allowed in via
     the scoring function's back door.
     """
+    decisions = [d for d in decisions if d.verdict != "HALT"]
     if BENCHMARK not in prices:
         raise ValueError(
             f"no {BENCHMARK} price supplied; every verdict is scored against it "
@@ -219,15 +245,19 @@ def summary(decisions: list[Decision], prices: dict[str, float] | None = None) -
     requirement. Everything this returns before then is a log.
     """
     by_verdict = {v: sum(1 for d in decisions if d.verdict == v) for v in VERDICTS}
+    scorable = [d for d in decisions if d.verdict != "HALT"]
     by_stage = {s: sum(1 for d in decisions if d.stage == s) for s in STAGES}
     need = decisions_needed()
     out = {"n": len(decisions), "by_verdict": by_verdict, "by_stage": by_stage,
            "decisions_needed": need, "is_a_result": False,
+           # Only a BUY or SELL waits on Waldo. A NO and a HALT are refusals to
+           # act, and counting them as "awaiting approval" would show a queue of
+           # decisions needing his attention on mornings when nothing does.
            "pending_approval": sum(1 for d in decisions if d.approved is None
-                                   and d.verdict != "NO"),
+                                   and d.verdict in ("BUY", "SELL")),
            "executed": sum(1 for d in decisions if d.executed)}
-    if prices and decisions:
-        rows = score(decisions, prices)
+    if prices and scorable:
+        rows = score(scorable, prices)
         wins = sum(1 for r in rows if r["right"])
         out["hit_rate"] = wins / len(rows)
         out["mean_value_added"] = sum(r["value_added"] for r in rows) / len(rows)
@@ -239,7 +269,8 @@ def render(decisions: list[Decision], prices: dict[str, float] | None = None) ->
     """One block for the head agent to paste into its report."""
     s = summary(decisions, prices)
     L = [f"DECISION LOG  n={s['n']}  "
-         f"BUY {s['by_verdict']['BUY']} / SELL {s['by_verdict']['SELL']} / NO {s['by_verdict']['NO']}",
+         f"BUY {s['by_verdict']['BUY']} / SELL {s['by_verdict']['SELL']} / "
+         f"NO {s['by_verdict']['NO']} / HALT {s['by_verdict']['HALT']} (unscored)",
          f"  died at: " + "  ".join(f"{k} {v}" for k, v in s["by_stage"].items()),
          f"  awaiting Waldo's approval: {s['pending_approval']}   executed: {s['executed']}"]
     if "hit_rate" in s:
