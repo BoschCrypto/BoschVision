@@ -192,9 +192,30 @@ logging is worth it. **Logging is free. Following costs 169%/yr and paying costs
 more. Those are three separate decisions and they get three separate answers.**
 *Resolves:* now, and again whenever the sleeve crosses 100 × F.
 
-**Open input needed:** I do not know F. The rule above is written so that it
-binds whatever F turns out to be, but the table should be replaced with the real
-number when he tells me.
+**ANSWERED 2026-10-20, same night, before any data arrived: F = $0.** The feed
+is Andrew Tate's The Real World, and Waldo reads it through a friend's account.
+Nothing is being paid.
+
+So H17 is **inert as a cost test** and the table above is retained only as the
+rule's statement, not as a live calculation. Registering it before learning the
+answer was still worth the ten minutes: had the answer been $50/month, the
+threshold was already written and could not have been set to whatever made the
+decision I preferred come out right. A rule that only ever gets written when it
+binds is not a rule.
+
+What the answer *does* change is the exposure, and in a direction the fee
+question never pointed at. **The input this system is built on is not his.**
+Access is a third party's goodwill and can end without notice or explanation —
+which is not a risk H17 was looking for, and is now the largest single
+dependency in the project. One mitigation is already in place and costs nothing:
+every post is logged locally the night it appears, so the record survives the
+access. What does *not* survive is the ability to get the next one.
+
+*Revised falsifier, replacing the fee threshold:* the rule now reads **do not
+build anything on this feed that cannot be reconstructed from the local log
+alone.** Falsified by any routine, position-sizing rule or report that silently
+requires a fresh post to produce a number — those must raise, not guess, the
+same way an unpriceable leg raises.
 
 ## New, registered 2026-10-16 before the next post
 

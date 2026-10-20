@@ -150,41 +150,39 @@ first two.
 
 ---
 
-## 5. The one thing this document cannot settle
+## 5. Settled 2026-10-20: the reserve is $7,065
 
-**TOTAL is defined as total less the designated emergency reserve, and no
-reserve has been designated.** Until it is, TOTAL has no definition and every
-cap above is an opinion with a number attached.
+When this document was written the reserve was undesignated, so TOTAL had no
+definition and every cap was an opinion with a number attached. Waldo ruled the
+same night and picked the uncomfortable option:
 
-The policy line is 6 × $2,355 = **$14,130**. The entire book is $8,340.70 — 59%
-of it. Cash is $4,679.53, which is **1.99 months of burn.** The target is
-unreachable this year at any contribution rate, so leaving it on the page
-unamended means the reserve is simultaneously undefined and unmeetable.
+> **Emergency reserve = $7,065 (3 × $2,355), carved out of TOTAL. Six months
+> ($14,130) is the destination, not today's line.**
 
-Three ways out, and he has to pick one:
+**TOTAL is therefore $1,275.70**, and the book reads very differently from §4:
 
-1. **Designate an interim figure in dollars** — e.g. 3 months, $7,065 — carve it
-   out of TOTAL, and write down that 6 months is the destination, not today's
-   line. TOTAL then becomes $1,275.70 and *every cap above tightens sharply.*
-   This is the honest option and it is the uncomfortable one, which is probably
-   the correct pairing.
-2. **Declare the 6-month line aspirational**, carve out nothing today, and keep
-   TOTAL at $8,340.70. The caps read as in §4.
-3. **Refuse to designate** — in which case the objection in §6 wins and the caps
-   should fall back to INVESTED, where tech look-through is **48.7%–54.6%
-   against a 35% cap** and the book is in breach tonight.
+| limit | cap | current | |
+|---|---|---|---|
+| third-party mandate, 10% | $127.57 | $1,290.84 | **101% of risk capital** |
+| sector look-through (tech), 35% | $446.50 | $1,784–$2,001 | **140%–157%** |
+| single-name look-through (NVDA), 12% | $153.08 | $379–$439 | **30%–34%** |
+| single non-diversified, 10% | $127.57 | $0 deployed | clear |
+| broad-index floor, ≥70% of INVESTED | — | 63.4% | short $808.76 |
 
-My recommendation is (1) with a 3-month interim, because the strongest argument
-against this whole ruling is that the cash in reading A is not risk-absorbing
-capital at all — it is the missing emergency fund, and sizing speculative
-positions against money earmarked for rent is precisely the error the
-emergency-fund rule exists to prevent. Carving out a designated reserve is what
-answers that objection rather than talking past it. **But this is his call, not
-mine, and option 2 is defensible — it is what the policy document already
-implies. What is not defensible is leaving it open for a second week while the
-routines keep printing two numbers.**
+The §4 table is **not** retracted; it was correct for an undesignated reserve
+and is kept so the ruling's cost is visible rather than quietly overwritten.
 
----
+Those are not five breaches. `risk-limits.md` now carries the precedence rule
+and the identity behind it — `reserve − cash = invested − TOTAL = $2,385.47`,
+true by construction — which reduces the whole table to one sentence:
+**$2,385.47 of the designated emergency fund is sitting in equities instead of
+cash.** While INVESTED exceeds TOTAL the per-name caps are suppressed, because
+five labels on one scalar is not five findings. The cure is to route the next
+$2,385.47 of contributions to cash; nothing here obliges a sale.
+
+He took the option that makes his own book look worst, having been shown that it
+would. That is worth recording, because the value of a pre-stated limit is
+entirely in whether it still binds once it costs something.
 
 ## 6. Where the independent review was wrong, and why that is in this document
 
