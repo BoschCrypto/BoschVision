@@ -286,3 +286,11 @@ def test_the_duplicate_guard_compares_like_with_like(tmp_path):
     record_marks({"BTC": 100.0}, at="2026-10-20T22:08:45-04:00", path=p)
     with pytest.raises(ValueError, match="already has a mark"):
         record_marks({"BTC": 101.0}, at="2026-10-21T02:08:45+00:00", path=p)
+
+
+def test_the_et_clock_helper_agrees_with_the_et_day():
+    """_now_et and _today_et must not drift apart: the brief decides whether to
+    warn about a morning capture from the hour, and buckets from the day."""
+    from hf_trading_bot.prices import _now_et, _today_et
+    assert _now_et().date() == _today_et()
+    assert _now_et().tzinfo is not None

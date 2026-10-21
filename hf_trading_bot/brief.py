@@ -139,12 +139,26 @@ def render(log=LOG, px: dict | None = None, store=P.STORE,
     watch = sorted({a for s in sigs for a in s.prices})
     stale = P.marks_missing_today(watch)
     if stale:
-        out += ["", f"!! MARKS NOT CAPTURED TODAY for {', '.join(stale)} "
+        out += ["", f"!! MARKS NOT CAPTURED TODAY (ET) for {', '.join(stale)} "
                     f"({len(stale)} of {len(watch)}).",
                 "   Re-run with --prices to record them. The series is built only "
                 "by runs that are given",
                 "   live quotes; a scheduled run has no broker access and records "
                 "nothing."]
+        # The ET-day guard means the FIRST capture of a day takes it and every
+        # later one is refused as a duplicate. So this warning, shown at 09:25,
+        # invites a morning capture that would lock out the evening one -- and
+        # the evening is the capture worth having: it is taken minutes after the
+        # 20:12 ET post, so the mark and the signal describe the same instant,
+        # and it is the closest thing a 24/7 asset has to a daily close.
+        # Saying so here rather than in a comment nobody reads at 09:25.
+        if P._now_et().hour < 17:
+            out += ["   NOT YET, THOUGH: the evening capture owns the ET day "
+                    "(taken minutes after the",
+                    "   20:12 post, so mark and signal share an instant). "
+                    "Capturing now would take the",
+                    "   day and the evening run would be refused as a duplicate. "
+                    "Leave it."]
 
     L = unit_lattice(sigs)
     out += ["", f"LATTICE k/44: {'holds' if L['holds'] else 'BROKEN'} "
@@ -256,7 +270,14 @@ def render(log=LOG, px: dict | None = None, store=P.STORE,
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python3 -m hf_trading_bot.brief")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    # NOT required. Two scheduled routines are instructed to run this module
+    # bare -- `python3 -m hf_trading_bot.brief` -- and with a required
+    # subcommand that exits 2 with a usage message and produces no analysis at
+    # all. Discovered 2026-10-21, the morning the routine was asked for its
+    # output and had been returning an argparse error instead. The bare form is
+    # the one people and prompts actually type, so it is the one that must
+    # work; it now means `brief`, which is what every caller intended.
+    sub = ap.add_subparsers(dest="cmd")
     br = sub.add_parser("brief", help="re-run the analysis on the stored log")
     br.add_argument("--prices", default=None,
                     help='live broker marks, which are always better than the '
@@ -273,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
     lg.add_argument("--dry-run", action="store_true",
                     help="print the brief WITHOUT writing to the log")
     a = ap.parse_args(argv)
+    if a.cmd is None:                     # bare invocation == `brief`
+        a.cmd, a.prices = "brief", None
 
     if a.cmd == "log":
         sig = Signal(at=a.at, weights=parse_pairs(a.weights, 0.01),

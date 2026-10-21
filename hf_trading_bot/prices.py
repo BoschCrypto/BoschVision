@@ -122,8 +122,12 @@ def _et_day(d: datetime) -> date:
     return d.astimezone(ET).date()
 
 
+def _now_et() -> datetime:
+    return datetime.now(timezone.utc).astimezone(ET)
+
+
 def _today_et() -> date:
-    return datetime.now(timezone.utc).astimezone(ET).date()
+    return _now_et().date()
 
 
 def load(asset: str, store: Path = STORE, complete_only: bool = True) -> list[Bar]:
