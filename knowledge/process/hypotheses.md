@@ -144,6 +144,17 @@ top of the credible-edge range, so following is negative-expectation *without
 needing to measure the edge at all*. Currently 32.3% > 30% — it passes, but by
 2.3pp, which is nothing. This is a live test, not a foregone one.
 
+> **Updated 2026-10-20, one post later (n=10):** the 50% turnover of the
+> 2026-10-20 post lifted mean one-way turnover to **27.04%**, implied drag to
+> **186.5%/yr**, CI **[60.2%, 312.8%]**. D_lo moved from 32.3% to **60.2%** —
+> from 2.3pp of headroom over the 30% ceiling to **double it**. The test now
+> passes comfortably rather than marginally.
+> Recording the direction honestly: this moved *toward* the conclusion I already
+> held, which is the direction that needs checking hardest (Mode 5). It is one
+> observation, and one observation that agrees with you is still one
+> observation. The falsifier is unchanged and a run of no-change posts would
+> still flip it.
+
 *Falsified by:* D_lo falling to or below 30%/yr. The realistic route is more
 no-change posts (two of the nine transitions were zero; the 2026-10-16 and
 2026-10-19 posts were both 100% cash). A run of flat weeks pulls the mean down
@@ -301,6 +312,43 @@ one decimal place Adam publishes).
 prints BROKEN and says to drop the model rather than keep it.
 *Confidence:* high on the next 10 posts. This is close to arithmetic, not a
 forecast — 20 of 20 published numbers have fitted.
+
+> ### FALSIFIED 2026-10-20. The model is dropped.
+>
+> The 2026-10-20 post published **BTC 45.0% / XMR 5.0% / CASH 50.0%**.
+> 45.0% is 19.800 units and 5.0% is 2.200 units — both miss the nearest integer
+> by **0.200 units against a 0.022 tolerance, 9.1x over.** First miss in **32
+> consecutive published numbers**.
+>
+> CASH 50.0% is 22/44 exactly, so one leg of three still fits. That is what a
+> coincidence looks like, not a rescue: 50% lands on almost every grid.
+>
+> **The obvious escape was checked and closed.** No denominator at or below 200
+> fits all 38 numbers now on record. Tonight's three fit **k/20 exactly**
+> (9/20, 1/20, 10/20); the prior 31 miss k/20 by up to **0.46 units**. The two
+> regimes are not reconcilable under any single lattice, so this is not a wider
+> grid discovered late — it is a change in how the numbers are produced.
+>
+> **Per rule 5 of this file, the discrete-unit reading of this signal is now in
+> the bin.** It is not retained with an explanation, not re-fitted to k/20, and
+> not described as "mostly holding". Thirty-one for thirty-one was the most
+> striking regularity this project found, and the rule for what to do when it
+> broke was written while it was still winning — which is the only reason that
+> rule is worth anything now.
+>
+> **What dies with it:** H2, H3 and H4 all presuppose a unit lattice and go with
+> it. Any future claim about the *structure* of these weights starts from zero
+> observations, not from 31.
+>
+> **What this does NOT license.** It says nothing about whether the signal is
+> profitable, and it is not evidence against following it — it was never part of
+> the cost case. The temptation to read a broken model as a verdict on the
+> publisher is exactly the kind of inference this file exists to block.
+>
+> *Registered consequence, written now rather than later:* if a future post
+> fits k/44 again, that does **not** resurrect H1. A model dropped on evidence
+> may only return as a NEW entry with its own pre-registered falsifier and its
+> own count starting at 1.
 
 **H2 — CASH stays at 14/44 (31.8%).**
 Unmoved across all 5 posts.
