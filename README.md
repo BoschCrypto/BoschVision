@@ -3,6 +3,11 @@
 > **New here? Read [`MORNING.md`](MORNING.md) first, then [`ROADMAP.md`](ROADMAP.md).**
 > The roadmap opens with the arithmetic on what returns can and cannot do —
 > it determines whether the rest of this is worth running.
+>
+> **Also in this repo: [the agency](agency/README.md)**, an AI & automation
+> services business with a public website, an HQ, and six always-on agents
+> (marketing, ads, security, analytics, sales, delivery). Start it with
+> `agency up --open` or `run-agency.bat`.
 
 ## The result that shapes everything below
 

@@ -6,6 +6,8 @@ venv/
 build/
 dist/
 *.db
+*.db-wal
+*.db-shm
 config/settings.yaml
 .env
 .pytest_cache/

@@ -14,14 +14,20 @@ dependencies = [
 [project.optional-dependencies]
 live = ["robin_stocks>=3.1.0"]
 memecoin = ["solders>=0.20", "base58>=2.1", "solana>=0.30", "websockets>=11"]
+# The agency (agency/): the official Claude SDK for the `anthropic` model backend.
+agency = ["anthropic>=1.13"]
 dev = ["pytest>=7.4"]
 
 [project.scripts]
 hf-bot = "hf_trading_bot.cli:cli"
+agency = "agency.cli:cli"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["hf_trading_bot*"]
+include = ["hf_trading_bot*", "agency*"]
+
+[tool.setuptools.package-data]
+agency = ["business.yaml", "prompts/*.md", "static/*"]
