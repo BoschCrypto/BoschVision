@@ -34,6 +34,7 @@ import json
 import math
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 # The project's single definition of "parse an ISO stamp into an orderable
@@ -89,6 +90,40 @@ class Bar:
 
 def _today_utc() -> date:
     return datetime.now(timezone.utc).date()
+
+
+# Everything Waldo's signals are stamped in. The marks series is captured by
+# ET-scheduled events -- the 08:47 scan and the evening signal log -- so its day
+# boundary has to be ET too.
+ET = ZoneInfo("America/New_York")
+
+
+def _et_day(d: datetime) -> date:
+    """The Eastern calendar day an instant falls on.
+
+    Found 2026-10-20: marks were bucketed by UTC day while every capture is
+    triggered on an ET clock, and the two disagree for exactly the captures this
+    project makes. An evening capture at 22:08 ET is 02:08 UTC the NEXT day, so
+    the whole series was labelled one day forward -- the row reading
+    "2026-10-20" held the 2026-10-19 evening mark.
+
+    Mislabelling alone would be survivable. The bias is not: a morning capture
+    (08:47 ET = 12:47 UTC, same UTC day) and an evening capture (20:12 ET =
+    00:12 UTC, next UTC day) on ONE Eastern day land on TWO UTC days, so a
+    single day's prices enter a daily series as two observations and halve that
+    day's apparent return. The duplicate guard, which exists to prevent exactly
+    that, could not see it because it was asking about the wrong day.
+
+    Marks are stamped in UTC on disk and stay that way -- a stamp is a claim
+    about when a price existed and must not be rewritten. Only the BUCKETING
+    moves to ET, which re-labels the existing rows to the Eastern day they were
+    actually observed on.
+    """
+    return d.astimezone(ET).date()
+
+
+def _today_et() -> date:
+    return datetime.now(timezone.utc).astimezone(ET).date()
 
 
 def load(asset: str, store: Path = STORE, complete_only: bool = True) -> list[Bar]:
@@ -350,19 +385,26 @@ def record_marks(marks: dict, at: str | None = None, source: str = "robinhood",
     guard under a different date. A price row's stamp is a claim about when the
     price existed, and it has to be true.
 
-    Refuses to write twice for the same asset on the same calendar day: a
-    double capture would put two observations of one day into a series of daily
-    ones, which quietly halves that day's apparent return and biases the
-    volatility built on it. Same failure as the duplicate signal, same refusal.
+    Refuses to write twice for the same asset on the same EASTERN day: a double
+    capture would put two observations of one day into a series of daily ones,
+    which quietly halves that day's apparent return and biases the volatility
+    built on it. Same failure as the duplicate signal, same refusal.
+
+    The day is ET on both sides of the comparison -- see _et_day. This guard
+    previously compared `_ts(at).date()`, the day in the stamp's OWN offset,
+    against `r["at"][:10]`, a raw text slice of the stored UTC stamp. Two
+    different notions of "day" on the two sides of one equality test, so the
+    guard could miss a genuine duplicate and reject a legitimate capture
+    depending only on what offset the caller happened to write.
     """
     at = at or datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-    day = _ts(at).date().isoformat()
+    day = _et_day(_ts(at)).isoformat()
     existing = set()
     if path.exists():
         for line in path.read_text().splitlines():
             if line.strip():
                 r = json.loads(line)
-                existing.add((r["asset"], r["at"][:10]))
+                existing.add((r["asset"], _et_day(_ts(r["at"])).isoformat()))
     dupes = sorted(a for a in marks if (a, day) in existing)
     if dupes:
         raise ValueError(f"{', '.join(dupes)} already has a mark for {day} -- "
@@ -388,7 +430,7 @@ def read_marks(path: Path = MARKS) -> dict:
             continue
         try:
             r = json.loads(line)
-            d = _ts(r["at"]).date()
+            d = _et_day(_ts(r["at"]))
         except Exception as e:
             raise ValueError(f"{path}:{i} is not a usable mark -- {e}") from e
         out.setdefault(r["asset"], []).append((d, float(r["mark"])))
@@ -396,7 +438,7 @@ def read_marks(path: Path = MARKS) -> dict:
 
 
 def marks_missing_today(assets: list[str], path: Path = MARKS) -> list[str]:
-    """Which of `assets` have no mark recorded for the current UTC day.
+    """Which of `assets` have no mark recorded for the current EASTERN day.
 
     Exists because the capture does NOT run by itself, contrary to what the
     commit that added it claimed. record_marks fires inside the brief only when
@@ -414,7 +456,7 @@ def marks_missing_today(assets: list[str], path: Path = MARKS) -> list[str]:
     ABSENCE is made loud: every brief says plainly when today's marks are
     missing, and who is missing them.
     """
-    today = _today_utc()
+    today = _today_et()
     have = {a for a, v in read_marks(path).items() if v and v[-1][0] >= today}
     return sorted(set(assets) - have)
 

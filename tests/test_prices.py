@@ -211,12 +211,14 @@ def test_a_mark_is_stamped_when_it_was_observed_not_when_the_signal_posted(tmp_p
     next snapshot wearing a different date, which walked straight past the
     one-per-day guard. A price row's stamp is a claim about when the price
     existed."""
-    from datetime import datetime, timezone
-    from hf_trading_bot.prices import read_marks, record_marks
+    from hf_trading_bot.prices import _today_et, read_marks, record_marks
     f = tmp_path / "marks.jsonl"
     record_marks({"ZRO": 2.15}, path=f)              # no `at` -> observed now
     (d,), = [[d for d, _ in v] for v in read_marks(f).values()]
-    assert d == datetime.now(timezone.utc).astimezone().date()
+    # ET, not the container's local clock. This line read `.astimezone().date()`
+    # until 2026-10-20 and so asserted the very bug it now guards: on a UTC box
+    # an evening ET capture lands on the next day and the assertion still passed.
+    assert d == _today_et()
 
 
 def test_a_day_with_no_capture_is_reported_not_silent(tmp_path):
@@ -236,3 +238,51 @@ def test_a_day_with_no_capture_is_reported_not_silent(tmp_path):
     y = (datetime.now(timezone.utc) - timedelta(days=1)).astimezone().isoformat(timespec="seconds")
     record_marks({"SOL": 100.0}, at=y, path=f)
     assert marks_missing_today(["BTC", "SOL"], f) == ["SOL"], "yesterday is not today"
+
+
+# --- the marks day boundary, found 2026-10-20 --------------------------------
+
+
+def test_marks_bucket_on_the_eastern_day_not_the_utc_one(tmp_path):
+    from hf_trading_bot.prices import read_marks, record_marks
+    """An evening ET capture is the NEXT day in UTC, so UTC bucketing labelled
+    the whole series one day forward: the row reading 2026-10-20 held the
+    2026-10-19 evening mark."""
+    p = tmp_path / "m.jsonl"
+    record_marks({"BTC": 100.0}, at="2026-10-20T02:08:45+00:00", path=p)
+    (d, _), = read_marks(p)["BTC"]
+    assert d.isoformat() == "2026-10-19", "02:08 UTC is 22:08 the previous evening in ET"
+
+
+def test_one_eastern_day_cannot_hold_two_captures(tmp_path):
+    from hf_trading_bot.prices import read_marks, record_marks
+    """The bias the mislabelling hid. A morning capture (08:47 ET = 12:47 UTC)
+    and an evening one (20:12 ET = 00:12 UTC next day) fall on ONE Eastern day
+    but TWO UTC days, so a single day's prices would enter a daily series as two
+    observations and halve that day's apparent return."""
+    p = tmp_path / "m.jsonl"
+    record_marks({"BTC": 100.0}, at="2026-10-20T12:47:00+00:00", path=p)   # 08:47 ET
+    with pytest.raises(ValueError, match="already has a mark"):
+        record_marks({"BTC": 101.0}, at="2026-10-21T00:12:00+00:00", path=p)  # 20:12 ET same day
+
+
+def test_consecutive_evenings_are_still_two_days(tmp_path):
+    from hf_trading_bot.prices import read_marks, record_marks
+    """The fix must not over-merge: two evening captures a day apart are two
+    observations and must both be accepted."""
+    p = tmp_path / "m.jsonl"
+    record_marks({"BTC": 100.0}, at="2026-10-20T02:08:45+00:00", path=p)   # 10-19 ET
+    record_marks({"BTC": 101.0}, at="2026-10-21T02:52:00+00:00", path=p)   # 10-20 ET
+    days = [d.isoformat() for d, _ in read_marks(p)["BTC"]]
+    assert days == ["2026-10-19", "2026-10-20"]
+
+
+def test_the_duplicate_guard_compares_like_with_like(tmp_path):
+    from hf_trading_bot.prices import read_marks, record_marks
+    """The guard used to test the day in the caller's own offset against a text
+    slice of the stored UTC stamp, so the same instant written two ways could
+    slip past it."""
+    p = tmp_path / "m.jsonl"
+    record_marks({"BTC": 100.0}, at="2026-10-20T22:08:45-04:00", path=p)
+    with pytest.raises(ValueError, match="already has a mark"):
+        record_marks({"BTC": 101.0}, at="2026-10-21T02:08:45+00:00", path=p)
