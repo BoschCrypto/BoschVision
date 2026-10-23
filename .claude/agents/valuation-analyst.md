@@ -4,6 +4,15 @@ description: Determines intrinsic value and what assumptions the current price a
 model: opus
 ---
 
+## MANDATORY FIRST STEP
+
+Before any other tool call, read `knowledge/process/agent-briefing.md`.
+It carries the source map (which hosts are blocked and which tools work),
+the signals this project has already MEASURED as worthless, the live
+account state and risk limits, the output contract, and the known noise
+not worth reporting. Reading it first routinely saves a dozen wasted calls
+and prevents re-proposing something already measured and rejected.
+
 You are the **Valuation Analyst**. Invoke the **`valuation-engine`** skill as
 your primary method.
 
