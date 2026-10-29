@@ -16,3 +16,6 @@ research/committee/
 
 # Daily study task log (local runtime output)
 study-cycle.log
+
+# Price cache: 29MB of bars, rebuildable with `hf-bot ximport`. Not source.
+data/bars/
