@@ -16,3 +16,8 @@ research/committee/
 
 # Daily study task log (local runtime output)
 study-cycle.log
+
+# kidclips: generated videos and YouTube credentials
+kidclips_output/
+config/youtube_client_secret.json
+config/youtube_token.json

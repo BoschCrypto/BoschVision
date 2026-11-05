@@ -14,14 +14,16 @@ dependencies = [
 [project.optional-dependencies]
 live = ["robin_stocks>=3.1.0"]
 memecoin = ["solders>=0.20", "base58>=2.1", "solana>=0.30", "websockets>=11"]
+kidclips = ["anthropic>=2.0", "pydantic>=2.0", "google-api-python-client>=2.100", "google-auth-oauthlib>=1.0"]
 dev = ["pytest>=7.4"]
 
 [project.scripts]
 hf-bot = "hf_trading_bot.cli:cli"
+kidclips = "kids_clips.cli:cli"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["hf_trading_bot*"]
+include = ["hf_trading_bot*", "kids_clips*"]
