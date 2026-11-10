@@ -47,12 +47,12 @@ def daily_lookup(hours, now, n):
         return by.get(day(d0))
     return f
 
-def run(hours, start_ms, cash0=10_000.0, weight=33.33, risk=2.0, cap=3.0, fee_pct=0.06, carry_yr=10.0, keys=None):
+def run(hours, start_ms, cash0=10_000.0, weight=33.33, risk=2.0, cap=3.0, fee_pct=0.06, carry_yr=10.0, keys=None, slip_pct=0.0, spec_list=None):
     now = max(hours[a][-1]["t"] for a in hours) + SETTLE + 1000   # newest stored hour treated as still forming
     fee = fee_pct/100; cph = carry_yr/100/8760; cash = cash0
     done = {a: [b for b in hours[a] if now >= b["t"]+H+SETTLE] for a in hours}
     last_close = {a: None for a in hours}
-    specs = [s for s in SPECS if keys is None or s["key"] in keys]
+    specs = [s for s in (spec_list or SPECS) if keys is None or s["key"] in keys]; slip = slip_pct/100; mg = [0.0]
     eng = []; evs = []
     for idx, sp in enumerate(specs):
         allh = hours[sp["asset"]]; hrs = done[sp["asset"]]
@@ -82,7 +82,7 @@ def run(hours, start_ms, cash0=10_000.0, weight=33.33, risk=2.0, cap=3.0, fee_pc
     trades = []; curve = []
     def close(e, px, at, reason):
         nonlocal cash
-        s = e["st"]; q = s["contracts"]*e["sp"]["cs"]; hrs_ = max(0, (at-s["etime"])/H)
+        s = e["st"]; q = s["contracts"]*e["sp"]["cs"]; hrs_ = max(0, (at-s["etime"])/H); px = px*(1 - s["side"]*slip)
         gross = s["side"]*q*(px-s["entry"]); xfee = q*px*fee; carry = q*s["entry"]*cph*hrs_
         net = gross - s["efee"] - xfee - carry; cash += net
         trades.append(dict(engine=e["sp"]["key"], side=s["side"], contracts=s["contracts"], etime=s["etime"], entry=s["entry"], xtime=at, exit=px, reason=reason, net=net, costs=s["efee"]+xfee+carry))
@@ -96,7 +96,7 @@ def run(hours, start_ms, cash0=10_000.0, weight=33.33, risk=2.0, cap=3.0, fee_pc
             if s["pending"] != 0 and s["side"] == 0:
                 side = s["pending"]; atr = s["patr"] or 0
                 if atr > 0:
-                    entry = h["o"]; dist = sp["stopAtr"]*atr
+                    entry = h["o"]*(1 + side*slip); dist = sp["stopAtr"]*atr
                     sleeve = max(0, marked(t))*(weight/100)
                     notional = min(cap*sleeve, (risk/100)*sleeve/(dist/entry))
                     n = math.floor(notional/(sp["cs"]*entry)+0.5)
@@ -107,7 +107,9 @@ def run(hours, start_ms, cash0=10_000.0, weight=33.33, risk=2.0, cap=3.0, fee_pc
             if s["side"] == 1 and s["stop"] is not None and h["l"] <= s["stop"]: close(e, s["stop"] if h["o"] > s["stop"] else h["o"], t, "stop")
             elif s["side"] == -1 and s["stop"] is not None and h["h"] >= s["stop"]: close(e, s["stop"] if h["o"] < s["stop"] else h["o"], t, "stop")
             last_close[sp["asset"]] = h["c"]
-            curve.append((t, marked(t)))
+            m_ = marked(t); curve.append((t, m_))
+            g_ = sum(x["st"]["contracts"]*x["sp"]["cs"]*(last_close[x["sp"]["asset"]] or 0) for x in eng)
+            if m_ > 0: mg[0] = max(mg[0], g_/m_)
         else:
             b = e["bars"][i]
             if i < sp["lookback"] or i < sp["trendLen"]: continue
@@ -120,7 +122,7 @@ def run(hours, start_ms, cash0=10_000.0, weight=33.33, risk=2.0, cap=3.0, fee_pc
     end_t = curve[-1][0]
     open_pos = [dict(engine=e["sp"]["key"], side=e["st"]["side"], contracts=e["st"]["contracts"], entry=e["st"]["entry"], etime=e["st"]["etime"],
                      unreal=unreal(e, last_close[e["sp"]["asset"]], end_t)) for e in eng if e["st"]["side"] != 0]
-    return dict(cash=cash, equity=marked(end_t), trades=trades, open=open_pos, curve=curve, end=end_t)
+    return dict(cash=cash, equity=marked(end_t), trades=trades, open=open_pos, curve=curve, end=end_t, max_gross=mg[0])
 
 def load(path):
     rows = json.load(open(path))["rows"]; hours = {}
