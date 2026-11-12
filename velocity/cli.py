@@ -1,0 +1,216 @@
+"""Command line for VELOCITY.
+
+    velocity sim          run the agent swarm on a synthetic market
+    velocity nulltest     the control: same swarm, driftless random walk
+    velocity bench        latency profile of the hot loop
+    velocity replay FILE  run against real ticks from CSV
+    velocity live         guarded entry point for a real feed
+
+`nulltest` is not an afterthought. Run it whenever you change an agent. If
+a change improves `sim` and also improves `nulltest`, the change did not
+find edge — it found a way to read noise more confidently, which is worse
+than useless because it is persuasive.
+"""
+from __future__ import annotations
+
+import sys
+
+import click
+
+from .agents.arbiter import Arbiter
+from .agents.chartist import Chartist
+from .agents.quant import Quant
+from .agents.sentinel import Sentinel
+from .agents.warden import RiskLimits
+from .engine import Engine
+from .feeds import ReplayFeed, SyntheticFeed
+
+
+def _fmt_report(r: dict, show_latency: bool = True) -> str:
+    out = []
+    out.append(f"  symbol            {r['symbol']}")
+    out.append(f"  ticks processed   {r['ticks']:,}")
+    if r.get("trades", 0) == 0:
+        out.append("  trades            0  (no setup cleared the gates)")
+        if r.get("vetoes"):
+            out.append(f"  vetoes            {r['vetoes']}")
+    else:
+        out.append(f"  trades            {r['trades']}  "
+                   f"({r['wins']}W / {r['losses']}L, {r['win_rate']:.1%})")
+        out.append(f"  avg hold          {r['avg_hold_s']:.1f}s")
+        out.append(f"  P&L before costs  ${r['pnl_before_costs']:>12,.2f}")
+        out.append(f"  trading costs     ${-r['costs']:>12,.2f}")
+        out.append(f"  NET P&L           ${r['pnl']:>12,.2f}   ({r['return_pct']:+.2f}%)")
+        out.append(f"  expectancy/trade  ${r['expectancy']:>12,.2f}")
+        pf = r["profit_factor"]
+        out.append(f"  profit factor     {pf:.2f}" if pf != float("inf") else "  profit factor     inf (no losers)")
+        out.append(f"  max drawdown      {r['max_drawdown_pct']:.2f}%")
+    if r.get("halted"):
+        out.append(f"  HALTED            {r['halt_reason']}")
+    if r.get("vetoes") and r.get("trades", 0):
+        out.append(f"  risk vetoes       {r['vetoes']}")
+    if r.get("slow_lane_errors"):
+        out.append(f"  slow-lane errors  {r['slow_lane_errors'][:3]}")
+    if show_latency and r.get("latency", {}).get("n"):
+        L = r["latency"]
+        out.append("  --- hot-loop latency (decision time, 4 agents) ---")
+        out.append(f"  p50 {L['p50_ns']/1000:7.1f} us   p99 {L['p99_ns']/1000:7.1f} us   "
+                   f"p99.9 {L['p999_ns']/1000:7.1f} us   max {L['max_ns']/1000:7.1f} us")
+    return "\n".join(out)
+
+
+def _build(symbol: str, equity: float, aggressive: bool, horizon: int,
+           news_url: str | None, use_model: bool) -> Engine:
+    limits = RiskLimits(
+        risk_per_trade=0.006 if aggressive else 0.004,
+        max_trades_per_min=10 if aggressive else 6,
+        horizon_ticks=horizon,
+    )
+    sentinel = None
+    if news_url or use_model:
+        sentinel = Sentinel(symbol, feed_url=news_url, use_model=use_model)
+    return Engine(
+        symbol, equity=equity, limits=limits,
+        arbiter=Arbiter(min_agreeing=2 if not aggressive else 1),
+        sentinel=sentinel,
+    )
+
+
+@click.group()
+@click.version_option("0.1.0", prog_name="velocity")
+def cli() -> None:
+    """VELOCITY — multi-agent short-term trading. Simulation only by default."""
+
+
+@cli.command()
+@click.option("--ticks", default=200_000, help="How many ticks to generate.")
+@click.option("--seed", default=42, help="RNG seed (change it; one seed is one sample).")
+@click.option("--equity", default=100_000.0)
+@click.option("--symbol", default="SYNTH")
+@click.option("--horizon", default=300, help="Expected holding period in ticks; scales stops.")
+@click.option("--aggressive", is_flag=True, help="Looser gates. Expect worse risk-adjusted results.")
+@click.option("--news-url", default=None, help="JSON headline endpoint for SENTINEL.")
+@click.option("--use-model", is_flag=True, help="Let SENTINEL escalate ambiguous headlines to a cheap LLM.")
+def sim(ticks, seed, equity, symbol, horizon, aggressive, news_url, use_model):
+    """Run the swarm on a synthetic market with trend regimes."""
+    eng = _build(symbol, equity, aggressive, horizon, news_url, use_model)
+    feed = SyntheticFeed(symbol=symbol, n_ticks=ticks, seed=seed)
+    click.echo(f"VELOCITY sim — {ticks:,} ticks, seed {seed}")
+    r = eng.run(feed)
+    click.echo(_fmt_report(r))
+    click.echo(
+        "\n  NOTE: this market was generated with built-in trend regimes, so a\n"
+        "  trend-following swarm will look good on it by construction. This\n"
+        "  number is NOT evidence of edge. Run `velocity nulltest` and then\n"
+        "  `velocity replay` on real out-of-sample data."
+    )
+
+
+@cli.command()
+@click.option("--ticks", default=200_000)
+@click.option("--seeds", default=5, help="How many independent runs.")
+@click.option("--equity", default=100_000.0)
+@click.option("--horizon", default=300)
+def nulltest(ticks, seeds, equity, horizon):
+    """Control test: driftless random walk. The swarm SHOULD lose its costs."""
+    click.echo(f"VELOCITY null test — {seeds} runs x {ticks:,} driftless ticks")
+    click.echo(f"{'seed':>6} {'trades':>7} {'win':>7} {'pre-cost':>12} {'net':>12} {'ret':>8}")
+    pre_tot = net_tot = 0.0
+    n = 0
+    for i in range(seeds):
+        seed = 1000 + i * 37
+        eng = _build("NULL", equity, False, horizon, None, False)
+        r = eng.run(SyntheticFeed(symbol="NULL", n_ticks=ticks, seed=seed, drift_scale=0.0))
+        pre_tot += r.get("pnl_before_costs", 0.0)
+        net_tot += r.get("pnl", 0.0)
+        n += 1
+        click.echo(f"{seed:>6} {r.get('trades',0):>7} {r.get('win_rate',0):>6.1%} "
+                   f"${r.get('pnl_before_costs',0):>11,.0f} ${r.get('pnl',0):>11,.0f} "
+                   f"{r['return_pct']:>+7.2f}%")
+    click.echo(f"{'MEAN':>6} {'':>7} {'':>7} ${pre_tot/n:>11,.0f} ${net_tot/n:>11,.0f}")
+    click.echo(
+        "\n  How to read this: pre-cost P&L near zero means the swarm is NOT\n"
+        "  manufacturing signal out of noise, which is the correct behaviour.\n"
+        "  A positive null test means a bug or a look-ahead leak, not a\n"
+        "  discovery. Investigate it before believing any other number here."
+    )
+
+
+@cli.command()
+@click.option("--ticks", default=500_000)
+def bench(ticks):
+    """Measure hot-loop latency. No trading conclusions, just speed."""
+    import time
+    eng = _build("BENCH", 100_000.0, False, 300, None, False)
+    feed = SyntheticFeed(symbol="BENCH", n_ticks=ticks, seed=5)
+    t0 = time.perf_counter()
+    r = eng.run(feed)
+    wall = time.perf_counter() - t0
+    L = r["latency"]
+    click.echo(f"VELOCITY bench — {ticks:,} ticks")
+    click.echo(f"  wall clock        {wall:.2f}s  ({ticks/wall:,.0f} ticks/sec end-to-end)")
+    click.echo(f"  decision latency  p50 {L['p50_ns']/1000:.2f} us")
+    click.echo(f"                    p90 {L['p90_ns']/1000:.2f} us")
+    click.echo(f"                    p99 {L['p99_ns']/1000:.2f} us")
+    click.echo(f"                  p99.9 {L['p999_ns']/1000:.2f} us")
+    click.echo(f"                    max {L['max_ns']/1000:.2f} us  (GC pause / OS scheduling)")
+    click.echo(
+        "\n  Perspective, so this number is not over-read: your decision time is\n"
+        "  microseconds, but a retail broker round trip is 20-300 MILLISECONDS\n"
+        "  and a colocated HFT firm is sub-microsecond on a direct feed. You\n"
+        "  cannot win a latency race. What this buys you is that compute is\n"
+        "  never the bottleneck and the swarm can re-evaluate on every tick."
+    )
+
+
+@cli.command()
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@click.option("--symbol", default=None)
+@click.option("--equity", default=100_000.0)
+@click.option("--horizon", default=300)
+@click.option("--aggressive", is_flag=True)
+def replay(path, symbol, equity, horizon, aggressive):
+    """Run against real ticks/bars from a CSV. This is the test that counts."""
+    feed = ReplayFeed(path, symbol=symbol)
+    eng = _build(feed.symbol, equity, aggressive, horizon, None, False)
+    click.echo(f"VELOCITY replay — {path}")
+    r = eng.run(feed)
+    click.echo(_fmt_report(r))
+    click.echo(f"  rows read {feed.rows_read:,}  skipped {feed.rows_skipped:,}")
+    if r.get("trades", 0) < 30:
+        click.echo(
+            f"\n  SAMPLE TOO SMALL: {r.get('trades',0)} trades cannot separate skill\n"
+            "  from luck. Under ~30 trades the confidence interval on the win\n"
+            "  rate spans most of the plausible range. Get more data before\n"
+            "  concluding anything."
+        )
+
+
+@cli.command()
+def live():
+    """Guarded entry point for a real feed. Refuses by default, on purpose."""
+    import os
+    if os.environ.get("VELOCITY_I_UNDERSTAND_LIVE_TRADING") != "true":
+        click.echo(
+            "Refused.\n\n"
+            "VELOCITY has no live broker adapter wired in, and that is deliberate.\n"
+            "Before this should ever touch money, in this order:\n\n"
+            "  1. velocity nulltest        — confirm it finds nothing in noise\n"
+            "  2. velocity replay <csv>    — real, out-of-sample ticks, 100+ trades\n"
+            "  3. paper-trade it live      — on a real feed, for weeks, journaled\n"
+            "  4. only then size it small  — and keep the kill switch reachable\n\n"
+            "Steps 1-3 cost nothing but time. Skipping them costs money.\n"
+            "A hot path this fast will lose money just as fast as it makes it."
+        )
+        sys.exit(1)
+    click.echo(
+        "VELOCITY_I_UNDERSTAND_LIVE_TRADING is set, but no live adapter is\n"
+        "implemented in this version. Wire a feed into Engine.on_tick() and an\n"
+        "order router into PaperExecutor's interface, then re-run.\n"
+        "Kill switch: create the file `.velocity_kill` to flatten everything."
+    )
+    sys.exit(1)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    cli()
