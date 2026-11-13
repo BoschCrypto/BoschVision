@@ -239,3 +239,35 @@ def test_daily_loss_limit_stops_new_entries_until_the_next_day():
         day_pnl = sum(by_day[d])
         assert day_pnl >= -0.02 * start - 0.0045 * start       # limit, plus at most one trade's overshoot
         start += day_pnl
+
+
+def test_a_rule_that_flips_sides_trades_both_sides():
+    """The short after a long used to be refused as 'already in a position'
+    because the long's exit and the short's entry are known the same minute."""
+    data = _two_markets(12_000)
+    cfg = next(c for c in strategies.registry() if c["id"] == "S1-T24-ls")
+    m1, f = data["ETH"]
+    mk = {"ETH": Market("ETH", m1, f, PERP["ETH"])}
+    setups = {"ETH": strategies.setups_for(m1, f, cfg, "ETH")}
+    res = portfolio(mk, setups, RiskBudget(), 3_000, len(m1["ts"]) - 1)
+    sides = [t["side"] for t in sorted(res.trades, key=lambda t: t["entry_i"])]
+    assert 1 in sides and -1 in sides
+    flips = sum(1 for a, b in zip(sides, sides[1:]) if a != b)
+    assert flips >= 0.6 * (len(sides) - 1)
+
+
+def test_positive_control_a_rule_that_sees_the_future_makes_money():
+    """If the simulator could not show a profit for a cheat, a loss for an
+    honest rule would mean nothing."""
+    m1 = tape(12_000, seed=21, start=2_000.0, vol=0.001)
+    f = features.build(m1)
+    c = m1["close"]
+    cheats = []
+    for i in range(3_000, 11_000, 120):
+        fut = c[i + 90] / c[i] - 1
+        side = 1 if fut > 0 else -1
+        cheats.append(S(i, side=side, stop=float(c[i] * (1 - side * 0.012)), time_min=90, asset="ETH"))
+        cheats[-1]["uid"] = f"cheat{i}"
+    res = portfolio({"ETH": Market("ETH", m1, f, PERP["ETH"])}, {"ETH": cheats}, RiskBudget(), 2_900, 11_500)
+    st = stats(res)
+    assert st["ALL"]["avg_net_bps"] > 20 and st["ALL"]["net_usd"] > 0 and st["ALL"]["win_rate"] > 0.6

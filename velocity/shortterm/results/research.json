@@ -1,0 +1,84 @@
+{
+ "families": {
+  "F1": {
+   "oos_net_pct": -83.25193723205403,
+   "oos_max_dd_pct": 83.49531602803266,
+   "oos_trades": 3849,
+   "picks": [
+    "F1-T24-k2.5-R3.0",
+    "F1-T24-k2.5-R3.0",
+    "F1-T24-k2.5-R3.0",
+    "F1-T24-k2.5-R3.0",
+    "F1-T24-k2.5-R3.0",
+    "F1-T72-k1.5-R3.0",
+    "F1-T72-k2.5-R3.0"
+   ],
+   "positive_folds": 0
+  },
+  "F2": {
+   "oos_net_pct": -36.125108052288546,
+   "oos_max_dd_pct": 36.205360130409204,
+   "oos_trades": 947,
+   "picks": [
+    "F2-c0.6-trend-m3.0",
+    "F2-c0.6-trend-m5.0",
+    "F2-c0.6-trend-m5.0",
+    "F2-c0.6-trend-m5.0",
+    "F2-c0.6-trend-m5.0",
+    "F2-c0.6-trend-m5.0",
+    "F2-c0.6-trend-m5.0"
+   ],
+   "positive_folds": 0
+  },
+  "F3": {
+   "oos_net_pct": -23.03496689866057,
+   "oos_max_dd_pct": 23.208197376549144,
+   "oos_trades": 587,
+   "picks": [
+    "F3-N12-trend-R1.0",
+    "F3-N12-trend-R1.0",
+    "F3-N12-trend-R1.0",
+    "F3-N12-trend-R1.0",
+    "F3-N12-trend-R1.0",
+    "F3-N12-trend-R1.0",
+    "F3-N12-trend-R2.0"
+   ],
+   "positive_folds": 0
+  },
+  "S1": {
+   "oos_net_pct": -8.505632357191828,
+   "oos_max_dd_pct": 18.598722375422284,
+   "oos_trades": 681,
+   "picks": [
+    "S1-T72-lf",
+    "S1-T72-lf",
+    "S1-T72-lf",
+    "S1-T72-lf",
+    "S1-T72-lf",
+    "S1-T72-ls",
+    "S1-T72-lf"
+   ],
+   "positive_folds": 3
+  },
+  "S2": {
+   "oos_net_pct": -14.79992061928408,
+   "oos_max_dd_pct": 22.062691845503647,
+   "oos_trades": 551,
+   "picks": [
+    "S2-60m",
+    "S2-60m",
+    "S2-60m",
+    "S2-60m",
+    "S2-60m",
+    "S2-60m",
+    "S2-60m"
+   ],
+   "positive_folds": 2
+  }
+ },
+ "winner": "S1",
+ "qualified": false,
+ "n_configs": 30,
+ "n_folds": 7,
+ "research_end": "2026-04-07"
+}

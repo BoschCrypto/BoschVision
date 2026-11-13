@@ -252,6 +252,12 @@ def portfolio(markets: dict, setups: dict, budget: RiskBudget, i0: int, i1: int,
 
     for s in merged:
         close_due(s["i"])
+        # A rule that flips sides announces the exit and the new entry at the
+        # same moment; both fill at the next open. The exit is settled first,
+        # otherwise the new side is refused as "already in a position".
+        p_same = open_pos.get(s["asset"])
+        if p_same is not None and p_same["exit_i"] <= s["i"] + 1 + 5 * delay_bars:
+            close_due(p_same["exit_i"])
         d = int(ts[s["i"]]) // 86_400
         if d != day:
             day, day_start, halted = d, eq, False
