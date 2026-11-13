@@ -13,6 +13,7 @@ than useless because it is persuasive.
 """
 from __future__ import annotations
 
+import os
 import sys
 
 import click
@@ -178,8 +179,11 @@ def bench(ticks):
 @click.option("--fee-bps", default=10.0, help="perp preset: fee per side in bps.")
 @click.option("--no-decay-exit", is_flag=True,
               help="perp preset: exit on stop, target or hard flip only.")
+@click.option("--record", "record_dir", default=None, type=click.Path(file_okay=False),
+              help="Write what every agent said to JSON files in this folder "
+                   "(the data behind the agent dashboard).")
 def replay(path, symbol, equity, horizon, aggressive, preset, contract_size,
-           fee_bps, no_decay_exit):
+           fee_bps, no_decay_exit, record_dir):
     """Run against real ticks/bars from a CSV. This is the test that counts."""
     feed = ReplayFeed(path, symbol=symbol)
     if preset == "perp":
@@ -191,7 +195,16 @@ def replay(path, symbol, equity, horizon, aggressive, preset, contract_size,
         eng = _build(feed.symbol, equity or 100_000.0, aggressive, horizon or 300,
                      None, False)
     click.echo(f"VELOCITY replay — {path}")
-    r = eng.run(feed)
+    if record_dir:
+        from .recorder import Recorder
+        rec = Recorder(eng)
+        r = rec.run(feed)
+        sizes = rec.write(record_dir, command="velocity " + " ".join(sys.argv[1:]),
+                          source_note=os.path.basename(path))
+        click.echo("  recorded          " + ", ".join(
+            f"{k} {n} rows" for k, (n, _b) in sizes.items()) + f"  -> {record_dir}")
+    else:
+        r = eng.run(feed)
     click.echo(_fmt_report(r))
     b, g = r.get("benchmark") or {}, r.get("significance") or {}
     if b:

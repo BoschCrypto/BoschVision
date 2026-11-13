@@ -615,3 +615,40 @@ def test_perp_preset_trades_whole_contracts_and_ends_flat():
         contracts = tr.qty * tr.entry / (0.1 * tr.entry)
         # qty is notional/fill, notional is whole contracts at the decision price
         assert tr.costs >= 0.0 and contracts > 0
+
+
+# ------------------------------------------------------------------ recorder
+
+def test_recorder_captures_a_run_without_changing_it(tmp_path):
+    """The recorder watches through the observer hook; the run it records
+    must be identical to the same run unobserved, and its tables must
+    reconcile with the engine's own books."""
+    import json
+    from velocity.presets import perp_engine
+    from velocity.recorder import Recorder
+
+    def feed():
+        return SyntheticFeed(n_ticks=12_000, tick_interval_ms=60_000, base_vol_bps=7.0,
+                             start_price=2_000.0, seed=5)
+
+    plain = perp_engine(contract_size=0.1, horizon_min=78)
+    plain.run(feed())
+    eng = perp_engine(contract_size=0.1, horizon_min=78)
+    rec = Recorder(eng)
+    rec.run(feed())
+    assert [t.pnl for t in eng.executor.trades] == [t.pnl for t in plain.executor.trades]
+
+    sizes = rec.write(str(tmp_path), command="velocity replay x.csv", source_note="x.csv")
+    assert set(sizes) == {"timeline", "trades", "gates", "pairs", "links"}
+    load = lambda n: json.loads((tmp_path / f"{n}.json").read_text())
+    trades = load("trades")["rows"]
+    assert len(trades) == len(eng.executor.trades) > 0
+    assert sum(t["net"] for t in trades) == pytest.approx(eng.bb.realised_pnl, abs=0.01 * len(trades))
+    assert all(t["quant"] is not None and t["score"] is not None for t in trades)
+    # every observed bar is accounted for exactly once
+    assert sum(g["bars"] for g in load("gates")["rows"]) == rec.bars == 12_000
+    links = {r["id"]: r["count"] for r in load("links")["rows"]}
+    assert links["opened"] == len(trades)
+    assert links["agreed"] == links["refused"] + links["approved"]
+    assert links["news_bars"] == 0          # no news feed in a replay
+    assert load("timeline")["meta"][0]["label"] == "Made by"

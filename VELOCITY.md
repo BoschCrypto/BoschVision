@@ -228,6 +228,7 @@ velocity/
   feeds/            synthetic (with a drift_scale=0 null mode), CSV replay,
                     coinbase_history (1-minute candle download)
   presets.py        perp_engine: the Coinbase perpetual-futures configuration
+  recorder.py       records what every agent said during a run (dashboard data)
   cli.py            sim / nulltest / bench / replay / fetch / live
 tests/test_velocity.py   51 tests
 ```
@@ -337,3 +338,20 @@ velocity replay eth.csv --preset perp --contract-size 0.1 --horizon 78
 ```
 
 `--end <epoch seconds>` on `fetch` pulls an earlier window to use as a holdout.
+
+---
+
+## 9. Seeing the agents interact
+
+```bash
+velocity replay eth.csv --preset perp --contract-size 0.1 --horizon 78 --record rec/
+```
+
+`--record` writes five JSON files describing the run: each agent's vote and
+the arbiter's score over time, every trade with the votes that opened it,
+what happened on every bar, how often QUANT and CHARTIST agreed (and whether
+the market then moved their way), and counts of each agent-to-agent handoff.
+The recorder only observes; a recorded run is identical to an unrecorded one
+(`test_recorder_captures_a_run_without_changing_it`).
+
+SENTINEL shows zero activity in any replay: it needs a live news source.

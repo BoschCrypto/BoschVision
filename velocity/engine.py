@@ -228,12 +228,18 @@ class Engine:
             self.slow.stop()
             self.slow = None
 
-    def run(self, ticks: Iterable[Tick], max_ticks: Optional[int] = None) -> dict:
+    def run(self, ticks: Iterable[Tick], max_ticks: Optional[int] = None,
+            observer: Optional[Callable[[Tick, Decision], None]] = None) -> dict:
+        """Drive the engine over a feed. `observer(tick, decision)` is called
+        after every tick; it is how the recorder watches a run without the
+        hot path knowing it is being watched."""
         self.start_slow_lane()
         n = 0
         try:
             for tick in ticks:
-                self.on_tick(tick)
+                d = self.on_tick(tick)
+                if observer is not None:
+                    observer(tick, d)
                 n += 1
                 if max_ticks and n >= max_ticks:
                     break
