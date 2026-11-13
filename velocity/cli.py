@@ -241,6 +241,67 @@ def fetch(symbol, days, out, end_ts):
 
 
 @cli.command()
+@click.option("--symbol", default="ETH-USD", help="Coinbase spot product to follow.")
+@click.option("--contract-size", default=0.1, help="Underlying per contract (0.1 ETH, 0.01 BTC).")
+@click.option("--horizon", default=78, help="Holding horizon in minutes (78 ETH, 144 BTC).")
+@click.option("--equity", default=5_000.0)
+@click.option("--port", default=8765)
+@click.option("--host", default="127.0.0.1", help="Use 0.0.0.0 to open it to your network.")
+@click.option("--replay", "replay_csv", default=None, type=click.Path(exists=True, dir_okay=False),
+              help="Play a CSV instead of following the live market.")
+@click.option("--speed", default=10.0, help="Replay speed in bars per second.")
+@click.option("--export", "export_path", default=None, type=click.Path(dir_okay=False),
+              help="With --replay: write the frames to a JSON file and exit.")
+@click.option("--last", "last_bars", default=4320, help="With --export: keep this many final bars.")
+def mind(symbol, contract_size, horizon, equity, port, host, replay_csv, speed, export_path, last_bars):
+    """Live view of what every agent is thinking. Paper trading only."""
+    import json
+    import threading
+    import time as _time
+    from .mind import MindHub, run_live, run_replay, serve
+    from .presets import perp_engine
+
+    eng = perp_engine(symbol, equity=equity, contract_size=contract_size, horizon_min=horizon)
+    entry = eng.arbiter.entry_threshold
+    if export_path:
+        if not replay_csv:
+            raise click.UsageError("--export needs --replay FILE")
+        hub = MindHub({"symbol": symbol, "mode": "replay", "entry": entry})
+        frames = run_replay(hub, eng, ReplayFeed(replay_csv, symbol=symbol), bars_per_s=0)[-last_bars:]
+        for f in frames:
+            f["ev"] = "|".join(k + "~" + t.replace("|", "/").replace("~", "-") for k, t in f["ev"])
+        with open(export_path, "w") as fh:
+            json.dump({"rows": frames}, fh, separators=(",", ":"))
+        click.echo(f"wrote {len(frames):,} frames to {export_path}")
+        return
+
+    mode = "replay" if replay_csv else "live"
+    hub = MindHub({"symbol": symbol, "mode": mode, "entry": entry})
+    stop = threading.Event()
+    srv = serve(hub, host, port)
+    click.echo(f"VELOCITY mind ({mode}, paper trading) -> http://{host}:{srv.server_address[1]}")
+    click.echo("Ctrl+C to stop.")
+    if replay_csv:
+        target, args = run_replay, (hub, eng, ReplayFeed(replay_csv, symbol=symbol), speed, stop)
+    else:
+        target, args = run_live, (hub, eng, symbol, stop)
+    t = threading.Thread(target=target, args=args, daemon=True, name="velocity-mind-engine")
+    t.start()
+    try:
+        while t.is_alive():
+            _time.sleep(0.5)
+        if mode == "replay":
+            click.echo("Replay finished. The page stays up; Ctrl+C to stop.")
+            while True:
+                _time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop.set()
+        srv.shutdown()
+
+
+@cli.command()
 def live():
     """Guarded entry point for a real feed. Refuses by default, on purpose."""
     import os

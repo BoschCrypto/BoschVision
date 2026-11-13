@@ -26,3 +26,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["hf_trading_bot*", "velocity*"]
+
+[tool.setuptools.package-data]
+velocity = ["web/*"]

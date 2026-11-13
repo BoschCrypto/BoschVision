@@ -229,6 +229,8 @@ velocity/
                     coinbase_history (1-minute candle download)
   presets.py        perp_engine: the Coinbase perpetual-futures configuration
   recorder.py       records what every agent said during a run (dashboard data)
+  mind.py           live view: frame builder, local web server, live and replay sources
+  web/              the page it serves (mind.js draws the spheres)
   cli.py            sim / nulltest / bench / replay / fetch / live
 tests/test_velocity.py   51 tests
 ```
@@ -355,3 +357,29 @@ The recorder only observes; a recorded run is identical to an unrecorded one
 (`test_recorder_captures_a_run_without_changing_it`).
 
 SENTINEL shows zero activity in any replay: it needs a live news source.
+
+---
+
+## 10. The live mind view
+
+```bash
+velocity mind                      # ETH, live Coinbase prices, paper trading
+velocity mind --symbol BTC-USD --contract-size 0.01 --horizon 144
+velocity mind --replay eth.csv --speed 20
+```
+
+Then open http://127.0.0.1:8765. Each agent is a sphere of orbiting light:
+how fast it turns and how bright it burns is the strength of its current
+view, and beams between spheres carry what one agent is telling another
+(QUANT's trend to CHARTIST, both votes to ARBITER, proposals to WARDEN and
+its refusals back). Readouts under the stage give the same state as text,
+and a log lists each handoff as it happens.
+
+How live it is: the price updates every two seconds; the agents form a new
+view once a minute, when each one-minute bar closes, because that is the
+cadence the tested configuration runs at. On start it warms the indicators
+on the last 30 hours of candles **without trading**, so position and P&L
+count only from the moment you opened it.
+
+It is paper trading only. No order leaves the process. SENTINEL stays dark
+until a news source is connected.

@@ -652,3 +652,104 @@ def test_recorder_captures_a_run_without_changing_it(tmp_path):
     assert links["agreed"] == links["refused"] + links["approved"]
     assert links["news_bars"] == 0          # no news feed in a replay
     assert load("timeline")["meta"][0]["label"] == "Made by"
+
+
+# ---------------------------------------------------------------------- mind
+
+def _mind_engine():
+    from velocity.presets import perp_engine
+    return perp_engine(contract_size=0.1, horizon_min=78)
+
+
+def test_frames_describe_every_agent_and_reconcile_with_the_book():
+    from velocity.mind import FRAME_KEYS, MindHub, run_replay
+    eng = _mind_engine()
+    hub = MindHub({"symbol": "T", "mode": "replay"})
+    frames = run_replay(hub, eng, SyntheticFeed(n_ticks=6_000, tick_interval_ms=60_000,
+                                                base_vol_bps=7.0, start_price=2_000.0, seed=5),
+                        bars_per_s=0)
+    assert len(frames) == 6_000
+    assert set(frames[-1]) == set(FRAME_KEYS)
+    kinds = [e[0] for f in frames for e in f["ev"]]
+    assert kinds.count("open") == len(eng.executor.trades) > 0
+    assert kinds.count("win") + kinds.count("loss") == len(eng.executor.trades)
+    assert frames[-1]["pnl"] == pytest.approx(eng.bb.realised_pnl, abs=0.01)
+    assert all(f["nl"] == 0 for f in frames)        # no news source in a replay
+
+
+def test_blocked_entries_are_announced_once_not_every_bar():
+    """WARDEN refuses the same setup bar after bar during a cooldown; the log
+    should say so when it starts, not a thousand times."""
+    from velocity.mind import MindHub, run_replay
+    eng = _mind_engine()
+    frames = run_replay(MindHub({}), eng, SyntheticFeed(n_ticks=6_000, tick_interval_ms=60_000,
+                                                        base_vol_bps=7.0, start_price=2_000.0, seed=5),
+                        bars_per_s=0)
+    blocked_bars = sum(1 for f in frames if f["wb"])
+    announced = sum(1 for f in frames for e in f["ev"] if e[0] in ("veto", "wait"))
+    assert blocked_bars > announced > 0
+    for a, b in zip(frames, frames[1:]):
+        if b["wb"] and b["wb"] == a["wb"]:
+            assert not any(e[0] in ("veto", "wait") for e in b["ev"])
+
+
+def test_live_warm_up_primes_indicators_without_trading():
+    """History is for warming indicators. A trade taken on candles that
+    closed before the session began must not show up as the session's."""
+    import threading
+    from velocity.mind import MindHub, run_live
+
+    feed = list(SyntheticFeed(n_ticks=2_400, tick_interval_ms=60_000, base_vol_bps=7.0,
+                              start_price=2_000.0, seed=5, start_ts_ns=1_700_000_040 * NS_PER_S))
+    rows = [(t.ts_ns // NS_PER_S, t.price, t.size) for t in feed]
+    clock = {"t": rows[1_999][0] + 70.0}            # 2,000 bars are history at start
+    stop = threading.Event()
+    calls = {"n": 0}
+
+    def fetch_rows(symbol, minutes, **_):
+        return [r for r in rows if r[0] <= clock["t"]][-minutes:]
+
+    def last_price(symbol):
+        calls["n"] += 1
+        clock["t"] += 60.0                          # each poll, a minute passes
+        if calls["n"] >= 300:
+            stop.set()
+        return 2_000.0
+
+    eng = _mind_engine()
+    hub = MindHub({"symbol": "T", "mode": "live"})
+    orig_wait = stop.wait
+    stop.wait = lambda *_a, **_k: stop.is_set()     # no real sleeping
+    run_live(hub, eng, "T", stop, warm_bars=1_800, fetch_rows=fetch_rows,
+             last_price=last_price, now=lambda: clock["t"])
+    stop.wait = orig_wait
+
+    got = hub.poll(0, limit=10_000)["frames"]
+    warm = [f for f in got if f.get("warm")]
+    live = [f for f in got if not f.get("warm")]
+    assert len(warm) >= 1_700 and len(live) >= 250
+    assert all(f["pos"] == 0 and f["pnl"] == 0 and f["nt"] == 0 and not f["ev"] for f in warm)
+    assert warm[-1]["qf"] > 0 and warm[-1]["cf"] > 0, "indicators should be warm by go-live"
+    times = [f["t"] for f in got]
+    assert times == sorted(times) and len(set(times)) == len(times), "no bar fed twice or out of order"
+    assert not eng.bb.halted
+
+
+def test_mind_server_serves_the_page_and_new_frames_only():
+    import json as _json
+    import urllib.request
+    from velocity.mind import MindHub, serve
+    hub = MindHub({"symbol": "T", "mode": "replay", "entry": 0.28})
+    srv = serve(hub, "127.0.0.1", 0)
+    try:
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        get = lambda path: urllib.request.build_opener(urllib.request.ProxyHandler({})).open(base + path, timeout=5).read()
+        assert b"VelocityMind" in get("/") and b"VelocityMind" in get("/mind.js")
+        hub.publish({"t": "a"}); hub.publish({"t": "b"})
+        d = _json.loads(get("/poll?since=0"))
+        assert [f["t"] for f in d["frames"]] == ["a", "b"] and d["seq"] == 2
+        hub.publish({"t": "c"})
+        assert [f["t"] for f in _json.loads(get("/poll?since=2"))["frames"]] == ["c"]
+        assert _json.loads(get("/poll?since=junk"))["meta"]["symbol"] == "T"
+    finally:
+        srv.shutdown()

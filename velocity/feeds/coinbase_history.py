@@ -19,6 +19,34 @@ def _iso(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def fetch_rows(symbol: str, minutes: int, end_ts: int | None = None,
+               pause_s: float = 0.12, timeout_s: float = 20.0) -> list[tuple[int, float, float]]:
+    """The last `minutes` one-minute candles as sorted (epoch_s, close, volume).
+    Raises on the first failed request: a live warm-up with holes in it is
+    worse than no warm-up."""
+    end_ts = int(end_ts or time.time()) // 60 * 60
+    step = 300 * 60
+    rows: dict[int, tuple[float, float]] = {}
+    for i in range(max(1, -(-minutes // 300))):
+        e = end_ts - i * step
+        req = urllib.request.Request(
+            _URL.format(sym=symbol, s=_iso(e - step + 60), e=_iso(e)),
+            headers={"User-Agent": "velocity-history/0.1"})
+        with urllib.request.urlopen(req, timeout=timeout_s) as r:
+            for t, _lo, _hi, _op, cl, vol in json.loads(r.read()):
+                rows[int(t)] = (float(cl), float(vol))
+        time.sleep(pause_s)
+    return [(t, rows[t][0], rows[t][1]) for t in sorted(rows)][-minutes:]
+
+
+def last_price(symbol: str, timeout_s: float = 8.0) -> float:
+    req = urllib.request.Request(
+        f"https://api.exchange.coinbase.com/products/{symbol}/ticker",
+        headers={"User-Agent": "velocity-history/0.1"})
+    with urllib.request.urlopen(req, timeout=timeout_s) as r:
+        return float(json.loads(r.read())["price"])
+
+
 def fetch_1m(symbol: str, days: float, out_path: str, end_ts: int | None = None,
              pause_s: float = 0.12, timeout_s: float = 20.0) -> dict:
     end_ts = int(end_ts or time.time()) // 60 * 60

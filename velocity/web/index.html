@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VELOCITY Mind</title>
+<link rel="stylesheet" href="mind.css">
+<style>
+  html, body { margin: 0; background: #05080f; color: #e6eef8; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .page { max-width: 1180px; margin: 0 auto; padding: 16px max(16px, env(safe-area-inset-right, 0px)) 28px max(16px, env(safe-area-inset-left, 0px)); display: flex; flex-direction: column; gap: 12px; }
+  h1 { font-size: 18px; letter-spacing: .14em; font-weight: 700; margin: 0; }
+  p { margin: 0; color: #8a9ab0; font-size: 13px; max-width: 80ch; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>VELOCITY MIND</h1>
+  <p id="lede">Paper trading only. Each sphere is one agent: the brighter and faster it turns, the stronger its view. Beams show one agent passing information to another. The agents read the market once a minute, when each one-minute bar closes.</p>
+  <div id="stage"></div>
+  <p id="status">Connecting…</p>
+</div>
+<script src="mind.js"></script>
+<script>
+(function () {
+  var mind = null, since = 0, fails = 0, status = document.getElementById("status");
+  function poll() {
+    fetch("poll?since=" + since, { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+      fails = 0;
+      if (!mind) mind = VelocityMind.mount(document.getElementById("stage"), { mode: d.meta.mode, symbol: d.meta.symbol, entry: d.meta.entry });
+      var live = d.meta.mode === "live";
+      d.frames.forEach(function (f, i) { mind.push(f, !!f.warm || d.frames.length - i > 3); });
+      since = d.seq;
+      if (d.px && d.px.px) mind.price(d.px.px, d.px.next);
+      var warm = d.status.indexOf("warming") === 0;
+      mind.badge(live ? (warm ? "WARMING UP" : d.status === "live" ? "LIVE" : "RETRYING") : "REPLAY", live && d.status === "live" ? "live" : live ? "" : "replay");
+      status.textContent = (live ? "Live market data from Coinbase (" + d.meta.symbol + "), paper trades only. " : "Replaying " + d.meta.symbol + ". ") +
+        "Status: " + d.status + "." + (d.meta.live_since ? " Live since " + d.meta.live_since.slice(11, 16) + " UTC; P&L counts from then." : "");
+    }).catch(function () {
+      fails += 1; if (mind) mind.badge("RECONNECTING", ""); status.textContent = "Lost contact with the bot. Retrying…";
+    }).then(function () { setTimeout(poll, fails > 3 ? 4000 : 1000); });
+  }
+  poll();
+})();
+</script>
+</body>
+</html>
