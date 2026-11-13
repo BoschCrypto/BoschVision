@@ -46,5 +46,6 @@
    "pays_funding": true
   }
  },
- "final_test_run": false
+ "final_test_run": true,
+ "final_test_run_at": "2026-11-13T12:41:49Z"
 }

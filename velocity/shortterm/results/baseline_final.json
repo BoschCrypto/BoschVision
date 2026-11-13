@@ -1,0 +1,147 @@
+{
+ "window": "2026-04-08 to 2026-11-13",
+ "current": {
+  "BTC": {
+   "trades": 102,
+   "net_usd": -155.58,
+   "net_pct": -3.112,
+   "avg_net_bps": -20.31,
+   "win_rate": 0.225,
+   "profit_factor": 0.352,
+   "costs_usd": 169.74,
+   "time_in_market": 0.038
+  },
+  "ETH": {
+   "trades": 222,
+   "net_usd": -240.27,
+   "net_pct": -4.805,
+   "avg_net_bps": -33.58,
+   "win_rate": 0.225,
+   "profit_factor": 0.262,
+   "costs_usd": 181.62,
+   "time_in_market": 0.073
+  },
+  "ALL": {
+   "trades": 324,
+   "net_usd": -395.84,
+   "net_pct": -7.917,
+   "avg_net_bps": -29.4,
+   "win_rate": 0.225,
+   "profit_factor": 0.3,
+   "costs_usd": 351.36,
+   "time_in_market": 0.073,
+   "max_drawdown_pct": 7.92,
+   "drawdown_brake_hit": null,
+   "blocked": {
+    "BTC": {
+     "below # contract (need $#, have $#)": 100919,
+     "cooldown #s/#s": 447,
+     "# losses in a row \u2014 cooling off": 255,
+     "vol spike # normal \u2014 stand down": 117
+    },
+    "ETH": {
+     "below # contract (need $#, have $#)": 86792,
+     "cooldown #s/#s": 1428,
+     "# losses in a row \u2014 cooling off": 939,
+     "vol spike # normal \u2014 stand down": 264
+    }
+   }
+  }
+ },
+ "quant_only": {
+  "BTC": {
+   "trades": 70,
+   "net_usd": -153.55,
+   "net_pct": -3.071,
+   "avg_net_bps": -29.46,
+   "win_rate": 0.071,
+   "profit_factor": 0.067,
+   "costs_usd": 114.69,
+   "time_in_market": 0.018
+  },
+  "ETH": {
+   "trades": 160,
+   "net_usd": -242.28,
+   "net_pct": -4.846,
+   "avg_net_bps": -38.98,
+   "win_rate": 0.156,
+   "profit_factor": 0.121,
+   "costs_usd": 151.27,
+   "time_in_market": 0.04
+  },
+  "ALL": {
+   "trades": 230,
+   "net_usd": -395.83,
+   "net_pct": -7.917,
+   "avg_net_bps": -36.08,
+   "win_rate": 0.13,
+   "profit_factor": 0.101,
+   "costs_usd": 265.96,
+   "time_in_market": 0.04,
+   "max_drawdown_pct": 7.92,
+   "drawdown_brake_hit": null,
+   "blocked": {
+    "BTC": {
+     "below # contract (need $#, have $#)": 192659,
+     "cooldown #s/#s": 731,
+     "# losses in a row \u2014 cooling off": 672,
+     "vol spike # normal \u2014 stand down": 125
+    },
+    "ETH": {
+     "below # contract (need $#, have $#)": 175200,
+     "# losses in a row \u2014 cooling off": 2420,
+     "cooldown #s/#s": 1637,
+     "session trade cap #": 1481
+    }
+   }
+  }
+ },
+ "chartist_only": {
+  "BTC": {
+   "trades": 83,
+   "net_usd": -179.59,
+   "net_pct": -3.592,
+   "avg_net_bps": -28.46,
+   "win_rate": 0.169,
+   "profit_factor": 0.206,
+   "costs_usd": 137.51,
+   "time_in_market": 0.045
+  },
+  "ETH": {
+   "trades": 177,
+   "net_usd": -216.3,
+   "net_pct": -4.326,
+   "avg_net_bps": -32.19,
+   "win_rate": 0.266,
+   "profit_factor": 0.366,
+   "costs_usd": 181.98,
+   "time_in_market": 0.089
+  },
+  "ALL": {
+   "trades": 260,
+   "net_usd": -395.89,
+   "net_pct": -7.918,
+   "avg_net_bps": -31.0,
+   "win_rate": 0.235,
+   "profit_factor": 0.303,
+   "costs_usd": 319.49,
+   "time_in_market": 0.089,
+   "max_drawdown_pct": 7.92,
+   "drawdown_brake_hit": null,
+   "blocked": {
+    "BTC": {
+     "below # contract (need $#, have $#)": 153953,
+     "cooldown #s/#s": 640,
+     "# losses in a row \u2014 cooling off": 373,
+     "vol spike # normal \u2014 stand down": 117
+    },
+    "ETH": {
+     "below # contract (need $#, have $#)": 136495,
+     "cooldown #s/#s": 1686,
+     "# losses in a row \u2014 cooling off": 898,
+     "vol spike # normal \u2014 stand down": 232
+    }
+   }
+  }
+ }
+}

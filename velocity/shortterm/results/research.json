@@ -1,9 +1,9 @@
 {
  "families": {
   "F1": {
-   "oos_net_pct": -83.25193723205403,
-   "oos_max_dd_pct": 83.49531602803266,
-   "oos_trades": 3849,
+   "oos_net_pct": -83.39068779654677,
+   "oos_max_dd_pct": 83.52069452902549,
+   "oos_trades": 3850,
    "picks": [
     "F1-T24-k2.5-R3.0",
     "F1-T24-k2.5-R3.0",
@@ -16,8 +16,8 @@
    "positive_folds": 0
   },
   "F2": {
-   "oos_net_pct": -36.125108052288546,
-   "oos_max_dd_pct": 36.205360130409204,
+   "oos_net_pct": -36.16009031873203,
+   "oos_max_dd_pct": 36.24029844531721,
    "oos_trades": 947,
    "picks": [
     "F2-c0.6-trend-m3.0",

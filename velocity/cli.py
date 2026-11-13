@@ -324,6 +324,20 @@ def mind(symbol, contract_size, horizon, equity, port, host, replay_csv, speed, 
 
 
 @cli.command()
+@click.option("--config", "cfg_path", default="config/shortterm_frozen.json", type=click.Path(dir_okay=False),
+              help="The frozen strategy, risk budget and instrument costs.")
+@click.option("--state", "state_path", default="velocity-paper-state.json", type=click.Path(dir_okay=False),
+              help="Where positions, orders and the balance are kept between restarts.")
+@click.option("--log", "log_path", default="velocity-paper-decisions.jsonl", type=click.Path(dir_okay=False),
+              help="One line per decision: the rule that made it and what each agent knew.")
+@click.option("--once", is_flag=True, help="Warm up, process whatever bars are due, and exit.")
+def paper(cfg_path, state_path, log_path, once):
+    """Paper-trade the frozen short-term strategy. No real orders are sent."""
+    from .shortterm.paper import run_live
+    run_live(cfg_path, state_path, log_path, once=once)
+
+
+@cli.command()
 def live():
     """Guarded entry point for a real feed. Refuses by default, on purpose."""
     import os

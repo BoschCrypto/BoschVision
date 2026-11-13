@@ -168,7 +168,7 @@ def _runs(desired: np.ndarray, end_i: np.ndarray, asset: str, cfg_id: str, q=Non
         out.append({"asset": asset, "cfg": cfg_id, "i": int(end_i[a]), "k": int(a), "side": int(desired[a]),
                     "entry": "market", "stop": None, "r_mult": None, "trail": None, "time_min": None,
                     "exit_i": int(end_i[b]) if b < n else None, "q": float(q[a]) if q is not None else 0.0,
-                    "reject": "", "setup_i": int(end_i[a])})
+                    "reject": "", "setup_i": int(end_i[a]), "rule_exit": True})
         a = b
     return out
 

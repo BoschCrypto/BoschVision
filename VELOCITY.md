@@ -446,3 +446,16 @@ on ETH: no edge invented from noise.
 SENTINEL's news has **not** been tested on history, because there is no
 archive of timestamped headlines to replay. With it on, live behaviour can
 differ from every table in this document.
+
+---
+
+## 12. Short-term strategy study (5 minutes to 1 hour)
+
+A full study of short-term BTC and ETH strategies on Coinbase futures: 30
+configurations in five families, walk-forward selection, one final test.
+**Nothing qualified.** The least-bad rule lost 13.3% on its final test; the
+current five agents lost 7.9% before their own drawdown rule stopped them.
+
+- Plan, fixed first: `velocity/shortterm/PLAN.md`
+- Report: `velocity/shortterm/REPORT.md`
+- Paper trading with the backtest's own logic: `velocity paper`

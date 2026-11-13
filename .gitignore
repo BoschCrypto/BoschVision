@@ -19,3 +19,6 @@ study-cycle.log
 # VELOCITY paper-trade log and kill switch
 velocity-mind-trades.csv
 .velocity_kill
+velocity-paper-state.json
+velocity-paper-state.json.tmp
+velocity-paper-decisions.jsonl

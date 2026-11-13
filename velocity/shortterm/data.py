@@ -79,6 +79,33 @@ def download(symbol: str, start: str, end: str, out_dir: str, pause_s: float = 0
     return path
 
 
+def recent(symbol: str, minutes: int) -> list[dict]:
+    """The last `minutes` one-minute bars as dicts, oldest first. Missing
+    minutes are filled with a flat bar at the previous close."""
+    end = int(time.time()) // 60 * 60
+    start = end - minutes * 60
+    rows: dict[int, tuple] = {}
+    a = start
+    while a < end:
+        b = min(end, a + 299 * 60)
+        url = _URL.format(sym=symbol, s=_iso(a), e=_iso(b))
+        with urllib.request.urlopen(urllib.request.Request(url, headers=_HEAD), timeout=20) as r:
+            for t, lo, hi, op, cl, vol in json.loads(r.read()):
+                rows[int(t)] = (op, hi, lo, cl, vol)
+        a = b + 60
+        if a < end:
+            time.sleep(0.12)
+    out, last = [], None
+    for t in range(min(rows), max(rows) + 60, 60) if rows else []:
+        if t in rows:
+            op, hi, lo, cl, vol = rows[t]
+            out.append({"ts": t, "open": op, "high": hi, "low": lo, "close": cl, "volume": vol})
+            last = cl
+        elif last is not None:
+            out.append({"ts": t, "open": last, "high": last, "low": last, "close": last, "volume": 0.0, "gap": True})
+    return out
+
+
 def load(path: str) -> dict:
     """Arrays on a complete one-minute grid. A missing minute carries the
     previous close as a flat bar with zero volume and is flagged in `gap`."""

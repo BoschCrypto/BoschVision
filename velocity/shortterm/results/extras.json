@@ -1,0 +1,761 @@
+{
+ "final_reproduced": {
+  "now_pct": -13.29,
+  "saved_pct": -13.29,
+  "trades_now": 309,
+  "trades_saved": 309
+ },
+ "final_time_any_position": 0.555,
+ "winner": {
+  "asset": "ETH",
+  "side": "long",
+  "signal_known": "2026-08-17 02:00",
+  "entry_time": "2026-08-17 02:00",
+  "entry": 1889.57,
+  "exit_time": "2026-08-23 05:00",
+  "exit": 2378.52,
+  "held_hours": 147.0,
+  "contracts_notional": 944.78,
+  "units": 0.5,
+  "sized_by": "shared position limit",
+  "gross_bps": 2587.6,
+  "cost_bps": 26.2,
+  "funding_bps": 11.07,
+  "net_bps": 2550.4,
+  "pnl_usd": 240.96,
+  "how": "rule exit",
+  "quant_z_at_entry": 2.45,
+  "quant_z_at_exit": -0.16,
+  "hourly_avg_72": 1879.21
+ },
+ "loser": {
+  "asset": "ETH",
+  "side": "long",
+  "signal_known": "2026-10-29 20:00",
+  "entry_time": "2026-10-29 20:00",
+  "entry": 2333.85,
+  "exit_time": "2026-10-29 21:00",
+  "exit": 2255.4,
+  "held_hours": 1.0,
+  "contracts_notional": 700.15,
+  "units": 0.30000000000000004,
+  "sized_by": "shared position limit",
+  "gross_bps": -336.1,
+  "cost_bps": 26.2,
+  "funding_bps": 0.06,
+  "net_bps": -362.4,
+  "pnl_usd": -25.37,
+  "how": "rule exit",
+  "quant_z_at_entry": 0.01,
+  "quant_z_at_exit": -3.64,
+  "hourly_avg_72": 2333.6
+ },
+ "waiting": {
+  "asset": "BTC",
+  "time": "2026-04-12 02:00",
+  "price": 71676.55,
+  "quant_z": -0.86,
+  "hourly_avg_72": 72347.97
+ },
+ "skips_bucketed": {
+  "WARDEN: one contract ($X) is more than the shared position limit allows ($X)": 18
+ },
+ "skipped_hyp": {
+  "n": 18,
+  "avg_hyp_net_bps": -0.96
+ },
+ "baseline_research": {
+  "window": "2024-08-23 to 2026-04-07",
+  "current": {
+   "BTC": {
+    "trades": 123,
+    "net_usd": -169.56,
+    "net_pct": -3.391,
+    "avg_net_bps": -23.07,
+    "win_rate": 0.187,
+    "profit_factor": 0.36,
+    "costs_usd": 161.82,
+    "time_in_market": 0.016
+   },
+   "ETH": {
+    "trades": 226,
+    "net_usd": -215.45,
+    "net_pct": -4.309,
+    "avg_net_bps": -31.29,
+    "win_rate": 0.239,
+    "profit_factor": 0.365,
+    "costs_usd": 188.22,
+    "time_in_market": 0.025
+   },
+   "ALL": {
+    "trades": 349,
+    "net_usd": -385.01,
+    "net_pct": -7.7,
+    "avg_net_bps": -28.39,
+    "win_rate": 0.221,
+    "profit_factor": 0.363,
+    "costs_usd": 350.03,
+    "time_in_market": 0.025,
+    "max_drawdown_pct": 7.86,
+    "drawdown_brake_hit": null,
+    "blocked": {
+     "BTC": {
+      "below # contract (need $#, have $#)": 290107,
+      "# losses in a row \u2014 cooling off": 493,
+      "vol spike # normal \u2014 stand down": 452,
+      "cooldown #s/#s": 442
+     },
+     "ETH": {
+      "below # contract (need $#, have $#)": 279675,
+      "cooldown #s/#s": 1355,
+      "# losses in a row \u2014 cooling off": 599,
+      "vol spike # normal \u2014 stand down": 564
+     }
+    },
+    "last_change": "2026-04-04",
+    "window_end": "2026-04-07"
+   }
+  },
+  "quant_only": {
+   "BTC": {
+    "trades": 161,
+    "net_usd": -146.75,
+    "net_pct": -2.935,
+    "avg_net_bps": -15.19,
+    "win_rate": 0.248,
+    "profit_factor": 0.485,
+    "costs_usd": 211.69,
+    "time_in_market": 0.018
+   },
+   "ETH": {
+    "trades": 240,
+    "net_usd": -238.3,
+    "net_pct": -4.766,
+    "avg_net_bps": -28.68,
+    "win_rate": 0.212,
+    "profit_factor": 0.37,
+    "costs_usd": 228.92,
+    "time_in_market": 0.024
+   },
+   "ALL": {
+    "trades": 401,
+    "net_usd": -385.05,
+    "net_pct": -7.701,
+    "avg_net_bps": -23.26,
+    "win_rate": 0.227,
+    "profit_factor": 0.42,
+    "costs_usd": 440.61,
+    "time_in_market": 0.024,
+    "max_drawdown_pct": 7.87,
+    "drawdown_brake_hit": null,
+    "blocked": {
+     "BTC": {
+      "below # contract (need $#, have $#)": 521695,
+      "cooldown #s/#s": 2019,
+      "# losses in a row \u2014 cooling off": 1143,
+      "session trade cap #": 849
+     },
+     "ETH": {
+      "below # contract (need $#, have $#)": 510485,
+      "# losses in a row \u2014 cooling off": 2851,
+      "cooldown #s/#s": 2709,
+      "session trade cap #": 1040
+     }
+    },
+    "last_change": "2026-04-04",
+    "window_end": "2026-04-07"
+   }
+  },
+  "chartist_only": {
+   "BTC": {
+    "trades": 110,
+    "net_usd": -151.93,
+    "net_pct": -3.039,
+    "avg_net_bps": -24.42,
+    "win_rate": 0.2,
+    "profit_factor": 0.415,
+    "costs_usd": 145.27,
+    "time_in_market": 0.017
+   },
+   "ETH": {
+    "trades": 212,
+    "net_usd": -214.9,
+    "net_pct": -4.298,
+    "avg_net_bps": -28.86,
+    "win_rate": 0.241,
+    "profit_factor": 0.421,
+    "costs_usd": 196.25,
+    "time_in_market": 0.03
+   },
+   "ALL": {
+    "trades": 322,
+    "net_usd": -366.83,
+    "net_pct": -7.337,
+    "avg_net_bps": -27.34,
+    "win_rate": 0.227,
+    "profit_factor": 0.419,
+    "costs_usd": 341.52,
+    "time_in_market": 0.03,
+    "max_drawdown_pct": 8.19,
+    "drawdown_brake_hit": null,
+    "blocked": {
+     "BTC": {
+      "below # contract (need $#, have $#)": 432405,
+      "cooldown #s/#s": 735,
+      "# losses in a row \u2014 cooling off": 433,
+      "vol spike # normal \u2014 stand down": 429
+     },
+     "ETH": {
+      "below # contract (need $#, have $#)": 422922,
+      "cooldown #s/#s": 1775,
+      "# losses in a row \u2014 cooling off": 728,
+      "vol spike # normal \u2014 stand down": 507
+     }
+    },
+    "last_change": "2026-04-04",
+    "window_end": "2026-04-07"
+   }
+  }
+ },
+ "baseline_final": {
+  "window": "2026-04-08 to 2026-11-13",
+  "current": {
+   "BTC": {
+    "trades": 102,
+    "net_usd": -155.58,
+    "net_pct": -3.112,
+    "avg_net_bps": -20.31,
+    "win_rate": 0.225,
+    "profit_factor": 0.352,
+    "costs_usd": 169.74,
+    "time_in_market": 0.038
+   },
+   "ETH": {
+    "trades": 222,
+    "net_usd": -240.27,
+    "net_pct": -4.805,
+    "avg_net_bps": -33.58,
+    "win_rate": 0.225,
+    "profit_factor": 0.262,
+    "costs_usd": 181.62,
+    "time_in_market": 0.073
+   },
+   "ALL": {
+    "trades": 324,
+    "net_usd": -395.84,
+    "net_pct": -7.917,
+    "avg_net_bps": -29.4,
+    "win_rate": 0.225,
+    "profit_factor": 0.3,
+    "costs_usd": 351.36,
+    "time_in_market": 0.073,
+    "max_drawdown_pct": 7.92,
+    "drawdown_brake_hit": null,
+    "blocked": {
+     "BTC": {
+      "below # contract (need $#, have $#)": 100919,
+      "cooldown #s/#s": 447,
+      "# losses in a row \u2014 cooling off": 255,
+      "vol spike # normal \u2014 stand down": 117
+     },
+     "ETH": {
+      "below # contract (need $#, have $#)": 86792,
+      "cooldown #s/#s": 1428,
+      "# losses in a row \u2014 cooling off": 939,
+      "vol spike # normal \u2014 stand down": 264
+     }
+    },
+    "last_change": "2026-08-15",
+    "window_end": "2026-11-13"
+   }
+  },
+  "quant_only": {
+   "BTC": {
+    "trades": 70,
+    "net_usd": -153.55,
+    "net_pct": -3.071,
+    "avg_net_bps": -29.46,
+    "win_rate": 0.071,
+    "profit_factor": 0.067,
+    "costs_usd": 114.69,
+    "time_in_market": 0.018
+   },
+   "ETH": {
+    "trades": 160,
+    "net_usd": -242.28,
+    "net_pct": -4.846,
+    "avg_net_bps": -38.98,
+    "win_rate": 0.156,
+    "profit_factor": 0.121,
+    "costs_usd": 151.27,
+    "time_in_market": 0.04
+   },
+   "ALL": {
+    "trades": 230,
+    "net_usd": -395.83,
+    "net_pct": -7.917,
+    "avg_net_bps": -36.08,
+    "win_rate": 0.13,
+    "profit_factor": 0.101,
+    "costs_usd": 265.96,
+    "time_in_market": 0.04,
+    "max_drawdown_pct": 7.92,
+    "drawdown_brake_hit": null,
+    "blocked": {
+     "BTC": {
+      "below # contract (need $#, have $#)": 192659,
+      "cooldown #s/#s": 731,
+      "# losses in a row \u2014 cooling off": 672,
+      "vol spike # normal \u2014 stand down": 125
+     },
+     "ETH": {
+      "below # contract (need $#, have $#)": 175200,
+      "# losses in a row \u2014 cooling off": 2420,
+      "cooldown #s/#s": 1637,
+      "session trade cap #": 1481
+     }
+    },
+    "last_change": "2026-08-08",
+    "window_end": "2026-11-13"
+   }
+  },
+  "chartist_only": {
+   "BTC": {
+    "trades": 83,
+    "net_usd": -179.59,
+    "net_pct": -3.592,
+    "avg_net_bps": -28.46,
+    "win_rate": 0.169,
+    "profit_factor": 0.206,
+    "costs_usd": 137.51,
+    "time_in_market": 0.045
+   },
+   "ETH": {
+    "trades": 177,
+    "net_usd": -216.3,
+    "net_pct": -4.326,
+    "avg_net_bps": -32.19,
+    "win_rate": 0.266,
+    "profit_factor": 0.366,
+    "costs_usd": 181.98,
+    "time_in_market": 0.089
+   },
+   "ALL": {
+    "trades": 260,
+    "net_usd": -395.89,
+    "net_pct": -7.918,
+    "avg_net_bps": -31.0,
+    "win_rate": 0.235,
+    "profit_factor": 0.303,
+    "costs_usd": 319.49,
+    "time_in_market": 0.089,
+    "max_drawdown_pct": 7.92,
+    "drawdown_brake_hit": null,
+    "blocked": {
+     "BTC": {
+      "below # contract (need $#, have $#)": 153953,
+      "cooldown #s/#s": 640,
+      "# losses in a row \u2014 cooling off": 373,
+      "vol spike # normal \u2014 stand down": 117
+     },
+     "ETH": {
+      "below # contract (need $#, have $#)": 136495,
+      "cooldown #s/#s": 1686,
+      "# losses in a row \u2014 cooling off": 898,
+      "vol spike # normal \u2014 stand down": 232
+     }
+    },
+    "last_change": "2026-08-01",
+    "window_end": "2026-11-13"
+   }
+  }
+ },
+ "per_asset_alone": {
+  "F1-T24-k1.5-R1.5": {
+   "BTC": {
+    "net_pct": -55.84,
+    "trades": 1838,
+    "avg_net_bps": -21.2
+   },
+   "ETH": {
+    "net_pct": -87.28,
+    "trades": 3649,
+    "avg_net_bps": -26.8
+   }
+  },
+  "F1-T24-k1.5-R3.0": {
+   "BTC": {
+    "net_pct": -55.3,
+    "trades": 1879,
+    "avg_net_bps": -20.6
+   },
+   "ETH": {
+    "net_pct": -85.76,
+    "trades": 3931,
+    "avg_net_bps": -25.5
+   }
+  },
+  "F1-T24-k2.5-R1.5": {
+   "BTC": {
+    "net_pct": -55.67,
+    "trades": 1807,
+    "avg_net_bps": -21.2
+   },
+   "ETH": {
+    "net_pct": -87.06,
+    "trades": 3867,
+    "avg_net_bps": -26.3
+   }
+  },
+  "F1-T24-k2.5-R3.0": {
+   "BTC": {
+    "net_pct": -54.74,
+    "trades": 1836,
+    "avg_net_bps": -21.0
+   },
+   "ETH": {
+    "net_pct": -84.84,
+    "trades": 3854,
+    "avg_net_bps": -25.2
+   }
+  },
+  "F1-T72-k1.5-R1.5": {
+   "BTC": {
+    "net_pct": -56.19,
+    "trades": 1816,
+    "avg_net_bps": -21.7
+   },
+   "ETH": {
+    "net_pct": -87.09,
+    "trades": 3520,
+    "avg_net_bps": -27.8
+   }
+  },
+  "F1-T72-k1.5-R3.0": {
+   "BTC": {
+    "net_pct": -56.16,
+    "trades": 1766,
+    "avg_net_bps": -22.3
+   },
+   "ETH": {
+    "net_pct": -85.91,
+    "trades": 3754,
+    "avg_net_bps": -26.5
+   }
+  },
+  "F1-T72-k2.5-R1.5": {
+   "BTC": {
+    "net_pct": -56.14,
+    "trades": 1696,
+    "avg_net_bps": -22.7
+   },
+   "ETH": {
+    "net_pct": -87.02,
+    "trades": 3684,
+    "avg_net_bps": -27.4
+   }
+  },
+  "F1-T72-k2.5-R3.0": {
+   "BTC": {
+    "net_pct": -55.26,
+    "trades": 1752,
+    "avg_net_bps": -22.3
+   },
+   "ETH": {
+    "net_pct": -85.7,
+    "trades": 3690,
+    "avg_net_bps": -26.6
+   }
+  },
+  "F2-c0.6-trend-m3.0": {
+   "BTC": {
+    "net_pct": -28.59,
+    "trades": 814,
+    "avg_net_bps": -22.2
+   },
+   "ETH": {
+    "net_pct": -41.64,
+    "trades": 1061,
+    "avg_net_bps": -24.6
+   }
+  },
+  "F2-c0.6-trend-m5.0": {
+   "BTC": {
+    "net_pct": -27.08,
+    "trades": 735,
+    "avg_net_bps": -23.0
+   },
+   "ETH": {
+    "net_pct": -38.39,
+    "trades": 950,
+    "avg_net_bps": -24.4
+   }
+  },
+  "F2-c0.6-any-m3.0": {
+   "BTC": {
+    "net_pct": -34.51,
+    "trades": 1072,
+    "avg_net_bps": -21.9
+   },
+   "ETH": {
+    "net_pct": -58.37,
+    "trades": 1913,
+    "avg_net_bps": -23.0
+   }
+  },
+  "F2-c0.6-any-m5.0": {
+   "BTC": {
+    "net_pct": -31.57,
+    "trades": 982,
+    "avg_net_bps": -21.0
+   },
+   "ETH": {
+    "net_pct": -51.39,
+    "trades": 1610,
+    "avg_net_bps": -21.6
+   }
+  },
+  "F2-c0.8-trend-m3.0": {
+   "BTC": {
+    "net_pct": -33.26,
+    "trades": 1093,
+    "avg_net_bps": -21.3
+   },
+   "ETH": {
+    "net_pct": -58.59,
+    "trades": 1794,
+    "avg_net_bps": -24.9
+   }
+  },
+  "F2-c0.8-trend-m5.0": {
+   "BTC": {
+    "net_pct": -31.06,
+    "trades": 1073,
+    "avg_net_bps": -19.8
+   },
+   "ETH": {
+    "net_pct": -52.32,
+    "trades": 1537,
+    "avg_net_bps": -23.9
+   }
+  },
+  "F2-c0.8-any-m3.0": {
+   "BTC": {
+    "net_pct": -45.65,
+    "trades": 1488,
+    "avg_net_bps": -21.8
+   },
+   "ETH": {
+    "net_pct": -74.0,
+    "trades": 3049,
+    "avg_net_bps": -22.9
+   }
+  },
+  "F2-c0.8-any-m5.0": {
+   "BTC": {
+    "net_pct": -38.37,
+    "trades": 1364,
+    "avg_net_bps": -20.0
+   },
+   "ETH": {
+    "net_pct": -67.81,
+    "trades": 2544,
+    "avg_net_bps": -21.5
+   }
+  },
+  "F3-N4-trend-R1.0": {
+   "BTC": {
+    "net_pct": -38.87,
+    "trades": 1215,
+    "avg_net_bps": -22.7
+   },
+   "ETH": {
+    "net_pct": -76.39,
+    "trades": 2655,
+    "avg_net_bps": -27.9
+   }
+  },
+  "F3-N4-trend-R2.0": {
+   "BTC": {
+    "net_pct": -38.79,
+    "trades": 1239,
+    "avg_net_bps": -22.1
+   },
+   "ETH": {
+    "net_pct": -76.23,
+    "trades": 2614,
+    "avg_net_bps": -28.1
+   }
+  },
+  "F3-N4-any-R1.0": {
+   "BTC": {
+    "net_pct": -54.9,
+    "trades": 1679,
+    "avg_net_bps": -22.7
+   },
+   "ETH": {
+    "net_pct": -85.95,
+    "trades": 3600,
+    "avg_net_bps": -27.7
+   }
+  },
+  "F3-N4-any-R2.0": {
+   "BTC": {
+    "net_pct": -54.91,
+    "trades": 1748,
+    "avg_net_bps": -22.1
+   },
+   "ETH": {
+    "net_pct": -85.72,
+    "trades": 3595,
+    "avg_net_bps": -28.3
+   }
+  },
+  "F3-N12-trend-R1.0": {
+   "BTC": {
+    "net_pct": -15.28,
+    "trades": 399,
+    "avg_net_bps": -23.8
+   },
+   "ETH": {
+    "net_pct": -24.54,
+    "trades": 514,
+    "avg_net_bps": -25.1
+   }
+  },
+  "F3-N12-trend-R2.0": {
+   "BTC": {
+    "net_pct": -16.71,
+    "trades": 390,
+    "avg_net_bps": -26.2
+   },
+   "ETH": {
+    "net_pct": -25.92,
+    "trades": 512,
+    "avg_net_bps": -26.9
+   }
+  },
+  "F3-N12-any-R1.0": {
+   "BTC": {
+    "net_pct": -49.37,
+    "trades": 1545,
+    "avg_net_bps": -22.9
+   },
+   "ETH": {
+    "net_pct": -83.01,
+    "trades": 3271,
+    "avg_net_bps": -27.0
+   }
+  },
+  "F3-N12-any-R2.0": {
+   "BTC": {
+    "net_pct": -49.29,
+    "trades": 1514,
+    "avg_net_bps": -23.5
+   },
+   "ETH": {
+    "net_pct": -82.85,
+    "trades": 3130,
+    "avg_net_bps": -27.8
+   }
+  },
+  "S1-T24-ls": {
+   "BTC": {
+    "net_pct": -33.26,
+    "trades": 1297,
+    "avg_net_bps": -17.8
+   },
+   "ETH": {
+    "net_pct": -56.39,
+    "trades": 2246,
+    "avg_net_bps": -19.2
+   }
+  },
+  "S1-T24-lf": {
+   "BTC": {
+    "net_pct": -24.05,
+    "trades": 941,
+    "avg_net_bps": -15.4
+   },
+   "ETH": {
+    "net_pct": -34.49,
+    "trades": 1126,
+    "avg_net_bps": -16.7
+   }
+  },
+  "S1-T72-ls": {
+   "BTC": {
+    "net_pct": -28.83,
+    "trades": 908,
+    "avg_net_bps": -19.0
+   },
+   "ETH": {
+    "net_pct": -36.23,
+    "trades": 1182,
+    "avg_net_bps": -16.8
+   }
+  },
+  "S1-T72-lf": {
+   "BTC": {
+    "net_pct": -13.65,
+    "trades": 580,
+    "avg_net_bps": -13.4
+   },
+   "ETH": {
+    "net_pct": -17.13,
+    "trades": 597,
+    "avg_net_bps": -13.5
+   }
+  },
+  "S2-15m": {
+   "BTC": {
+    "net_pct": -33.96,
+    "trades": 1271,
+    "avg_net_bps": -18.0
+   },
+   "ETH": {
+    "net_pct": -52.94,
+    "trades": 1849,
+    "avg_net_bps": -19.9
+   }
+  },
+  "S2-60m": {
+   "BTC": {
+    "net_pct": -13.51,
+    "trades": 476,
+    "avg_net_bps": -16.1
+   },
+   "ETH": {
+    "net_pct": -2.98,
+    "trades": 473,
+    "avg_net_bps": -3.0
+   }
+  }
+ },
+ "best_per_asset": {
+  "BTC": "S2-60m",
+  "ETH": "S2-60m"
+ },
+ "best_in_family": {
+  "F1": {
+   "BTC": "F1-T24-k2.5-R3.0",
+   "ETH": "F1-T24-k2.5-R3.0"
+  },
+  "F2": {
+   "BTC": "F2-c0.6-trend-m5.0",
+   "ETH": "F2-c0.6-trend-m5.0"
+  },
+  "F3": {
+   "BTC": "F3-N12-trend-R1.0",
+   "ETH": "F3-N12-trend-R1.0"
+  },
+  "S1": {
+   "BTC": "S1-T72-lf",
+   "ETH": "S1-T72-lf"
+  },
+  "S2": {
+   "BTC": "S2-60m",
+   "ETH": "S2-60m"
+  }
+ }
+}

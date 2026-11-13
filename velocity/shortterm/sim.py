@@ -120,7 +120,14 @@ def _resolve(mk: Market, s: dict, end_i: int, delay_bars: int, slip_mult: float)
     if not stop_entry:
         side, stop, j, px, cost_in = s["side"], s["stop"], j0, o[j0], inst.market_cost(slip_mult)
         if stop is not None and (px - stop) * side <= 0:
-            return {"filled": False, "why": "price was past the stop before the order could fill"}
+            # A market order fills wherever the market is. If that is already
+            # beyond the stop, the trade is opened and stopped at once and
+            # pays both costs. (This used to be treated as "not filled",
+            # which quietly avoided a loss a real order would have taken.)
+            c = cost_in + inst.stop_cost(slip_mult)
+            return {"filled": True, "side": side, "entry_i": j, "entry": px, "exit_i": j, "exit": px,
+                    "how": "stop (gapped)", "gross": 0.0, "cost": c, "funding": 0.0, "net": -c,
+                    "stop_dist": None, "hold_min": 0, "mfe": 0.0, "mae": 0.0, "stop0": stop}
     else:
         side = 0
         for j in range(j0, min(s["expiry_i"], end_i - 1) + 1):
@@ -255,8 +262,13 @@ def portfolio(markets: dict, setups: dict, budget: RiskBudget, i0: int, i1: int,
         # A rule that flips sides announces the exit and the new entry at the
         # same moment; both fill at the next open. The exit is settled first,
         # otherwise the new side is refused as "already in a position".
+        # Only for exits already DECIDED at this bar (a rule or time-limit
+        # exit, which fills at the next open). A stop or target that will be
+        # hit during the next minute is not known yet; treating it as closed
+        # would be reading the future.
         p_same = open_pos.get(s["asset"])
-        if p_same is not None and p_same["exit_i"] <= s["i"] + 1 + 5 * delay_bars:
+        if (p_same is not None and p_same["how"] in ("rule exit", "time limit")
+                and p_same["exit_i"] <= s["i"] + 1 + 5 * delay_bars):
             close_due(p_same["exit_i"])
         d = int(ts[s["i"]]) // 86_400
         if d != day:

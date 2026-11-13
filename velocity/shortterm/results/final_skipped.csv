@@ -1,0 +1,19 @@
+ts,asset,cfg,side,why,q,hyp_net_bps
+2026-04-29 09:59,BTC,S1-T72-lf,1,WARDEN: one contract ($776) is more than the shared position limit allows ($705),0.3925,-88.72
+2026-07-26 13:59,BTC,S1-T72-lf,1,WARDEN: one contract ($645) is more than the shared position limit allows ($625),0.0134,-22.4
+2026-07-27 16:59,BTC,S1-T72-lf,1,WARDEN: one contract ($648) is more than the shared position limit allows ($625),0.7523,-190.74
+2026-09-06 22:59,BTC,S1-T72-lf,1,WARDEN: one contract ($800) is more than the shared position limit allows ($793),0.1525,-38.24
+2026-09-09 07:59,BTC,S1-T72-lf,1,WARDEN: one contract ($793) is more than the shared position limit allows ($770),0.1274,-62.34
+2026-09-11 13:59,BTC,S1-T72-lf,1,WARDEN: one contract ($792) is more than the shared position limit allows ($757),1.419,-215.23
+2026-09-17 15:59,BTC,S1-T72-lf,1,WARDEN: one contract ($767) is more than the shared position limit allows ($762),0.111,-72.84
+2026-09-17 22:59,BTC,S1-T72-lf,1,WARDEN: one contract ($764) is more than the shared position limit allows ($762),0.0005,1029.48
+2026-09-26 15:59,BTC,S1-T72-lf,1,WARDEN: one contract ($841) is more than the shared position limit allows ($699),0.0942,-27.04
+2026-09-26 17:59,BTC,S1-T72-lf,1,WARDEN: one contract ($841) is more than the shared position limit allows ($699),0.0308,-37.42
+2026-09-30 10:59,BTC,S1-T72-lf,1,WARDEN: one contract ($839) is more than the shared position limit allows ($670),0.3877,-61.76
+2026-10-01 09:59,BTC,S1-T72-lf,1,WARDEN: one contract ($837) is more than the shared position limit allows ($662),0.3197,35.46
+2026-10-16 11:59,BTC,S1-T72-lf,1,WARDEN: one contract ($825) is more than the shared position limit allows ($717),0.2954,-93.07
+2026-11-01 08:59,BTC,S1-T72-lf,1,WARDEN: one contract ($781) is more than the shared position limit allows ($739),0.13,-57.76
+2026-11-01 13:59,BTC,S1-T72-lf,1,WARDEN: one contract ($779) is more than the shared position limit allows ($739),0.0904,-86.53
+2026-11-03 15:59,BTC,S1-T72-lf,1,WARDEN: one contract ($776) is more than the shared position limit allows ($730),0.1272,-32.37
+2026-11-03 19:59,BTC,S1-T72-lf,1,WARDEN: one contract ($775) is more than the shared position limit allows ($730),0.0058,-45.46
+2026-11-04 05:59,BTC,S1-T72-lf,1,WARDEN: one contract ($776) is more than the shared position limit allows ($728),0.2898,49.65

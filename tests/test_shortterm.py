@@ -271,3 +271,166 @@ def test_positive_control_a_rule_that_sees_the_future_makes_money():
     res = portfolio({"ETH": Market("ETH", m1, f, PERP["ETH"])}, {"ETH": cheats}, RiskBudget(), 2_900, 11_500)
     st = stats(res)
     assert st["ALL"]["avg_net_bps"] > 20 and st["ALL"]["net_usd"] > 0 and st["ALL"]["win_rate"] > 0.6
+
+
+# --------------------------------------------------------------- paper trading
+
+import json as _json
+
+from velocity.shortterm.paper import (LiveBrokerDisabled, OrderRouter, PaperBroker, StateStore, Trader)
+
+
+def _bars(m1, i):
+    return {"ts": int(m1["ts"][i]), "open": float(m1["open"][i]), "high": float(m1["high"][i]),
+            "low": float(m1["low"][i]), "close": float(m1["close"][i]), "volume": 1.0}
+
+
+def _paper(tmp_path, cfg, data, warm, upto, broker=None, name="state.json", kill=None, fresh=True):
+    store = StateStore(str(tmp_path / name), 5_000.0)
+    tr = Trader(cfg, PERP, RiskBudget(), store, OrderRouter(store, broker or PaperBroker()), window=4_400,
+                log_path=str(tmp_path / "decisions.jsonl"), kill_path=kill or str(tmp_path / "no_kill"))
+    start = warm
+    if fresh:
+        for a in ("BTC", "ETH"):
+            tr.bars[a] = [_bars(data[a][0], i) for i in range(warm - 4_400, warm)]
+    else:
+        last = store.d["last_bar_ts"]
+        for a in ("BTC", "ETH"):
+            ts = data[a][0]["ts"]
+            start = int(np.searchsorted(ts, last)) + 1
+            tr.bars[a] = [_bars(data[a][0], i) for i in range(start - 4_400, start)]
+    for i in range(start, upto):
+        for a in ("BTC", "ETH"):
+            tr.on_bar(a, _bars(data[a][0], i))
+    return tr, store
+
+
+@pytest.mark.parametrize("cfg_id", ["S1-T24-ls", "F3-N4-any-R1.0", "F1-T24-k1.5-R1.5"])
+def test_paper_trading_reproduces_the_backtest_trade_for_trade(tmp_path, cfg_id):
+    """Same bars, fed one minute at a time to the paper trader, must give the
+    backtest's trades: same side, same times, same prices."""
+    data = _two_markets(8_500)
+    cfg = next(c for c in strategies.registry() if c["id"] == cfg_id)
+    n, warm = 8_500, 4_500
+    markets = {a: Market(a, m1, f, PERP[a]) for a, (m1, f) in data.items()}
+    setups = {a: strategies.setups_for(m1, f, cfg, a) for a, (m1, f) in data.items()}
+    bt = portfolio(markets, setups, RiskBudget(), warm, n - 1)
+    want = sorted((t["asset"], t["side"], t["entry_ts"], t["exit_ts"], round(t["entry"], 6), round(t["exit"], 6))
+                  for t in bt.trades if t["how"] != "window end" and t["exit_i"] < n - 2)
+    _, store = _paper(tmp_path, cfg, data, warm, n)
+    got = sorted((t["asset"], t["side"], t["entry_ts"], t["exit_ts"], round(t["entry"], 6), round(t["exit"], 6))
+                 for t in store.d["trades"] if t["exit_ts"] < int(data["BTC"][0]["ts"][n - 2]))
+    assert len(want) >= 3, "need some trades to compare"
+    assert got == want
+    by_key = {(t["asset"], t["entry_ts"]): t for t in bt.trades}
+    for t in store.d["trades"]:
+        b = by_key.get((t["asset"], t["entry_ts"]))
+        if b is not None and b["how"] != "window end":
+            assert t["net_bps"] == pytest.approx(b["net_bps"], abs=0.02)
+            assert t["pnl"] == pytest.approx(b["pnl"], abs=0.01)        # same size, to the cent
+
+
+def test_restart_mid_run_changes_nothing(tmp_path):
+    data = _two_markets(9_000)
+    cfg = next(c for c in strategies.registry() if c["id"] == "F3-N4-any-R1.0")
+    _, whole = _paper(tmp_path, cfg, data, 4_500, 9_000, name="whole.json")
+    _paper(tmp_path, cfg, data, 4_500, 6_777, name="split.json")            # stop mid-run...
+    _, split = _paper(tmp_path, cfg, data, 4_500, 9_000, name="split.json", fresh=False)   # ...and resume from the file
+    key = lambda d: [(t["asset"], t["entry_ts"], t["exit_ts"], t["pnl"]) for t in d["trades"]]
+    assert key(split.d) == key(whole.d) and len(key(whole.d)) > 5
+    assert split.d["equity"] == pytest.approx(whole.d["equity"])
+
+
+def test_router_accepts_a_signal_once(tmp_path):
+    store = StateStore(str(tmp_path / "s.json"), 5_000.0)
+    r = OrderRouter(store, PaperBroker())
+    assert r.submit("entry:ETH:x:1", "ETH", 1, 1.0, "entry", 60, {}) is not None
+    assert r.submit("entry:ETH:x:1", "ETH", 1, 1.0, "entry", 60, {}) is None
+    again = OrderRouter(StateStore(str(tmp_path / "s.json"), 5_000.0), PaperBroker())
+    store.save()
+    again = OrderRouter(StateStore(str(tmp_path / "s.json"), 5_000.0), PaperBroker())
+    assert again.submit("entry:ETH:x:1", "ETH", 1, 1.0, "entry", 120, {}) is None      # even after a restart
+
+
+def test_partial_fill_then_timeout_keeps_what_filled(tmp_path):
+    store = StateStore(str(tmp_path / "s.json"), 5_000.0)
+    r = OrderRouter(store, PaperBroker(fill_ratio=0.5), timeout_s=120)
+    o = r.submit("k", "ETH", 1, 4.0, "entry", 0, {})
+    r.on_bar("ETH", {"ts": 60, "open": 100.0})
+    assert o["status"] == "PARTIAL" and o["filled"] == pytest.approx(2.0)
+    r.on_bar("ETH", {"ts": 120, "open": 102.0})
+    assert o["filled"] == pytest.approx(3.0) and o["avg_price"] == pytest.approx((2 * 100 + 1 * 102) / 3)
+    r.on_bar("ETH", {"ts": 180, "open": 103.0})
+    assert o["status"] == "CANCELLED_PARTIAL" and 3.0 < o["filled"] < 4.0
+    assert not r.broker.working
+
+
+def test_an_order_that_never_fills_times_out(tmp_path):
+    class Dead(PaperBroker):
+        def on_bar(self, asset, bar):
+            return []
+    store = StateStore(str(tmp_path / "s.json"), 5_000.0)
+    r = OrderRouter(store, Dead(), timeout_s=120)
+    o = r.submit("k", "ETH", 1, 1.0, "entry", 0, {})
+    r.on_bar("ETH", {"ts": 60, "open": 1.0})
+    assert o["status"] == "WORKING"
+    r.on_bar("ETH", {"ts": 240, "open": 1.0})
+    assert o["status"] == "TIMED_OUT"
+
+
+def test_stale_feed_blocks_entries_and_eventually_flattens(tmp_path):
+    data = _two_markets(9_000)
+    cfg = next(c for c in strategies.registry() if c["id"] == "S1-T24-lf")
+    tr, store = _paper(tmp_path, cfg, data, 4_500, 8_000)
+    i = 8_000
+    while "ETH" not in store.d["positions"] and i < 8_990:      # run until a position is open
+        for a in ("BTC", "ETH"):
+            tr.on_bar(a, _bars(data[a][0], i))
+        i += 1
+    assert "ETH" in store.d["positions"], "no position opened to test with"
+    bar = _bars(data["ETH"][0], i)
+    late = bar["ts"] + 60 + 3_600                               # the bar arrives an hour late
+    tr.on_bar("ETH", bar, now_s=late)
+    assert any(o["purpose"] == "exit" and o["meta"]["how"] == "stale feed" for o in store.d["orders"].values())
+    recs = [_json.loads(x) for x in open(tmp_path / "decisions.jsonl")]
+    bar5 = next(_bars(data["BTC"][0], j) for j in range(i, i + 6) if (int(data["BTC"][0]["ts"][j]) + 60) % 300 == 0)
+    tr.bars["BTC"] = [b for b in tr.bars["BTC"] if b["ts"] < bar5["ts"]]
+    ev = tr.on_bar("BTC", bar5, now_s=bar5["ts"] + 60 + 3_600)
+    assert any(e.get("rule") == "STALE_FEED" for e in ev)
+
+
+def test_kill_switch_flattens_and_blocks(tmp_path):
+    data = _two_markets(9_000)
+    cfg = next(c for c in strategies.registry() if c["id"] == "S1-T24-lf")
+    kill = tmp_path / "kill"
+    tr, store = _paper(tmp_path, cfg, data, 4_500, 8_000, kill=str(kill))
+    i = 8_000
+    while not store.d["positions"] and i < 8_990:
+        for a in ("BTC", "ETH"):
+            tr.on_bar(a, _bars(data[a][0], i))
+        i += 1
+    assert store.d["positions"]
+    kill.write_text("stop")
+    n_before = len(store.d["trades"])
+    for j in range(i, i + 130):
+        for a in ("BTC", "ETH"):
+            tr.on_bar(a, _bars(data[a][0], j))
+    assert not store.d["positions"]
+    assert any(t["how"] == "kill switch" for t in store.d["trades"][n_before:])
+    assert all(t["how"] == "kill switch" for t in store.d["trades"][n_before:]), "no new entries while it is set"
+
+
+def test_live_orders_are_off(tmp_path):
+    with pytest.raises(RuntimeError):
+        LiveBrokerDisabled().submit({"id": "x"})
+    from velocity.shortterm.paper import run_live
+    cfg = tmp_path / "frozen.json"
+    cfg.write_text(_json.dumps({"live_orders_enabled": True, "config": {"id": "S1-T72-lf"}, "instruments": {}, "risk": {}}))
+    with pytest.raises(SystemExit):
+        run_live(str(cfg), str(tmp_path / "s.json"), str(tmp_path / "d.jsonl"), once=True)
+
+
+def test_a_market_order_filled_beyond_its_stop_is_a_loss_not_a_skip():
+    m1 = flat_tape([100, 100, 97, 97, 97])                      # gaps down through the stop before the fill
+    r = resolve(mk_for(m1), S(1, stop=98.0, r_mult=1.0))
+    assert r["filled"] and r["how"] == "stop (gapped)" and r["net"] < 0 and r["gross"] == 0.0
