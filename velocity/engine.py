@@ -20,6 +20,7 @@ change an agent and the p99 moves, you will see it.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Callable, Iterable, Optional
@@ -33,6 +34,9 @@ from .agents.warden import RiskLimits, Warden
 from .bus import Blackboard
 from .execution import ExecConfig, Fill, PaperExecutor
 from .types import NS_PER_MS, NS_PER_S, Decision, Side, Tick
+
+
+_VETO_NUM = re.compile(r"[-+]?[\d,]*\.?\d+x?")
 
 
 class LatencyRecorder:
@@ -144,6 +148,11 @@ class Engine:
         self.slow: Optional[SlowLane] = None
         self.decisions = 0
         self.vetoes: dict[str, int] = {}
+        # Benchmark state: buy-and-hold of the same instrument over the same
+        # window. ROADMAP.md made "always report a benchmark" the standard
+        # for this repo and VELOCITY was violating it.
+        self.first_price = 0.0
+        self.bars_in_market = 0
         self._last_decision: Optional[Decision] = None
 
     # -- the hot path -----------------------------------------------------
@@ -151,6 +160,10 @@ class Engine:
     def on_tick(self, tick: Tick) -> Optional[Decision]:
         t0 = time.perf_counter_ns()
         bb = self.bb
+        if self.first_price == 0.0:
+            self.first_price = tick.price
+        if bb.open_side != 0:
+            self.bars_in_market += 1
         bb.mark(tick.price, tick.ts_ns)
 
         vol_unit = self.warden.atr_value or tick.price * 1e-4
@@ -183,7 +196,12 @@ class Engine:
             if self.on_decision:
                 self.on_decision(d)
         elif d.reason.startswith(("WARDEN veto", "SENTINEL veto")):
-            key = d.reason.split(":")[0]
+            # Bucket by reason TYPE, stripping varying numbers. Keying on
+            # the full text gave 200+ entries like "vol spike 3.1x normal"
+            # / "3.2x normal"; keying on just "WARDEN veto" was
+            # undiagnosable. Strip the digits, keep the class.
+            r = d.reason.split(":", 1)[-1].strip()
+            key = _VETO_NUM.sub("#", r)[:60]
             self.vetoes[key] = self.vetoes.get(key, 0) + 1
             # A flatten order outranks everything, including an open trade.
             if not bb.flat and bb.halted:
@@ -229,11 +247,61 @@ class Engine:
             self.stop_slow_lane()
         return self.report(n)
 
+    def significance(self) -> dict:
+        """Is the result distinguishable from zero?
+
+        A one-sample t-test on per-trade P&L. This does NOT prove edge — it
+        only says whether the mean is far enough from zero, given the
+        scatter and the sample size, to be worth a second look. With fewer
+        than ~30 trades the answer is almost always no, and a strategy with
+        a 2.0 t-stat found after trying twenty variants is still noise
+        (that is multiple-testing, which no t-stat can see).
+        """
+        pnls = [t.pnl for t in self.executor.trades]
+        n = len(pnls)
+        if n < 2:
+            return {"n": n, "t_stat": 0.0, "verdict": "too few trades"}
+        mean = sum(pnls) / n
+        var = sum((x - mean) ** 2 for x in pnls) / (n - 1)
+        sd = var ** 0.5
+        if sd <= 0:
+            return {"n": n, "t_stat": 0.0, "verdict": "zero variance"}
+        t = mean / (sd / (n ** 0.5))
+        if n < 30:
+            v = "SAMPLE TOO SMALL — cannot separate skill from luck"
+        elif t <= -2.0:
+            v = "significantly NEGATIVE — a reliable loser as configured"
+        elif abs(t) < 1.0:
+            v = "indistinguishable from zero"
+        elif abs(t) < 2.0:
+            v = "weak, not significant at 5%"
+        elif abs(t) < 3.0:
+            v = "significant at 5% — treat with suspicion, check for overfitting"
+        else:
+            v = "significant at 1% — still check out-of-sample"
+        return {"n": n, "mean": mean, "sd": sd, "t_stat": t, "verdict": v}
+
+    def benchmark(self, ticks_seen: int) -> dict:
+        """Buy-and-hold the same instrument, same window, same capital."""
+        if self.first_price <= 0 or self.bb.last_price <= 0:
+            return {}
+        bh = (self.bb.last_price / self.first_price - 1.0) * 100.0
+        strat = (self.bb.equity / self.warden.start_equity - 1.0) * 100.0
+        return {
+            "buy_hold_pct": bh,
+            "strategy_pct": strat,
+            "excess_pct": strat - bh,
+            "time_in_market_pct": (self.bars_in_market / ticks_seen * 100.0) if ticks_seen else 0.0,
+        }
+
     def report(self, ticks_seen: int) -> dict:
         st = self.executor.stats()
         lat = self.latency.summary()
         bb = self.bb
         return {
+            "benchmark": self.benchmark(ticks_seen),
+            "significance": self.significance(),
+            "day_rollovers": bb.day_rollovers,
             "symbol": bb.symbol,
             "ticks": ticks_seen,
             "equity": bb.equity,

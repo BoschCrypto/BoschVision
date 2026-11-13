@@ -166,16 +166,40 @@ def bench(ticks):
 @cli.command()
 @click.argument("path", type=click.Path(exists=True, dir_okay=False))
 @click.option("--symbol", default=None)
-@click.option("--equity", default=100_000.0)
-@click.option("--horizon", default=300)
+@click.option("--equity", default=None, type=float,
+              help="Default 100000, or 5000 with --preset perp.")
+@click.option("--horizon", default=None, type=int,
+              help="Holding horizon in bars. Default 300, or 144 with --preset perp.")
 @click.option("--aggressive", is_flag=True)
-def replay(path, symbol, equity, horizon, aggressive):
+@click.option("--preset", type=click.Choice(["perp"]), default=None,
+              help="perp: Coinbase perpetual-style futures on 1-minute bars.")
+@click.option("--contract-size", default=0.01,
+              help="perp preset: underlying per contract (BIP 0.01 BTC, ETP 0.1 ETH).")
+@click.option("--fee-bps", default=10.0, help="perp preset: fee per side in bps.")
+@click.option("--no-decay-exit", is_flag=True,
+              help="perp preset: exit on stop, target or hard flip only.")
+def replay(path, symbol, equity, horizon, aggressive, preset, contract_size,
+           fee_bps, no_decay_exit):
     """Run against real ticks/bars from a CSV. This is the test that counts."""
     feed = ReplayFeed(path, symbol=symbol)
-    eng = _build(feed.symbol, equity, aggressive, horizon, None, False)
+    if preset == "perp":
+        from .presets import perp_engine
+        eng = perp_engine(feed.symbol, equity=equity or 5_000.0,
+                          contract_size=contract_size, horizon_min=horizon or 144,
+                          fee_bps=fee_bps, decay_exit=not no_decay_exit)
+    else:
+        eng = _build(feed.symbol, equity or 100_000.0, aggressive, horizon or 300,
+                     None, False)
     click.echo(f"VELOCITY replay — {path}")
     r = eng.run(feed)
     click.echo(_fmt_report(r))
+    b, g = r.get("benchmark") or {}, r.get("significance") or {}
+    if b:
+        click.echo(f"  buy-and-hold      {b['buy_hold_pct']:+.2f}%   strategy "
+                   f"{b['strategy_pct']:+.2f}%   excess {b['excess_pct']:+.2f}%   "
+                   f"(in market {b['time_in_market_pct']:.0f}% of bars)")
+    if g.get("n", 0) >= 2:
+        click.echo(f"  t-statistic       {g['t_stat']:+.2f}  {g['verdict']}")
     click.echo(f"  rows read {feed.rows_read:,}  skipped {feed.rows_skipped:,}")
     if r.get("trades", 0) < 30:
         click.echo(
@@ -184,6 +208,23 @@ def replay(path, symbol, equity, horizon, aggressive):
             "  rate spans most of the plausible range. Get more data before\n"
             "  concluding anything."
         )
+
+
+@cli.command()
+@click.argument("symbol")
+@click.option("--days", default=45.0, help="How many days of 1-minute bars.")
+@click.option("--out", required=True, type=click.Path(dir_okay=False))
+@click.option("--end", "end_ts", default=None, type=int,
+              help="Epoch seconds to end at (default now). Use it to pull an "
+                   "earlier window as an untouched holdout.")
+def fetch(symbol, days, out, end_ts):
+    """Download 1-minute Coinbase spot candles (e.g. BTC-USD) to a CSV."""
+    from .feeds.coinbase_history import fetch_1m
+    info = fetch_1m(symbol, days, out, end_ts=end_ts)
+    click.echo(f"{symbol}: {info['bars']:,} bars  {info['first']} -> {info['last']}")
+    click.echo(f"  requests {info['requests']}  failed {info['failed']}  gaps {info['gaps']}")
+    if info["failed"]:
+        click.echo("  some requests failed: the file has holes, fetch again before using it")
 
 
 @cli.command()

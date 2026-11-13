@@ -33,6 +33,7 @@ class Blackboard:
         "realised_pnl", "open_notional", "open_side", "open_entry", "open_entry_ns", "trades_today",
         "consecutive_losses", "last_exit_ns", "halted", "halt_reason",
         "equity", "peak_equity", "tick_count", "_notes",
+        "day_index", "day_start_pnl", "day_rollovers",
     )
 
     def __init__(self, symbol: str, equity: float = 100_000.0) -> None:
@@ -57,6 +58,13 @@ class Blackboard:
         self.peak_equity = equity
         self.tick_count = 0
         self._notes: list[str] = []
+        # A 24/7 market has no session close, so "today" has to be derived
+        # from the clock. Without this, a multi-day run sets session_start
+        # once and the daily loss limit silently becomes a whole-run limit —
+        # the first drawdown halts the system permanently.
+        self.day_index = -1
+        self.day_start_pnl = 0.0
+        self.day_rollovers = 0
 
     # ---- signal plane -------------------------------------------------
 
@@ -100,7 +108,32 @@ class Blackboard:
         qty = self.open_notional / self.open_entry
         return (price - self.open_entry) * qty * self.open_side
 
+    def roll_day(self, ts_ns: int) -> bool:
+        """Advance the trading day if the UTC date changed. Returns True on
+        a rollover. Resets the per-day risk budget and clears a halt that
+        was imposed for a per-day reason."""
+        d = ts_ns // 86_400_000_000_000
+        if d == self.day_index:
+            return False
+        first = self.day_index == -1
+        self.day_index = d
+        self.day_start_pnl = self.realised_pnl
+        self.trades_today = 0
+        self.session_start_ns = ts_ns
+        if not first:
+            self.day_rollovers += 1
+            if self.halted and self.halt_reason.startswith("daily"):
+                self.halted = False
+                self.halt_reason = ""
+        return not first
+
+    @property
+    def day_pnl(self) -> float:
+        """Realised P&L since the start of the current UTC day."""
+        return self.realised_pnl - self.day_start_pnl
+
     def mark(self, price: float, ts_ns: int) -> None:
+        self.roll_day(ts_ns)
         self.last_price = price
         self.last_ts_ns = ts_ns
         self.tick_count += 1

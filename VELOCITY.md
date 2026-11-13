@@ -225,7 +225,115 @@ velocity/
     arbiter.py      fusion, confluence, veto handling, the decision
   execution.py      pessimistic fill model: spread + slippage + latency drift
   engine.py         hot loop, slow-lane supervisor, latency recorder
-  feeds/            synthetic (with a drift_scale=0 null mode), CSV replay
-  cli.py            sim / nulltest / bench / replay / live
-tests/test_velocity.py   42 tests
+  feeds/            synthetic (with a drift_scale=0 null mode), CSV replay,
+                    coinbase_history (1-minute candle download)
+  presets.py        perp_engine: the Coinbase perpetual-futures configuration
+  cli.py            sim / nulltest / bench / replay / fetch / live
+tests/test_velocity.py   51 tests
 ```
+
+---
+
+## 8. Crypto perpetual futures: tested on real data, and it loses
+
+**Verdict: as built, VELOCITY has no measurable edge on BTC or ETH at
+Coinbase's fees. Do not trade it.** Gross P&L is about zero; fees are the
+whole loss.
+
+### Venue facts (from the Coinbase API, 13 Nov 2026)
+
+| | |
+|---|---|
+| Tradeable from the US | `FUTURE` products on Coinbase Derivatives Exchange, with futures approval |
+| Perpetual-style contracts | `BIP-20DEC30-CDE` (0.01 BTC), `ETP-20DEC30-CDE` (0.1 ETH): hourly funding, expiry decades out |
+| Not available | `GLOBAL_PERP` (Coinbase International) |
+| Futures fees, Intro tier | 9.5 bps maker / 10 bps taker per side: **20 bps round trip** |
+| Spread | about 0.01 bps on BTC, so the fee is the cost, not the spread |
+| Spot fees, Intro tier | 50 / 90 bps: unusable for short-term trading |
+
+### Why the holding period had to change
+
+Measured 1-minute volatility is 5.0 bps (BTC) and 6.8 bps (ETH). A 19-second
+hold moves about 3 bps against a 20 bps cost. For the cost to be a third of a
+one-sigma move the hold must be about **144 minutes on BTC and 78 on ETH**
+(`presets.horizon_for`). The `perp` preset runs on 1-minute bars at those
+horizons; it is an intraday trend system, not a scalper.
+
+### Results: $5,000 account, 10 bps per side, 1-minute bars
+
+Signal parameters were fixed before any P&L was seen. The first window was
+split 30 days / 15 days; the holdout is the 45 days before it and was
+downloaded only after the first window had been analysed.
+
+| Data | Market | Trades | Before costs | Net | t-stat |
+|---|---|---|---|---|---|
+| BTC, first 30 days | falling | 34 | -$26 | **-$88** (-1.75%) | -4.9 |
+| BTC, last 15 days | falling | 24 | -$27 | **-$67** (-1.34%) | n < 30 |
+| ETH, first 30 days | falling | 141 | +$0 | **-$114** (-2.28%) | -3.3 |
+| ETH, last 15 days | falling | 80 | -$31 | **-$94** (-1.89%) | -4.0 |
+| BTC, holdout 45 days | +31.6% | 47 | +$21 | **-$55** (-1.11%) | -1.7 |
+| ETH, holdout 45 days | +41.3% | 202 | +$8 | **-$159** (-3.19%) | -2.8 |
+| **Total** | | **528** | **-$56** | **-$578** | |
+
+Six runs, six losses. Fees were $522 of the $578.
+
+Against buy-and-hold: in the rising holdout the strategy trailed by 33 and 44
+points. In the falling window it "beat" buy-and-hold by about 11 points only
+because it was mostly flat while the market fell; it still lost money.
+
+The null test at this configuration (driftless random walk, same costs) lost
+0.2% on BTC and 3.7% on ETH, so the harness is not inventing edge.
+
+### One hypothesis tested, and rejected
+
+In the first window, trades that reached a stop or target looked good (43
+targets to 33 stops) and the loss came from the signal-decay exit: 179 trades,
+20% in the right direction. Disabling that exit (`--no-decay-exit`) was tested
+on the untouched holdout:
+
+| | BTC holdout | ETH holdout | BTC first window | ETH first window |
+|---|---|---|---|---|
+| Net, no decay exit | +$52 (t = +0.7) | -$92 | -$125 | -$55 |
+
+Three of four lose and the one gain is indistinguishable from zero. Win rates
+came out at 36-44%, which is what a random walk gives for a 3:2 target-to-stop
+ratio. The apparent 57% was an artefact of the decay exit removing trades
+before they resolved.
+
+### Three defects the real data exposed
+
+All three were invisible on the synthetic series, which starts at price 100.
+
+1. **WARDEN refused every trade** on a $73,000 instrument: its minimum-size
+   check was `notional < price`. Now rounds to whole contracts
+   (`RiskLimits.contract_size`).
+2. **ARBITER had the same check** after its dispersion haircut and blocked
+   7,081 entries on ETH. Now rounds through WARDEN; when the haircut leaves
+   less than one contract, the trade is taken only at half conviction or better.
+3. **The daily loss limit never reset** on a multi-day run. The blackboard now
+   rolls the day on the UTC date.
+
+Also added: buy-and-hold benchmark, time in market, a t-statistic on per-trade
+P&L, and veto counts grouped by reason.
+
+### Limits of this test
+
+- Price series is Coinbase **spot** BTC-USD / ETH-USD, used as a proxy for the
+  futures. Basis and the futures' own liquidity are not modelled.
+- 90 days, two regimes, one fee tier. Funding is not charged (about 0.05 bps
+  an hour at the time of writing).
+- One-minute bars: fills inside a bar are not modelled.
+- BTC is at the edge of what a $5,000 account can size: one BIP contract was
+  refused about 11,600 times in the holdout for being larger than the risk
+  budget allowed. ETH's $200 contract fits.
+
+### Reproduce
+
+```bash
+velocity fetch BTC-USD --days 45 --out btc.csv
+velocity replay btc.csv --preset perp --contract-size 0.01 --horizon 144
+velocity fetch ETH-USD --days 45 --out eth.csv
+velocity replay eth.csv --preset perp --contract-size 0.1 --horizon 78
+```
+
+`--end <epoch seconds>` on `fetch` pulls an earlier window to use as a holdout.

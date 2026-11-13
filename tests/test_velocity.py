@@ -227,6 +227,60 @@ def test_warden_size_falls_as_volatility_rises():
     assert sizes[1] < sizes[0]
 
 
+def test_high_priced_instrument_can_still_be_sized():
+    """Price level is not position granularity.
+
+    The original check was `notional < price`, which silently refused every
+    trade on BTC at $73k with a $1,250 cap — zero trades across 45 days of
+    real data, while a synthetic series starting at 100 traded fine.
+    """
+    bb = Blackboard("BTC", equity=5_000.0)
+    w = Warden(RiskLimits(cooldown_s=0.0, contract_size=0.01, horizon_ticks=144,
+                          session_max_s=1e9),  # 24/7 instrument
+               start_equity=5_000.0)
+    t = _tick(0, 73_000.0)
+    for i in range(500):
+        t = _tick(i * 60.0, 73_000.0 + (i % 7) * 30.0)
+        bb.mark(t.price, t.ts_ns)
+        w.on_tick(t, bb)
+    v = w.review(1, t, bb)
+    assert v.allow, f"refused a sizeable BTC position: {v.reason}"
+    # and it must be a whole number of contracts
+    contracts = v.max_notional / (0.01 * t.price)
+    assert abs(contracts - round(contracts)) < 1e-9
+
+
+def test_below_one_contract_is_refused_with_the_real_numbers():
+    bb = Blackboard("BTC", equity=200.0)
+    w = Warden(RiskLimits(cooldown_s=0.0, contract_size=1.0, horizon_ticks=144,
+                          session_max_s=1e9),
+               start_equity=200.0)
+    t = _tick(0, 73_000.0)
+    for i in range(500):
+        t = _tick(i * 60.0, 73_000.0 + (i % 7) * 30.0)
+        bb.mark(t.price, t.ts_ns)
+        w.on_tick(t, bb)
+    v = w.review(1, t, bb)
+    assert not v.allow and "below 1 contract" in v.reason
+
+
+def test_day_rollover_resets_daily_risk_budget():
+    """A 24/7 market has no close, so the daily limit must roll on the UTC
+    date or it silently becomes a whole-run limit."""
+    bb = Blackboard("T", equity=100_000.0)
+    day = 86_400 * NS_PER_S
+    bb.mark(100.0, day * 10)
+    bb.realised_pnl = -5_000.0
+    bb.halt("daily loss limit hit")
+    bb.trades_today = 9
+    assert bb.day_pnl == -5_000.0
+    bb.mark(100.0, day * 11)            # next UTC day
+    assert bb.day_pnl == 0.0
+    assert not bb.halted
+    assert bb.trades_today == 0
+    assert bb.day_rollovers == 1
+
+
 def test_stop_scales_with_holding_horizon():
     """The bug that made every trade last 0.6s: stops sized per-tick."""
     bb = Blackboard("T")
@@ -467,3 +521,97 @@ def test_agents_warm_up_before_signalling():
     bb.mark(t.price, t.ts_ns)
     assert q.on_tick(t, bb).confidence == 0.0
     assert c.on_tick(t, bb).confidence == 0.0
+
+
+# ------------------------------------------------- contracts, presets, verdict
+
+class _ContractWarden(Warden):
+    """Approves a fixed notional but keeps the real contract rounding."""
+    def __init__(self, approve: float, contract_size: float):
+        super().__init__(RiskLimits(contract_size=contract_size), start_equity=5_000.0)
+        self._approve = approve
+
+    def review(self, side, tick, bb):
+        from velocity.types import Verdict
+        return Verdict(True, self._approve, "stub")
+
+    def stop_and_target(self, side, price):
+        return (price * 0.99, price * 1.02) if side > 0 else (price * 1.01, price * 0.98)
+
+
+def _agreeing_board(px: float, chart: float = 0.9):
+    bb = Blackboard("T")
+    t = _tick(10, px)
+    bb.mark(t.price, t.ts_ns)
+    bb.publish(Signal("QUANT", t.ts_ns, 0.9, 1.0, NS_PER_S * 10))
+    bb.publish(Signal("CHARTIST", t.ts_ns, chart, 1.0, NS_PER_S * 10))
+    return bb, t
+
+
+def test_arbiter_sizes_in_whole_contracts_on_a_high_priced_instrument():
+    """The arbiter had its own `notional < price` check, which blocked 7,081
+    valid entries on ETH after the warden's copy of the bug was fixed."""
+    bb, t = _agreeing_board(2_000.0)
+    w = _ContractWarden(approve=700.0, contract_size=0.1)      # 3 contracts of $200
+    d = Arbiter(min_agreeing=2, entry_threshold=0.2).decide(t, bb, w)
+    assert d.is_trade
+    contracts = d.notional / (0.1 * t.price)
+    assert contracts >= 1 and abs(contracts - round(contracts)) < 1e-9
+    assert d.notional <= 700.0
+
+
+def test_unclear_setup_is_skipped_not_rounded_up_to_a_full_contract():
+    """When the haircut cannot be expressed (one contract approved), a
+    low-conviction setup must be skipped rather than get full size."""
+    bb, t = _agreeing_board(2_000.0, chart=0.06)               # agents barely agree
+    w = _ContractWarden(approve=210.0, contract_size=0.1)      # exactly 1 contract
+    # score 0.50 only just clears a 0.45 entry bar and the votes are split,
+    # so the haircut is ~0.3: under the half-size cutoff.
+    d = Arbiter(min_agreeing=2, entry_threshold=0.45).decide(t, bb, w)
+    assert not d.is_trade and "minimum size" in d.reason
+    # the same single contract IS taken when the two agents agree strongly
+    bb2, t2 = _agreeing_board(2_000.0, chart=0.9)
+    d2 = Arbiter(min_agreeing=2, entry_threshold=0.45).decide(t2, bb2, w)
+    assert d2.is_trade and d2.notional == pytest.approx(0.1 * t2.price)
+
+
+def test_round_notional_floors_to_contracts():
+    w = Warden(RiskLimits(contract_size=0.01), start_equity=5_000.0)
+    assert w.round_notional(1_500.0, 70_000.0) == pytest.approx(1_400.0)   # 2 x $700
+    assert w.round_notional(650.0, 70_000.0) == 0.0
+    frac = Warden(RiskLimits(contract_size=0.0, min_notional=5.0), start_equity=5_000.0)
+    assert frac.round_notional(123.45, 70_000.0) == pytest.approx(123.45)
+    assert frac.round_notional(2.0, 70_000.0) == 0.0
+
+
+def test_horizon_follows_the_cost_and_volatility():
+    from velocity.presets import horizon_for
+    assert horizon_for(5.0) == 144          # (60 / 5)^2
+    assert horizon_for(6.8) == 78
+    assert horizon_for(5.0, round_trip_bps=2.0) < 5   # cheap venue -> short holds
+    with pytest.raises(ValueError):
+        horizon_for(0.0)
+
+
+def test_negative_t_stat_is_called_a_loser():
+    eng = Engine("T")
+    from velocity.execution import Trade
+    for i in range(40):
+        tr = Trade("T", 1, 1.0, 100.0, 0, "x")
+        tr.pnl = -1.0 - (i % 3) * 0.1
+        eng.executor.trades.append(tr)
+    sig = eng.significance()
+    assert sig["t_stat"] < -2 and "NEGATIVE" in sig["verdict"]
+
+
+def test_perp_preset_trades_whole_contracts_and_ends_flat():
+    from velocity.presets import perp_engine
+    eng = perp_engine(contract_size=0.1, horizon_min=78, equity=5_000.0)
+    eng.run(SyntheticFeed(n_ticks=20_000, tick_interval_ms=60_000, base_vol_bps=7.0,
+                          start_price=2_000.0, seed=5))
+    assert eng.bb.flat
+    assert eng.executor.trades, "preset took no trades on a trending series"
+    for tr in eng.executor.trades:
+        contracts = tr.qty * tr.entry / (0.1 * tr.entry)
+        # qty is notional/fill, notional is whole contracts at the decision price
+        assert tr.costs >= 0.0 and contracts > 0

@@ -206,10 +206,26 @@ class Arbiter(FastAgent):
         # Disagreement shrinks size rather than being averaged away.
         size_mult = (1.0 - disp) * min(1.0, abs(score) / max(1e-9, self.entry_threshold * 2.0))
         size_mult = max(0.15, min(1.0, size_mult))
-        notional = verdict.max_notional * size_mult
-        if notional < px:
-            flat.reason = "size rounds to zero after dispersion haircut"
-            return flat
+        # Round the haircut size to whole contracts. This used to be
+        # `if notional < px`, the same price-is-not-granularity bug WARDEN
+        # had: it blocked 7,081 otherwise-valid entries on ETH.
+        #
+        # On a small account the haircut often cannot be expressed: WARDEN
+        # approved one contract and 0.6 of a contract does not exist. The
+        # rule: if the haircut leaves less than one contract, take the one
+        # contract WARDEN already approved only when conviction is at least
+        # half strength; below that, a setup too unclear to deserve half
+        # size does not get full size by default — it gets skipped.
+        notional = warden.round_notional(verdict.max_notional * size_mult, px)
+        if notional <= 0.0:
+            if size_mult >= 0.5:
+                notional = warden.round_notional(verdict.max_notional, px)
+                unit = warden.one_unit(px)
+                if notional > unit > 0.0:
+                    notional = unit
+            if notional <= 0.0:
+                flat.reason = "below minimum size after dispersion haircut"
+                return flat
 
         stop, target = warden.stop_and_target(want, px)
         self._last_side = want

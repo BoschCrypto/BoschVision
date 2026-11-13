@@ -55,6 +55,7 @@ class RiskLimits:
         "max_trades_per_min", "max_trades_per_session", "vol_spike_mult",
         "max_spread_bps", "stop_atr_mult", "target_atr_mult",
         "session_max_s", "kill_switch_path", "min_stop_bps", "horizon_ticks",
+        "contract_size", "min_notional",
     )
 
     def __init__(
@@ -75,6 +76,8 @@ class RiskLimits:
         kill_switch_path: str = ".velocity_kill",
         min_stop_bps: float = 3.0,
         horizon_ticks: int = 300,
+        contract_size: float = 0.0,
+        min_notional: float = 1.0,
     ) -> None:
         self.risk_per_trade = risk_per_trade
         self.max_notional_pct = max_notional_pct
@@ -94,6 +97,13 @@ class RiskLimits:
         # How many ticks a trade is expected to live. Stops are scaled by
         # sqrt(horizon_ticks) — see Warden.vol_horizon.
         self.horizon_ticks = horizon_ticks
+        # Minimum tradeable increment, in units of the UNDERLYING. For a
+        # futures contract this is the contract size (Coinbase BIP = 0.01
+        # BTC); 0.0 means the instrument trades fractionally with no
+        # rounding (spot crypto). Position notional is rounded DOWN to a
+        # whole number of contracts.
+        self.contract_size = contract_size
+        self.min_notional = min_notional
 
 
 class Warden(FastAgent):
@@ -179,7 +189,7 @@ class Warden(FastAgent):
             return Verdict(False, 0.0, f"halted: {bb.halt_reason}", flatten=True)
 
         # 2. Daily loss limit — terminal for the session.
-        day_pnl = bb.realised_pnl + bb.unrealised(px)
+        day_pnl = bb.day_pnl + bb.unrealised(px)
         loss_cap = -abs(lim.daily_loss_limit * self.start_equity)
         if day_pnl <= loss_cap:
             bb.halt(f"daily loss limit hit ({day_pnl:,.0f})")
@@ -242,11 +252,45 @@ class Warden(FastAgent):
         cap = equity * lim.max_notional_pct
         if notional > cap:
             notional = cap
-        if notional < px:     # cannot buy even one unit
-            return Verdict(False, 0.0, "size rounds to zero")
+
+        # Round to the instrument's real tradeable increment.
+        #
+        # This check used to read `if notional < px`, i.e. "can we afford one
+        # whole unit of the underlying". On BTC at $73,000 with a $1,250
+        # position cap that is false forever, and the system silently took
+        # ZERO trades across 45 days of real data while happily trading a
+        # synthetic series that started at price 100. Price level is not
+        # position granularity: a futures contract is a fraction of the
+        # underlying, and spot crypto is divisible outright.
+        if lim.contract_size > 0.0:
+            unit = lim.contract_size * px
+            contracts = int(notional // unit)
+            if contracts < 1:
+                return Verdict(
+                    False, 0.0,
+                    f"below 1 contract (need ${unit:,.0f}, have ${notional:,.0f})",
+                )
+            notional = contracts * unit
+        elif notional < lim.min_notional:
+            return Verdict(False, 0.0,
+                           f"notional ${notional:,.2f} below exchange minimum")
 
         self._last_reason = f"risk ${risk_dollars:,.0f} stop {stop_dist:.4f}"
         return Verdict(True, notional, self._last_reason)
+
+    def round_notional(self, notional: float, price: float) -> float:
+        """Round a notional DOWN to the instrument's tradeable increment.
+        Returns 0.0 when it is below one contract / the exchange minimum."""
+        lim = self.limits
+        if lim.contract_size > 0.0:
+            unit = lim.contract_size * price
+            return int(notional // unit) * unit
+        return notional if notional >= lim.min_notional else 0.0
+
+    def one_unit(self, price: float) -> float:
+        """Notional of the smallest tradeable position."""
+        lim = self.limits
+        return lim.contract_size * price if lim.contract_size > 0.0 else lim.min_notional
 
     def record_trade(self, ts_ns: int) -> None:
         self._trade_ts.append(ts_ns)
