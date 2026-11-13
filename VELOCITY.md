@@ -264,6 +264,10 @@ horizons; it is an intraday trend system, not a scalper.
 
 ### Results: $5,000 account, 10 bps per side, 1-minute bars
 
+> These are the numbers from **before** the fixes in section 11. The bot was
+> losing less here partly because a bug kept sidelining it. Section 11 has
+> the current numbers.
+
 Signal parameters were fixed before any P&L was seen. The first window was
 split 30 days / 15 days; the holdout is the 45 days before it and was
 downloaded only after the first window had been analysed.
@@ -381,5 +385,64 @@ cadence the tested configuration runs at. On start it warms the indicators
 on the last 30 hours of candles **without trading**, so position and P&L
 count only from the moment you opened it.
 
-It is paper trading only. No order leaves the process. SENTINEL stays dark
-until a news source is connected.
+It is paper trading only. No order leaves the process. Closed trades are
+appended to `velocity-mind-trades.csv`. On Windows, double-click
+`run-velocity-mind.bat`.
+
+SENTINEL reads two public crypto news feeds (Cointelegraph and CoinDesk) once
+a minute. It shows LISTENING while nothing recent concerns the market being
+traded, and votes only on headlines that name the asset (full weight) or
+Bitcoin and the crypto market generally (half weight). Scoring is by keyword,
+which is crude, and public feeds run minutes behind the wires; treat it as
+context and a veto, not a signal. `--no-news` turns it off.
+
+To flatten and stop trading, create a file named `.velocity_kill` in the
+folder you started it from; delete the file to resume.
+
+---
+
+## 11. Fixes of 13 November 2026, and the results after them
+
+An audit of whether the thing actually works found these. Each has a test.
+
+| Defect | What happened | Fix |
+|---|---|---|
+| Kill switch did not flatten | Risk checks ran only when *entering* a trade. A kill file created with a position open left it open 54 bars, until its own stop. The daily loss limit had the same hole. | WARDEN's hard stops now run on every bar that has a position open (`must_flatten`). Confirmed on the live bot: position closed on the next bar. |
+| Kill switch checked every 500 ticks | Over eight hours on one-minute bars. | Checked once a second of market time. |
+| VWAP never reset | On a 24-hour market CHARTIST's "distance from VWAP" drifted past 100 ATRs and pinned its vote one way. "Both agents say short" was 2% of bars in a run where it should have been far more. | Resets each UTC day. Now 16% of bars. |
+| Loss streak cleared only on a win | WARDEN shrinks size in a streak; on a small account the shrunken size is under one contract, so no trade, so no win, so the streak never cleared. | A new UTC day clears it. |
+| Live mode dropped bars | After an outage it asked for the last 5 bars, whatever the gap. | Asks for every bar since the last one fed. |
+| Old headlines read as breaking news | SENTINEL dated a headline by when it first read it. | Dated by publication time; anything older than six half-lives is ignored. |
+| SENTINEL had no source | One of five agents never spoke. | Reads RSS/Atom; two public feeds wired into `velocity mind`. |
+| No record of paper trades | The book lived in memory only. | Closed trades append to a CSV. |
+
+### Results after the fixes
+
+Same data, same costs, same signal settings as section 8.
+
+| Data | Market | Trades | Before costs | Net | t-stat |
+|---|---|---|---|---|---|
+| BTC, first 30 days | falling | 115 | -$51 | **-$262** (-5.24%) | -6.3 |
+| BTC, last 15 days | falling | 59 | -$26 | **-$126** (-2.52%) | -4.5 |
+| BTC, holdout 45 days | +31.6% | 167 | +$3 | **-$283** (-5.66%) | -4.7 |
+| ETH, first 30 days | falling | 186 | +$12 | **-$150** (-3.01%) | -4.9 |
+| ETH, last 15 days | falling | 95 | -$39 | **-$119** (-2.38%) | -4.5 |
+| ETH, holdout 45 days | +41.3% | 270 | -$21 | **-$247** (-4.94%) | -4.4 |
+| **Total** | | **892** | **-$122** | **-$1,188** | |
+
+The bot now trades about 70% more often, because it no longer gets stuck
+after three losses, and it loses about twice as much: **-$1,188 against
+-$578**. Before costs it is still roughly flat (-$0.14 a trade). Fees of
+$1,065 are the loss.
+
+So the fixes made the machine work as designed, and working as designed it
+is a more reliable loser. The earlier, smaller loss was the deadlock saving
+fees by accident. Nothing here changes the verdict in section 8; it
+strengthens it. No run triggered the daily loss limit with a position open.
+
+The null test (driftless random walk, same costs) lost 6.3% on BTC and 5.5%
+on ETH: no edge invented from noise.
+
+SENTINEL's news has **not** been tested on history, because there is no
+archive of timestamped headlines to replay. With it on, live behaviour can
+differ from every table in this document.

@@ -36,7 +36,7 @@ class Chartist(FastAgent):
     __slots__ = (
         "ext_fast", "ext_slow", "atr", "vwap", "vol_ema", "range_stats",
         "_prev_px", "_swing_hi", "_swing_lo", "_structure", "ttl_ns",
-        "_since_break", "_break_dir",
+        "_since_break", "_break_dir", "_day",
     )
 
     def __init__(
@@ -60,6 +60,7 @@ class Chartist(FastAgent):
         self.ttl_ns = int(ttl_s * NS_PER_S)
         self._since_break = 10_000
         self._break_dir = 0
+        self._day = -1
 
     def reset(self) -> None:
         self.__init__()  # type: ignore[misc]
@@ -67,6 +68,13 @@ class Chartist(FastAgent):
     def on_tick(self, tick: Tick, bb: Blackboard) -> Optional[Signal]:
         px = tick.price
         atr = self.atr.update(px)
+        # VWAP is the DAY's reference line. On a market that never closes it
+        # was never reset, so over a multi-day run price sat a hundred ATRs
+        # from a weeks-old average and this term pinned itself at +/-1,
+        # tilting every vote the same way.
+        if bb.day_index != self._day:
+            self._day = bb.day_index
+            self.vwap.reset()
         vw = self.vwap.update(px, tick.size)
         vol_avg = self.vol_ema.update(tick.size)
 

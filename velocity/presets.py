@@ -22,6 +22,13 @@ from .engine import Engine
 from .execution import ExecConfig
 
 
+# Public, key-free crypto news feeds SENTINEL reads in live mode.
+NEWS_FEEDS = [
+    "https://cointelegraph.com/rss",
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+]
+
+
 def horizon_for(sigma_1m_bps: float, round_trip_bps: float = 20.0,
                 cost_share: float = 1.0 / 3.0) -> int:
     """Holding period in minutes at which the round-trip cost is

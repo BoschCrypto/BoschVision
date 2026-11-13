@@ -111,7 +111,7 @@ class Warden(FastAgent):
 
     __slots__ = (
         "limits", "atr", "atr_baseline", "start_equity", "ttl_ns",
-        "_trade_ts", "_kill_checked_tick", "_kill_active", "_last_reason",
+        "_trade_ts", "_kill_checked_tick", "_kill_checked_ns", "_kill_active", "_last_reason",
     )
 
     def __init__(self, limits: Optional[RiskLimits] = None, start_equity: float = 100_000.0,
@@ -123,6 +123,7 @@ class Warden(FastAgent):
         self.ttl_ns = int(ttl_s * NS_PER_S)
         self._trade_ts: list[int] = []
         self._kill_checked_tick = 0
+        self._kill_checked_ns = 0
         self._kill_active = False
         self._last_reason = ""
 
@@ -176,28 +177,12 @@ class Warden(FastAgent):
         now = tick.ts_ns
         px = tick.price
 
-        # 1. Kill switch. Checked at most every 500 ticks — a stat() call is
-        #    ~1-2 us, which is an eternity in this loop, but checking it
-        #    never would defeat the point of having one.
-        if bb.tick_count - self._kill_checked_tick >= 500:
-            self._kill_checked_tick = bb.tick_count
-            self._kill_active = os.path.exists(lim.kill_switch_path)
-        if self._kill_active:
-            return Verdict(False, 0.0, "KILL SWITCH active", flatten=True)
-
-        if bb.halted:
-            return Verdict(False, 0.0, f"halted: {bb.halt_reason}", flatten=True)
-
-        # 2. Daily loss limit — terminal for the session.
-        day_pnl = bb.day_pnl + bb.unrealised(px)
-        loss_cap = -abs(lim.daily_loss_limit * self.start_equity)
-        if day_pnl <= loss_cap:
-            bb.halt(f"daily loss limit hit ({day_pnl:,.0f})")
-            return Verdict(False, 0.0, "daily loss limit", flatten=True)
-
-        # 3. Session cutoff — flat by the close.
-        if bb.session_seconds(now) >= lim.session_max_s:
-            return Verdict(False, 0.0, "session cutoff — flat by close", flatten=True)
+        # 1-3. Kill switch, halt, daily loss limit, session cutoff: the hard
+        #      stops. They are shared with must_flatten(), which the engine
+        #      calls on every tick that has a position open.
+        why = self._hard_stop(tick, bb)
+        if why:
+            return Verdict(False, 0.0, why, flatten=True)
 
         # 4. Drawdown brake — pause, not terminal.
         if bb.drawdown >= lim.max_drawdown_pct:
@@ -291,6 +276,42 @@ class Warden(FastAgent):
         """Notional of the smallest tradeable position."""
         lim = self.limits
         return lim.contract_size * price if lim.contract_size > 0.0 else lim.min_notional
+
+    def _hard_stop(self, tick: Tick, bb: Blackboard) -> str:
+        """Reasons the book must be flat right now. Empty string if none."""
+        lim = self.limits
+        now = tick.ts_ns
+        # Kill switch. A stat() costs a microsecond or two, so it is checked
+        # at most once a second of market time (or every 500 ticks on a feed
+        # with no usable clock). It used to be every 500 ticks only, which on
+        # one-minute bars is more than eight hours.
+        if (now - self._kill_checked_ns >= NS_PER_S or self._kill_checked_ns == 0
+                or bb.tick_count - self._kill_checked_tick >= 500):
+            self._kill_checked_ns = now
+            self._kill_checked_tick = bb.tick_count
+            self._kill_active = os.path.exists(lim.kill_switch_path)
+        if self._kill_active:
+            return "KILL SWITCH active"
+        if bb.halted:
+            return f"halted: {bb.halt_reason}"
+        day_pnl = bb.day_pnl + bb.unrealised(tick.price)
+        if day_pnl <= -abs(lim.daily_loss_limit * self.start_equity):
+            bb.halt(f"daily loss limit hit ({day_pnl:,.0f})")
+            return "daily loss limit"
+        if bb.session_seconds(now) >= lim.session_max_s:
+            return "session cutoff — flat by close"
+        return ""
+
+    def must_flatten(self, tick: Tick, bb: Blackboard) -> str:
+        """Called by the engine on every tick while a position is open.
+
+        The entry gate alone is not enough: review() only runs when the
+        arbiter wants to OPEN something, so with a position already on, the
+        kill switch and the daily loss limit were never looked at. A kill
+        file created while a trade was open left it open until its own stop
+        happened to be hit.
+        """
+        return self._hard_stop(tick, bb)
 
     def record_trade(self, ts_ns: int) -> None:
         self._trade_ts.append(ts_ns)

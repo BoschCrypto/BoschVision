@@ -35,6 +35,9 @@ import re
 import time
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
+from datetime import datetime
 from typing import Optional
 
 from ..bus import Blackboard
@@ -61,6 +64,39 @@ _BEAR = {
     "short report": -0.85, "restatement": -0.9, "going concern": -1.0,
     "dilution": -0.55, "offering": -0.45, "secondary offering": -0.6,
 }
+# Crypto vocabulary. The tables above were written for company news; these
+# are the words that move a coin.
+_BULL.update({
+    "etf approval": 0.9, "approves etf": 0.9, "etf inflows": 0.6, "inflows": 0.4,
+    "rally": 0.45, "rallies": 0.45, "all-time high": 0.6, "record high": 0.6,
+    "adoption": 0.35, "accumulates": 0.4, "buys": 0.3, "treasury purchase": 0.5,
+    "short squeeze": 0.5, "breaks out": 0.45,
+})
+_BEAR.update({
+    "hack": -0.8, "hacked": -0.85, "exploit": -0.8, "exploited": -0.85, "drained": -0.8,
+    "stolen": -0.6, "outflows": -0.45, "etf outflows": -0.6, "selloff": -0.55, "sell-off": -0.55,
+    "crash": -0.75, "crashes": -0.75, "liquidations": -0.5, "liquidated": -0.5,
+    "ban": -0.6, "bans": -0.6, "sues": -0.55, "charges": -0.45, "delist": -0.6, "delists": -0.6,
+    "depeg": -0.8, "depegs": -0.8, "insolvent": -0.95, "halts withdrawals": -0.95,
+    "freezes withdrawals": -0.95, "rejects etf": -0.85, "dumps": -0.5, "tumbles": -0.55,
+    "slides": -0.5, "dips": -0.35, "sheds": -0.4, "weakness": -0.3,
+})
+
+# Which headlines are about the thing being traded.
+_ASSET_TERMS = {
+    "ETH": ("ethereum", "ether", "eth"),
+    "BTC": ("bitcoin", "btc"),
+    "SOL": ("solana", "sol"),
+}
+_MARKET_TERMS = ("bitcoin", "btc", "crypto market", "crypto markets", "cryptocurrencies")
+
+
+def asset_terms(symbol: str):
+    """Words that mark a headline as being about `symbol`, or None when the
+    symbol is not one we know (then nothing is filtered)."""
+    return _ASSET_TERMS.get(symbol.upper().split("-")[0].split("_")[0])
+
+
 # Headlines that mean "do not trade this name right now" regardless of sign.
 _HALT_WORDS = ("halted", "trading halt", "circuit breaker", "sec investigation",
                "chapter 11", "going concern", "restatement")
@@ -83,13 +119,13 @@ def score_headline(text: str) -> tuple[float, bool, str]:
     # a bare "raises"-style partial through a later single-word rule.
     for table in (_BULL, _BEAR):
         for phrase, w in table.items():
-            if " " in phrase and phrase in low:
+            if (" " in phrase or "-" in phrase) and phrase in low:
                 score += w
                 hits.append(phrase)
     words = set(_WORD_RE.findall(low))
     for table in (_BULL, _BEAR):
         for phrase, w in table.items():
-            if " " not in phrase and phrase in words:
+            if " " not in phrase and "-" not in phrase and phrase in words:
                 score += w
                 hits.append(phrase)
     # Negation: "not expected to miss" should not read as a miss. Crude but
@@ -101,6 +137,48 @@ def score_headline(text: str) -> tuple[float, bool, str]:
     elif score < -1.0:
         score = -1.0
     return score, halt, ",".join(hits[:4])
+
+
+def _parse_feed(raw: bytes) -> list[tuple]:
+    """(headline, published_epoch_or_None) pairs from RSS, Atom or JSON."""
+    text = raw.lstrip()
+    if text[:1] == b"<":
+        if b"<!ENTITY" in raw or b"<!DOCTYPE" in raw[:2000] and b"[" in raw[:2000]:
+            raise ValueError("feed declares XML entities; refusing to parse it")
+        root = ET.fromstring(raw)
+        out = []
+        for it in root.iter():
+            tag = it.tag.rsplit("}", 1)[-1]
+            if tag not in ("item", "entry"):
+                continue
+            title, when = "", None
+            for ch in it:
+                ct = ch.tag.rsplit("}", 1)[-1]
+                if ct == "title" and ch.text:
+                    title = " ".join(ch.text.split())
+                elif ct in ("pubDate", "published", "updated", "date") and ch.text and when is None:
+                    try:
+                        when = parsedate_to_datetime(ch.text.strip()).timestamp()
+                    except (TypeError, ValueError):
+                        try:
+                            when = datetime.fromisoformat(ch.text.strip().replace("Z", "+00:00")).timestamp()
+                        except ValueError:
+                            when = None
+            if title:
+                out.append((title, when))
+        return out
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        data = data.get("headlines") or data.get("items") or []
+    out = []
+    for item in data if isinstance(data, list) else []:
+        if isinstance(item, str):
+            out.append((item, None))
+        elif isinstance(item, dict):
+            h = item.get("headline") or item.get("title") or item.get("summary")
+            if h:
+                out.append((str(h), None))
+    return out[:50]
 
 
 class Sentinel(SlowAgent):
@@ -115,14 +193,21 @@ class Sentinel(SlowAgent):
         feed_url: Optional[str] = None,
         use_model: bool = False,
         timeout_s: float = 4.0,
+        feed_urls: Optional[list] = None,
+        terms: Optional[tuple] = None,
     ) -> None:
         self.symbol = symbol
         self.interval_s = interval_s
         self.ttl_ns = int(ttl_s * NS_PER_S)
         self.half_life_s = half_life_s
         self.feed_url = feed_url
+        self.feed_urls = list(feed_urls or ([feed_url] if feed_url else []))
         self.use_model = use_model
         self.timeout_s = timeout_s
+        self.terms = terms if terms is not None else asset_terms(symbol)
+        self.read_count = 0             # headlines read, relevant or not
+        self.relevant_count = 0
+        self.latest: tuple = ("", 0.0, 0.0)   # (headline, impact, epoch_s) of the last one that scored
         self._seen: set[str] = set()
         self._events: list[tuple[float, float, str]] = []   # (epoch_s, impact, headline)
         self.last_error: str = ""
@@ -130,36 +215,41 @@ class Sentinel(SlowAgent):
 
     # -- feed -------------------------------------------------------------
 
-    def fetch(self) -> list[str]:
-        """Pull headlines. Override, or pass feed_url for a JSON endpoint
-        returning {"headlines": [...]} or a bare list of strings.
+    def fetch_items(self) -> list[tuple]:
+        """Pull (headline, published_epoch_or_None) from every feed.
 
-        Every failure mode returns [] and records the error. A news agent
-        that raises takes the trading system down with it."""
-        if not self.feed_url:
-            return []
-        try:
-            req = urllib.request.Request(
-                self.feed_url,
-                headers={"User-Agent": "velocity-sentinel/0.1"},
-            )
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
-                raw = r.read(1_000_000)
-            data = json.loads(raw)
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as e:
-            self.last_error = f"{type(e).__name__}: {e}"
-            return []
-        if isinstance(data, dict):
-            data = data.get("headlines") or data.get("items") or []
-        out = []
-        for item in data if isinstance(data, list) else []:
-            if isinstance(item, str):
-                out.append(item)
-            elif isinstance(item, dict):
-                h = item.get("headline") or item.get("title") or item.get("summary")
-                if h:
-                    out.append(str(h))
-        return out[:50]
+        Each feed is RSS, Atom, or JSON (`{"headlines": [...]}` or a bare
+        list). Every failure mode yields nothing for that feed and records
+        the error: a news agent that raises takes the session down with it.
+        """
+        out: list[tuple] = []
+        for url in self.feed_urls:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "velocity-sentinel/0.1"})
+                with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
+                    raw = r.read(1_000_000)
+                out.extend(_parse_feed(raw))
+            except (urllib.error.URLError, TimeoutError, ValueError, OSError, ET.ParseError) as e:
+                self.last_error = f"{type(e).__name__}: {e}"[:160]
+        return out[:200]
+
+    def fetch(self) -> list[str]:
+        """Headlines only, for callers that do not need publication times."""
+        return [h for h, _ts in self.fetch_items()]
+
+    def relevance(self, headline: str) -> float:
+        """1.0 if the headline names the traded asset, 0.5 for market-wide
+        crypto news on a crypto asset, 0.0 otherwise. Unknown symbols are not
+        filtered."""
+        if self.terms is None:
+            return 1.0
+        words = set(_WORD_RE.findall(headline.lower()))
+        low = headline.lower()
+        if any((t in words) if " " not in t else (t in low) for t in self.terms):
+            return 1.0
+        if any((t in words) if " " not in t else (t in low) for t in _MARKET_TERMS):
+            return 0.5
+        return 0.0
 
     # -- scoring ----------------------------------------------------------
 
@@ -192,16 +282,31 @@ class Sentinel(SlowAgent):
             self.last_error = f"model: {type(e).__name__}"
             return None
 
-    def ingest(self, headlines: list[str], now_s: Optional[float] = None) -> int:
-        """Score new headlines into the event list. Returns how many were new."""
+    def ingest(self, headlines: list, now_s: Optional[float] = None) -> int:
+        """Score new headlines into the event list. Returns how many were new.
+
+        Items are headline strings or (headline, published_epoch) pairs. A
+        headline is dated by when it was PUBLISHED, not when we first read
+        it: on start-up a feed hands over a day of old stories at once, and
+        stamping them all "now" turned every one into breaking news.
+        """
         now_s = now_s if now_s is not None else time.time()
         new = 0
-        for h in headlines:
+        for item in headlines:
+            h, ts = (item if isinstance(item, tuple) else (item, None))
             key = h.strip().lower()[:160]
             if not key or key in self._seen:
                 continue
             self._seen.add(key)
             new += 1
+            self.read_count += 1
+            weight = self.relevance(h)
+            if weight <= 0.0:
+                continue
+            self.relevant_count += 1
+            when = ts if ts is not None else now_s
+            if now_s - when > self.half_life_s * 6:
+                continue                      # already priced in
             impact, halt, _hits = score_headline(h)
             if abs(impact) < 0.25 and not halt:
                 esc = self._escalate(h)
@@ -211,7 +316,10 @@ class Sentinel(SlowAgent):
                 # Encoded as a maximal-magnitude event so the arbiter's
                 # halt check trips; direction is kept for the record.
                 impact = -1.0 if impact <= 0 else 1.0
-            self._events.append((now_s, impact, h[:200]))
+            impact *= weight
+            if abs(impact) >= 0.2 and when >= self.latest[2]:
+                self.latest = (h[:140], impact, when)
+            self._events.append((when, impact, h[:200]))
         if len(self._seen) > 5000:
             self._seen = set(list(self._seen)[-2500:])
         if len(self._events) > 200:
@@ -251,8 +359,7 @@ class Sentinel(SlowAgent):
 
     def poll(self, bb: Blackboard) -> Optional[Signal]:
         self.poll_count += 1
-        heads = self.fetch()
-        self.ingest(heads)
+        self.ingest(self.fetch_items())
         bias, conf, reason = self.aggregate()
         return Signal(self.name, bb.last_ts_ns or time.time_ns(), bias, conf,
                       self.ttl_ns, reason)

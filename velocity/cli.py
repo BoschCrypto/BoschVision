@@ -253,7 +253,13 @@ def fetch(symbol, days, out, end_ts):
 @click.option("--export", "export_path", default=None, type=click.Path(dir_okay=False),
               help="With --replay: write the frames to a JSON file and exit.")
 @click.option("--last", "last_bars", default=4320, help="With --export: keep this many final bars.")
-def mind(symbol, contract_size, horizon, equity, port, host, replay_csv, speed, export_path, last_bars):
+@click.option("--log", "log_path", default="velocity-mind-trades.csv", type=click.Path(dir_okay=False),
+              help="Live mode: append every closed paper trade to this CSV.")
+@click.option("--open", "open_browser", is_flag=True, help="Open the page in your browser.")
+@click.option("--news/--no-news", default=True,
+              help="Live mode: let SENTINEL read public crypto news feeds.")
+def mind(symbol, contract_size, horizon, equity, port, host, replay_csv, speed, export_path,
+         last_bars, log_path, open_browser, news):
     """Live view of what every agent is thinking. Paper trading only."""
     import json
     import threading
@@ -279,13 +285,29 @@ def mind(symbol, contract_size, horizon, equity, port, host, replay_csv, speed, 
     hub = MindHub({"symbol": symbol, "mode": mode, "entry": entry})
     stop = threading.Event()
     srv = serve(hub, host, port)
-    click.echo(f"VELOCITY mind ({mode}, paper trading) -> http://{host}:{srv.server_address[1]}")
-    click.echo("Ctrl+C to stop.")
+    url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{srv.server_address[1]}"
+    click.echo(f"VELOCITY mind ({mode}, paper trading) -> {url}")
+    click.echo(f"To flatten and stop trading, create a file named {eng.warden.limits.kill_switch_path} "
+               "in this folder; delete it to resume. Ctrl+C to quit.")
+    kwargs = {}
     if replay_csv:
         target, args = run_replay, (hub, eng, ReplayFeed(replay_csv, symbol=symbol), speed, stop)
     else:
+        from .mind import TradeLog
         target, args = run_live, (hub, eng, symbol, stop)
-    t = threading.Thread(target=target, args=args, daemon=True, name="velocity-mind-engine")
+        kwargs = {"on_close": TradeLog(log_path, symbol)}
+        click.echo(f"Closed paper trades are appended to {log_path}")
+        if news:
+            from .presets import NEWS_FEEDS
+            # RSS arrives minutes late, so a headline's weight halves every
+            # 30 minutes rather than every 3.
+            kwargs["sentinel"] = Sentinel(symbol, feed_urls=NEWS_FEEDS, interval_s=60.0,
+                                          half_life_s=1800.0, ttl_s=3 * 3600.0, timeout_s=10.0)
+            click.echo("SENTINEL is reading: " + ", ".join(u.split("/")[2] for u in NEWS_FEEDS))
+    if open_browser:
+        import webbrowser
+        webbrowser.open(url)
+    t = threading.Thread(target=target, args=args, kwargs=kwargs, daemon=True, name="velocity-mind-engine")
     t.start()
     try:
         while t.is_alive():

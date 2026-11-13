@@ -63,8 +63,10 @@ class FrameBuilder:
     """One flat dict per bar. Keys are short because thousands of these are
     shipped to the browser; `FRAME_KEYS` documents them."""
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, on_close: Optional[Callable] = None) -> None:
         self.eng = engine
+        self.on_close = on_close
+        self.base_trades = 0
         self._n_trades = len(engine.executor.trades)
         self._last_block = ""
         self._last_news = ""
@@ -103,9 +105,13 @@ class FrameBuilder:
         live = bool(n and n.alive(now) and n.confidence > 0)
         f["nv"] = _r(bb.read("SENTINEL", now)) if live else 0.0
         f["nl"] = 1 if live else 0
-        if live and n.reason != self._last_news:
-            self._last_news = n.reason
-            ev.append(["news", f"SENTINEL: {n.reason[:80]}"])
+        sen = eng.sentinel
+        f["nh"] = sen.read_count if sen is not None else 0
+        f["nx"] = sen.latest[0][:110] if sen is not None else ""
+        if sen is not None and sen.latest[0] and sen.latest[0] != self._last_news:
+            self._last_news = sen.latest[0]
+            tone = "bullish" if sen.latest[1] > 0 else "bearish"
+            ev.append(["news", f"SENTINEL reads {tone} news ({sen.latest[1]:+.2f}): {sen.latest[0][:90]}"])
 
         a = bb.get("ARBITER")
         f["as"] = _r(eng.arbiter._last_score)
@@ -146,15 +152,20 @@ class FrameBuilder:
             side = "LONG" if t.side > 0 else "SHORT"
             how = {"target": "target reached", "stop": "stopped out"}.get(
                 t.reason_out, "signal flipped" if "flip" in t.reason_out else
-                "signal faded" if t.reason_out.startswith("exit") else t.reason_out)
+                "signal faded" if t.reason_out.startswith("exit") else
+                "WARDEN flattened it: " + t.reason_out.split(": ", 1)[-1]
+                if t.reason_out.startswith("risk flatten") else t.reason_out)
             ev.append(["win" if t.pnl > 0 else "loss", f"Closed {side} {t.pnl:+.2f} ({how})"])
+            if self.on_close is not None:
+                self.on_close(t)
         self._n_trades = len(trades)
 
         f["pos"] = bb.open_side
+        f["sz"] = _r(bb.open_notional / bb.open_entry, 4) if bb.open_entry else 0.0
         f["en"] = _r(bb.open_entry, 2)
         f["up"] = _r(bb.unrealised(tick.price), 2)
         f["pnl"] = _r(bb.realised_pnl - self.base_pnl, 2)
-        f["nt"] = len(trades)
+        f["nt"] = len(trades) - self.base_trades
         f["ev"] = ev
         return f
 
@@ -165,12 +176,34 @@ FRAME_KEYS = {
     "qz": "stretch, z-score", "qi": "RSI",
     "cv": "CHARTIST vote", "cf": "CHARTIST confidence", "cs": "structure", "cb": "break score",
     "cw": "distance from VWAP, ATRs", "cc": "compression",
-    "nv": "SENTINEL vote", "nl": "news live (1/0)",
+    "nv": "SENTINEL vote", "nl": "news live (1/0)", "nh": "headlines read", "nx": "latest headline that scored",
     "as": "ARBITER score", "ag": "agents agreeing", "ad": "vote split",
     "wa": "WARDEN risk appetite", "wb": "why the entry is blocked, if it is",
-    "pos": "position (-1/0/1)", "en": "entry price", "up": "open P&L", "pnl": "closed P&L",
+    "pos": "position (-1/0/1)", "sz": "position size, units of the underlying", "en": "entry price", "up": "open P&L", "pnl": "closed P&L",
     "nt": "trades closed", "ev": "events on this bar",
 }
+
+
+class TradeLog:
+    """Append each closed trade to a CSV. A paper run you cannot review
+    afterwards teaches nothing, and the in-memory book is gone on restart."""
+
+    COLS = ["closed_utc", "opened_utc", "symbol", "side", "qty", "entry", "exit",
+            "held_min", "fees", "net", "closed_by"]
+
+    def __init__(self, path: str, symbol: str) -> None:
+        self.path = path
+        self.symbol = symbol
+
+    def __call__(self, t) -> None:
+        new = not os.path.exists(self.path) or os.path.getsize(self.path) == 0
+        with open(self.path, "a", newline="") as fh:
+            if new:
+                fh.write(",".join(self.COLS) + "\n")
+            fh.write(",".join(str(x) for x in [
+                _iso(t.exit_ns), _iso(t.entry_ns), self.symbol, "long" if t.side > 0 else "short",
+                round(t.qty, 6), round(t.entry, 2), round(t.exit, 2), round(t.held_s / 60),
+                round(t.costs, 4), round(t.pnl, 4), t.reason_out.replace(",", ";")]) + "\n")
 
 
 # --------------------------------------------------------------------- hub
@@ -203,7 +236,12 @@ class MindHub:
     def poll(self, since: int, limit: int = 600) -> dict:
         with self._lock:
             new = [(s, f) for s, f in self._frames if s > since][-limit:]
-            return {"seq": self._seq, "frames": [f for _s, f in new], "px": dict(self._px),
+            px = dict(self._px)
+            if px:
+                # how old the last price is, so the page can say when the
+                # feed has gone quiet instead of showing a frozen number
+                px["age"] = round(time.time() - px.pop("at"), 1)
+            return {"seq": self._seq, "frames": [f for _s, f in new], "px": px,
                     "status": self._status, "meta": self.meta}
 
 
@@ -281,12 +319,13 @@ def run_replay(hub: MindHub, engine: Engine, ticks: Iterable[Tick], bars_per_s: 
 def run_live(hub: MindHub, engine: Engine, symbol: str, stop: threading.Event,
              poll_s: float = 2.0, warm_bars: int = 1800,
              fetch_rows: Optional[Callable] = None, last_price: Optional[Callable] = None,
-             now: Callable[[], float] = time.time) -> None:
+             now: Callable[[], float] = time.time,
+             on_close: Optional[Callable] = None, sentinel=None) -> None:
     """Warm up on recent candles, then follow the market bar by bar."""
     from .feeds import coinbase_history as cb
     fetch_rows = fetch_rows or cb.fetch_rows
     last_price = last_price or cb.last_price
-    fb = FrameBuilder(engine)
+    fb = FrameBuilder(engine, on_close=on_close)
     bb = engine.bb
     last_ts = 0
 
@@ -312,9 +351,14 @@ def run_live(hub: MindHub, engine: Engine, symbol: str, stop: threading.Event,
     bb.halt_reason = ""
     engine.vetoes.clear()
     fb._last_block = ""
-    fb._n_trades = len(engine.executor.trades)
+    fb._n_trades = fb.base_trades = len(engine.executor.trades)
     fb.base_pnl = bb.realised_pnl
     hub.meta["live_since"] = _iso(int(now()) * NS_PER_S)
+    # News starts only now: today's headlines have no business colouring
+    # yesterday's warm-up bars.
+    if sentinel is not None:
+        engine.sentinel = sentinel
+        engine.start_slow_lane()
     hub.status("live")
 
     while not stop.is_set():
@@ -323,7 +367,11 @@ def run_live(hub: MindHub, engine: Engine, symbol: str, stop: threading.Event,
         try:
             # a candle is final a few seconds after its minute ends
             if cur - 60 > last_ts and t - cur >= 4:
-                for ts, close, vol in fetch_rows(symbol, 5):
+                # Ask for every bar since the last one we fed, not a fixed
+                # five: after an outage the missing bars must be replayed in
+                # order, or the agents see time jump and stops go unchecked.
+                need = min(warm_bars, (cur - last_ts) // 60 + 2)
+                for ts, close, vol in fetch_rows(symbol, need):
                     if last_ts < ts < cur:
                         hub.publish(feed(ts, close, vol))
                         last_ts = ts
@@ -332,3 +380,4 @@ def run_live(hub: MindHub, engine: Engine, symbol: str, stop: threading.Event,
         except Exception as e:  # network trouble must not end the session
             hub.status(f"feed trouble, retrying: {type(e).__name__}")
         stop.wait(poll_s)
+    engine.stop_slow_lane()

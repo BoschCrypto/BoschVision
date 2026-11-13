@@ -122,6 +122,12 @@ class Blackboard:
         self.session_start_ns = ts_ns
         if not first:
             self.day_rollovers += 1
+            # A loss streak used to clear only on a winning trade. WARDEN
+            # shrinks size during a streak, and on a small account the
+            # shrunken size is below one contract, so no trade could be
+            # placed, so no win could ever clear the streak. A new day
+            # starts the count again.
+            self.consecutive_losses = 0
             if self.halted and self.halt_reason.startswith("daily"):
                 self.halted = False
                 self.halt_reason = ""

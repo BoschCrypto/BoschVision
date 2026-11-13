@@ -753,3 +753,208 @@ def test_mind_server_serves_the_page_and_new_frames_only():
         assert _json.loads(get("/poll?since=junk"))["meta"]["symbol"] == "T"
     finally:
         srv.shutdown()
+
+
+# ---------------------------------------------- fixes found by the safety audit
+
+def _engine_with_open_position(kill_path=None, **limits):
+    from velocity.presets import perp_engine
+    eng = perp_engine(contract_size=0.1, horizon_min=78)
+    if kill_path:
+        eng.warden.limits.kill_switch_path = kill_path
+    for k, v in limits.items():
+        setattr(eng.warden.limits, k, v)
+    feed = iter(SyntheticFeed(n_ticks=12_000, tick_interval_ms=60_000, base_vol_bps=7.0,
+                              start_price=2_000.0, seed=5))
+    for t in feed:
+        eng.on_tick(t)
+        if not eng.bb.flat:
+            return eng, feed
+    raise AssertionError("no position opened")
+
+
+def test_kill_switch_flattens_an_open_position_on_the_next_bar(tmp_path):
+    """The kill switch was only looked at when ENTERING a trade. Created with
+    a position open, it left the position open 54 bars, until its own stop."""
+    kill = tmp_path / "kill"
+    eng, feed = _engine_with_open_position(kill_path=str(kill))
+    kill.write_text("stop")
+    eng.on_tick(next(feed))
+    assert eng.bb.flat
+    assert "KILL SWITCH" in eng.executor.trades[-1].reason_out
+    for _ in range(200):                      # and nothing new opens while it is set
+        eng.on_tick(next(feed))
+    assert eng.bb.flat
+    kill.unlink()                             # removing the file resumes trading
+    opened = False
+    for _ in range(3_000):
+        eng.on_tick(next(feed))
+        opened = opened or not eng.bb.flat
+    assert opened
+
+
+def test_daily_loss_limit_flattens_an_open_position():
+    eng, feed = _engine_with_open_position()
+    eng.bb.day_start_pnl = eng.bb.realised_pnl + 500.0      # as if $500 was lost today
+    eng.on_tick(next(feed))
+    assert eng.bb.flat and eng.bb.halted
+    assert "daily loss limit" in eng.executor.trades[-1].reason_out
+
+
+def test_kill_switch_is_noticed_within_one_bar_on_minute_data(tmp_path):
+    """It used to be checked every 500 ticks: over eight hours on 1m bars."""
+    kill = tmp_path / "kill"
+    bb = Blackboard("T")
+    w = Warden(RiskLimits(kill_switch_path=str(kill), cooldown_s=0.0, session_max_s=1e9),
+               start_equity=100_000.0)
+    t = _tick(0)
+    for i in range(400):
+        t = _tick(i * 60.0, 100.0 + (i % 5) * 0.01)
+        bb.mark(t.price, t.ts_ns)
+        w.on_tick(t, bb)
+    assert w.review(1, t, bb).allow
+    kill.write_text("stop")
+    nxt = _tick(400 * 60.0)
+    bb.mark(nxt.price, nxt.ts_ns)             # ONE tick later, not 500
+    assert "KILL" in w.review(1, nxt, bb).reason
+
+
+def test_vwap_resets_each_day():
+    """A 'session' VWAP that never reset drifted a hundred ATRs from price
+    over a multi-day run and pinned CHARTIST's vote in one direction."""
+    c = Chartist(fast_window=20, slow_window=60, atr_period=10, vol_period=10)
+    bb = Blackboard("T")
+    day = 86_400
+    px = 100.0
+    for i in range(3 * 1_440):                # three days rising 10% a day
+        px *= 1.0 + 0.10 / 1_440
+        t = _tick(10 * day + i * 60.0, px)
+        bb.mark(t.price, t.ts_ns)
+        sig = c.on_tick(t, bb)
+    assert abs(c.vwap.value - px) / px < 0.06, "VWAP should be today's, not the whole run's"
+    assert "vwap=" in sig.reason
+
+
+def test_new_day_clears_a_loss_streak():
+    bb = Blackboard("T")
+    day = 86_400 * NS_PER_S
+    bb.mark(100.0, day * 10)
+    bb.consecutive_losses = 3
+    bb.mark(100.0, day * 10 + NS_PER_S)       # same day: streak stands
+    assert bb.consecutive_losses == 3
+    bb.mark(100.0, day * 11)
+    assert bb.consecutive_losses == 0
+
+
+def test_live_replays_every_bar_after_an_outage():
+    """After a 40-minute outage the live loop asked for the last 5 bars and
+    silently dropped the other 35."""
+    import threading
+    from velocity.mind import MindHub, run_live
+    feed = list(SyntheticFeed(n_ticks=2_300, tick_interval_ms=60_000, base_vol_bps=7.0,
+                              start_price=2_000.0, seed=5, start_ts_ns=1_700_000_040 * NS_PER_S))
+    rows = [(t.ts_ns // NS_PER_S, t.price, t.size) for t in feed]
+    clock = {"t": rows[1_999][0] + 70.0}
+    stop = threading.Event()
+    calls = {"n": 0}
+
+    def fetch_rows(symbol, minutes, **_):
+        return [r for r in rows if r[0] <= clock["t"]][-minutes:]
+
+    def last_price(symbol):
+        calls["n"] += 1
+        if calls["n"] == 5:
+            clock["t"] += 40 * 60.0           # the machine sleeps for 40 minutes
+            raise OSError("network down")
+        clock["t"] += 60.0
+        if calls["n"] >= 120:
+            stop.set()
+        return 2_000.0
+
+    stop.wait = lambda *_a, **_k: stop.is_set()
+    hub = MindHub({"symbol": "T", "mode": "live"})
+    run_live(hub, _mind_engine(), "T", stop, warm_bars=1_800, fetch_rows=fetch_rows,
+             last_price=last_price, now=lambda: clock["t"])
+    live = [f["t"] for f in hub.poll(0, limit=10_000)["frames"] if not f.get("warm")]
+    from datetime import datetime
+    secs = [datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp() for t in live]
+    gaps = {round(b - a) for a, b in zip(secs, secs[1:])}
+    assert gaps == {60}, f"bars missing after the outage: gaps {sorted(gaps)}"
+
+
+def test_trade_log_appends_closed_trades(tmp_path):
+    from velocity.execution import Trade
+    from velocity.mind import TradeLog
+    log = TradeLog(str(tmp_path / "t.csv"), "ETH-USD")
+    for pnl in (1.5, -2.25):
+        tr = Trade("ETH-USD", 1, 0.1, 2_000.0, 60 * NS_PER_S, "x")
+        tr.exit, tr.exit_ns, tr.pnl, tr.costs, tr.reason_out = 2_010.0, 600 * NS_PER_S, pnl, 0.4, "target"
+        log(tr)
+    lines = (tmp_path / "t.csv").read_text().strip().splitlines()
+    assert lines[0].startswith("closed_utc,opened_utc,symbol,side")
+    assert len(lines) == 3 and lines[1].endswith("1.5,target") and ",long," in lines[2]
+
+
+# ----------------------------------------------------------- SENTINEL's reader
+
+_RSS = b"""<?xml version="1.0"?><rss version="2.0"><channel><title>x</title>
+<item><title>Ethereum ETF approval sends ether higher</title><pubDate>Fri, 13 Nov 2026 02:00:00 +0000</pubDate></item>
+<item><title>Exchange hacked, $40M in ETH drained</title><pubDate>Thu, 12 Nov 2026 02:00:00 +0000</pubDate></item>
+<item><title>Bitcoin tumbles as liquidations mount</title><pubDate>Fri, 13 Nov 2026 01:50:00 +0000</pubDate></item>
+<item><title>Chipmaker beats estimates</title><pubDate>Fri, 13 Nov 2026 01:55:00 +0000</pubDate></item>
+</channel></rss>"""
+_NOW = 1794535200.0 + 600          # 13 Nov 2026 02:10 UTC
+
+
+def test_rss_feed_is_parsed_with_publication_times():
+    from velocity.agents.sentinel import _parse_feed
+    items = _parse_feed(_RSS)
+    assert [h for h, _ in items][0].startswith("Ethereum ETF approval")
+    assert items[0][1] == pytest.approx(1794535200.0) and len(items) == 4
+    assert _parse_feed(b'{"headlines": ["a", {"title": "b"}]}') == [("a", None), ("b", None)]
+    with pytest.raises(ValueError):
+        _parse_feed(b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "b">]><rss/>')
+
+
+def test_old_headlines_are_not_breaking_news_at_start_up():
+    """Headlines used to be dated by when they were first READ. A feed hands
+    over a day of stories on the first poll; a day-old hack is priced in."""
+    from velocity.agents.sentinel import _parse_feed
+    s = Sentinel("ETH-USD", half_life_s=1800.0)
+    s.ingest(_parse_feed(_RSS), now_s=_NOW)
+    heads = [h for _ts, _imp, h in s._events]
+    assert any("ETF approval" in h for h in heads)
+    assert not any("hacked" in h for h in heads), "a 24-hour-old headline must not be live"
+    bias, conf, _ = s.aggregate(now_s=_NOW)
+    assert conf > 0
+
+
+def test_sentinel_only_scores_news_about_what_it_trades():
+    from velocity.agents.sentinel import _parse_feed
+    s = Sentinel("ETH-USD", half_life_s=1800.0)
+    s.ingest(_parse_feed(_RSS), now_s=_NOW)
+    assert s.read_count == 4 and s.relevant_count == 3       # the chipmaker is ignored
+    assert s.relevance("Ethereum upgrade ships") == 1.0
+    assert s.relevance("Bitcoin slides") == 0.5               # market-wide, half weight
+    assert s.relevance("Something about methane") == 0.0      # 'eth' inside a word is not ETH
+    assert Sentinel("ACME").relevance("anything") == 1.0      # unknown symbols are not filtered
+
+
+@pytest.mark.parametrize("text,sign", [
+    ("Protocol exploited, funds drained", -1), ("SEC approves ETF approval for ether", 1),
+    ("Exchange halts withdrawals", -1), ("Ether hits all-time high on ETF inflows", 1),
+])
+def test_crypto_vocabulary_scores_in_the_right_direction(text, sign):
+    score, _, _ = score_headline(text)
+    assert (score > 0.2) - (score < -0.2) == sign
+
+
+def test_frames_show_sentinel_listening_when_a_feed_is_connected():
+    from velocity.mind import FrameBuilder
+    eng = _mind_engine()
+    eng.sentinel = Sentinel("ETH-USD")
+    eng.sentinel.read_count = 55
+    fb = FrameBuilder(eng)
+    t = _tick(60.0, 2_000.0)
+    f = fb.frame(t, eng.on_tick(t))
+    assert f["nh"] == 55 and f["nl"] == 0 and f["nx"] == ""

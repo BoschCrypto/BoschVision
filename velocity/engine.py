@@ -170,6 +170,11 @@ class Engine:
 
         # 2. the open trade is managed before anything else thinks.
         self.executor.manage(tick, bb, vol_unit)
+        if not bb.flat:
+            why = self.warden.must_flatten(tick, bb)
+            if why:
+                self.executor.close(tick, bb, f"risk flatten: {why}", vol_unit)
+                self.vetoes["flattened by risk"] = self.vetoes.get("flattened by risk", 0) + 1
 
         # 3. fast agents publish.
         for a in self.fast:

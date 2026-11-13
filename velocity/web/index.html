@@ -32,9 +32,11 @@
       since = d.seq;
       if (d.px && d.px.px) mind.price(d.px.px, d.px.next);
       var warm = d.status.indexOf("warming") === 0;
-      mind.badge(live ? (warm ? "WARMING UP" : d.status === "live" ? "LIVE" : "RETRYING") : "REPLAY", live && d.status === "live" ? "live" : live ? "" : "replay");
+      var stale = live && !warm && d.px && d.px.age > 20;
+      mind.badge(live ? (warm ? "WARMING UP" : stale ? "FEED STALE" : d.status === "live" ? "LIVE" : "RETRYING") : "REPLAY",
+                 live && d.status === "live" && !stale ? "live" : live ? "" : "replay");
       status.textContent = (live ? "Live market data from Coinbase (" + d.meta.symbol + "), paper trades only. " : "Replaying " + d.meta.symbol + ". ") +
-        "Status: " + d.status + "." + (d.meta.live_since ? " Live since " + d.meta.live_since.slice(11, 16) + " UTC; P&L counts from then." : "");
+        "Status: " + d.status + "." + (stale ? " No price for " + Math.round(d.px.age) + " seconds." : "") + (d.meta.live_since ? " Live since " + d.meta.live_since.slice(11, 16) + " UTC; P&L counts from then." : "");
     }).catch(function () {
       fails += 1; if (mind) mind.badge("RECONNECTING", ""); status.textContent = "Lost contact with the bot. Retrying…";
     }).then(function () { setTimeout(poll, fails > 3 ? 4000 : 1000); });

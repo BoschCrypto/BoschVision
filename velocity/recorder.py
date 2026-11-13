@@ -144,7 +144,8 @@ class Recorder:
             e = self.entries[i] if i < len(self.entries) else {}
             gross = (t.exit - t.entry) * t.qty * t.side
             out = t.reason_out
-            exit_kind = ("Target" if out == "target" else "Stop" if out == "stop"
+            exit_kind = ("Risk stop" if out.startswith("risk flatten")
+                         else "Target" if out == "target" else "Stop" if out == "stop"
                          else "Signal flipped" if "flip" in out
                          else "Signal faded" if out.startswith("exit")
                          else "End of data" if "end" in out else out)

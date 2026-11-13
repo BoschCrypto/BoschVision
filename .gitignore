@@ -16,3 +16,6 @@ research/committee/
 
 # Daily study task log (local runtime output)
 study-cycle.log
+# VELOCITY paper-trade log and kill switch
+velocity-mind-trades.csv
+.velocity_kill

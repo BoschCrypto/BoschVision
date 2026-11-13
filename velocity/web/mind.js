@@ -238,12 +238,13 @@
       q.target = Math.min(1, Math.abs(f.qv) * 1.8 + 0.08); c.target = Math.min(1, Math.abs(f.cv) * 1.8 + 0.08);
       a.target = Math.min(1, Math.abs(f.as) / ENTRY * 0.6 + (f.pos ? 0.35 : 0.05));
       w.target = f.wb ? 0.95 : 0.25 + (1 - f.wa) * 0.5;
-      s.dormant = !f.nl; s.target = f.nl ? Math.min(1, Math.abs(f.nv) * 2 + 0.2) : 0.05;
+      const hearing = !f.nl && f.nh > 0;     // feed connected, nothing market-moving right now
+      s.dormant = !f.nl && !hearing; s.target = f.nl ? Math.min(1, Math.abs(f.nv) * 2 + 0.2) : hearing ? 0.16 : 0.05;
       q.label = side(f.qv) ? side(f.qv) + sgn(f.qv) : "NO VIEW";
       c.label = side(f.cv) ? side(f.cv) + sgn(f.cv) : "NO VIEW";
       a.label = f.pos ? "HOLDING " + (f.pos > 0 ? "LONG" : "SHORT") : Math.abs(f.as) >= ENTRY ? "WANTS " + (f.as > 0 ? "LONG" : "SHORT") : "WAITING";
       w.label = f.wb ? "BLOCKING" : "CLEAR";
-      s.label = f.nl ? side(f.nv) + sgn(f.nv) : "NO FEED";
+      s.label = f.nl ? (side(f.nv) || "NEWS ") + sgn(f.nv) : hearing ? "LISTENING" : "NO FEED";
       flow[L["QUANT>CHARTIST"]] = Math.abs(f.qv) * 0.5;
       flow[L["QUANT>ARBITER"]] = Math.abs(f.qv); flow[L["CHARTIST>ARBITER"]] = Math.abs(f.cv);
       flow[L["SENTINEL>QUANT"]] = f.nl ? Math.abs(f.nv) : 0; flow[L["SENTINEL>ARBITER"]] = f.nl ? Math.abs(f.nv) : 0;
@@ -262,8 +263,9 @@
       card.WARDEN.d1.textContent = f.wb ? "Why: " + f.wb : "No objection to a new trade";
       card.WARDEN.d2.textContent = "Risk appetite " + Math.round(f.wa * 100) + "%";
       card.SENTINEL.state.textContent = s.label;
-      card.SENTINEL.d1.textContent = f.nl ? "News bias " + sgn(f.nv) : "No news source connected";
-      card.SENTINEL.d2.textContent = f.nl ? "" : "The other four are working from price alone";
+      card.SENTINEL.d1.textContent = f.nl ? "News bias " + sgn(f.nv) + " \u00b7 " + f.nh + " headlines read"
+        : hearing ? f.nh + " headlines read, none moving this market now" : "No news source connected";
+      card.SENTINEL.d2.textContent = f.nx ? "Last that scored: " + f.nx : hearing ? "" : "The other four are working from price alone";
 
       hPx.textContent = "$" + (+f.px).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       hTime.textContent = String(f.t).slice(5, 16).replace("T", " ") + " UTC";
@@ -296,7 +298,10 @@
     function price(px, next) {
       if (px) hPx.textContent = "$" + (+px).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
       if (opts.mode === "live") hNext.textContent = next > 0 ? next + "s" : "now";
-      if (cur && cur.pos && px) { const up = (px - cur.en) * cur.pos * (cur.up && cur.px !== cur.en ? Math.abs(cur.up / (cur.px - cur.en)) : 0); if (up) { hOpen.textContent = money(up); hOpen.className = "vm-v " + (up >= 0 ? "vm-up" : "vm-down"); } }
+      if (cur && cur.pos && cur.sz && px) {
+        const up = (px - cur.en) * cur.pos * cur.sz;
+        hOpen.textContent = money(up); hOpen.className = "vm-v " + (up >= 0 ? "vm-up" : "vm-down");
+      }
     }
     function setBadge(text, kind) { badge.textContent = text; badge.className = "vm-badge" + (kind ? " vm-badge-" + kind : ""); }
     setBadge(opts.mode === "live" ? "CONNECTING" : "REPLAY", opts.mode === "live" ? "" : "replay");
