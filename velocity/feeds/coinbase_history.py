@@ -15,6 +15,9 @@ from datetime import datetime, timezone
 _URL = "https://api.exchange.coinbase.com/products/{sym}/candles?granularity=60&start={s}&end={e}"
 
 
+_HEADERS = {"User-Agent": "velocity-history/0.1"}
+
+
 def _iso(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -37,6 +40,36 @@ def fetch_rows(symbol: str, minutes: int, end_ts: int | None = None,
                 rows[int(t)] = (float(cl), float(vol))
         time.sleep(pause_s)
     return [(t, rows[t][0], rows[t][1]) for t in sorted(rows)][-minutes:]
+
+
+def fetch_candles(symbol: str, granularity_s: int, start_ts: int, end_ts: int,
+                  pause_s: float = 0.12, timeout_s: float = 20.0, retries: int = 3) -> list[tuple[int, float, float]]:
+    """Closes at any Coinbase granularity (60, 300, 900, 3600, 21600, 86400)
+    between two epoch seconds, as sorted (epoch_s, close, volume). A request
+    that keeps failing raises: a history with a silent hole is worse than
+    none."""
+    step = 300 * granularity_s
+    rows: dict[int, tuple[float, float]] = {}
+    e = end_ts // granularity_s * granularity_s
+    while e > start_ts:
+        s0 = max(start_ts, e - step + granularity_s)
+        req = urllib.request.Request(
+            _URL.replace("granularity=60", f"granularity={granularity_s}").format(sym=symbol, s=_iso(s0), e=_iso(e)),
+            headers=_HEADERS)
+        for attempt in range(retries):
+            try:
+                with urllib.request.urlopen(req, timeout=timeout_s) as r:
+                    data = json.loads(r.read())
+                break
+            except Exception:
+                if attempt == retries - 1:
+                    raise
+                time.sleep(1.0 + attempt)
+        for t, _lo, _hi, _op, cl, vol in data:
+            rows[int(t)] = (float(cl), float(vol))
+        e -= step
+        time.sleep(pause_s)
+    return [(t, rows[t][0], rows[t][1]) for t in sorted(rows) if start_ts <= t <= end_ts]
 
 
 def last_price(symbol: str, timeout_s: float = 8.0) -> float:
