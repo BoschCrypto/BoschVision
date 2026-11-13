@@ -72,6 +72,14 @@ def fetch_candles(symbol: str, granularity_s: int, start_ts: int, end_ts: int,
     return [(t, rows[t][0], rows[t][1]) for t in sorted(rows) if start_ts <= t <= end_ts]
 
 
+def fetch_bars(symbol: str, bar_s: int, count: int, end_ts: int | None = None,
+               pause_s: float = 0.12) -> list[tuple[int, float, float]]:
+    """The last `count` bars of `bar_s` seconds as (epoch_s, close, volume)."""
+    end_ts = int(end_ts or time.time())
+    rows = fetch_candles(symbol, bar_s, end_ts - (count + 1) * bar_s, end_ts, pause_s=pause_s, retries=2)
+    return rows[-count:]
+
+
 def last_price(symbol: str, timeout_s: float = 8.0) -> float:
     req = urllib.request.Request(
         f"https://api.exchange.coinbase.com/products/{symbol}/ticker",

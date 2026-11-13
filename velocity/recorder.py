@@ -81,7 +81,7 @@ class Recorder:
 
         # CHARTIST reading QUANT: what kind of break was this?
         ch = eng.chartist
-        if ch._since_break == 0:
+        if ch._since_break == 0 and not hasattr(ch, "channel_low"):
             sig = bb.get("CHARTIST")
             if sig is not None and "TRAP" in sig.reason:
                 self.breaks["trap"] += 1
@@ -147,7 +147,8 @@ class Recorder:
             exit_kind = ("Risk stop" if out.startswith("risk flatten")
                          else "Target" if out == "target" else "Stop" if out == "stop"
                          else "Signal flipped" if "flip" in out
-                         else "Signal faded" if out.startswith("exit")
+                         else ("New channel low" if hasattr(self.eng.chartist, "channel_low") else "Signal faded")
+                         if out.startswith("exit")
                          else "End of data" if "end" in out else out)
             rows.append({
                 "n": i + 1, "opened": _iso(t.entry_ns), "closed": _iso(t.exit_ns),

@@ -55,7 +55,7 @@ class RiskLimits:
         "max_trades_per_min", "max_trades_per_session", "vol_spike_mult",
         "max_spread_bps", "stop_atr_mult", "target_atr_mult",
         "session_max_s", "kill_switch_path", "min_stop_bps", "horizon_ticks",
-        "contract_size", "min_notional",
+        "contract_size", "min_notional", "fixed_exposure", "brackets",
     )
 
     def __init__(
@@ -78,6 +78,8 @@ class RiskLimits:
         horizon_ticks: int = 300,
         contract_size: float = 0.0,
         min_notional: float = 1.0,
+        fixed_exposure: float = 0.0,
+        brackets: bool = True,
     ) -> None:
         self.risk_per_trade = risk_per_trade
         self.max_notional_pct = max_notional_pct
@@ -104,6 +106,11 @@ class RiskLimits:
         # whole number of contracts.
         self.contract_size = contract_size
         self.min_notional = min_notional
+        # For a rule that defines its own exit (the channel breakout): size
+        # every position at this fraction of equity instead of by distance to
+        # a stop, and attach no stop or target. 0 keeps risk-based sizing.
+        self.fixed_exposure = fixed_exposure
+        self.brackets = brackets
 
 
 class Warden(FastAgent):
@@ -220,7 +227,16 @@ class Warden(FastAgent):
         if sp > lim.max_spread_bps:
             return Verdict(False, 0.0, f"spread {sp:.1f}bps > {lim.max_spread_bps:.1f}")
 
-        # 10. Size it. Risk a fixed fraction of equity to the stop distance.
+        # 10. Size it.
+        if lim.fixed_exposure > 0.0:
+            notional = self.round_notional(bb.equity * lim.fixed_exposure, px)
+            if notional <= 0.0:
+                return Verdict(False, 0.0, f"below 1 contract (need ${self.one_unit(px):,.0f}, "
+                                           f"have ${bb.equity * lim.fixed_exposure:,.0f})")
+            self._last_reason = f"{lim.fixed_exposure:.0%} of equity"
+            return Verdict(True, notional, self._last_reason)
+
+        #     Otherwise risk a fixed fraction of equity to the stop distance.
         stop_dist = self.vol_horizon * lim.stop_atr_mult
         min_stop = px * lim.min_stop_bps / 10_000.0
         if stop_dist < min_stop:
@@ -318,6 +334,8 @@ class Warden(FastAgent):
 
     def stop_and_target(self, side: int, price: float) -> tuple[float, float]:
         lim = self.limits
+        if not lim.brackets:
+            return 0.0, 0.0          # the executor treats 0 as "none set"
         vh = self.vol_horizon
         dist = vh * lim.stop_atr_mult
         min_stop = price * lim.min_stop_bps / 10_000.0

@@ -73,3 +73,50 @@ def perp_engine(
         # did not help — see VELOCITY.md. Kept so that result is reproducible.
         eng.arbiter.exit_threshold = -1.0
     return eng
+
+
+BAR_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "6h": 21600, "1d": 86400}
+
+
+def breakout_engine(
+    symbol: str = "PERP",
+    equity: float = 5_000.0,
+    contract_size: float = 0.1,
+    channel: int = 20,
+    exposure: float = 1.0,
+    fee_bps: float = 10.0,
+    daily_loss_limit: float = 0.02,
+    bar_s: int = 900,
+    seed: int | None = 4,
+) -> Engine:
+    """The channel-breakout bot: long on a new `channel`-bar closing high,
+    flat on a new channel/2-bar closing low, at whatever bar length it is fed.
+
+    CHARTIST is the rule and ARBITER follows it. QUANT and SENTINEL still
+    read the market and show on the dashboard, but they have no vote: the
+    rule that was tested had none, and adding one would be trading something
+    untested. WARDEN sizes every position at `exposure` times equity and
+    keeps only the safety stops (kill switch, daily loss limit). The
+    cooldowns and streak throttles of the old bot are off, because they
+    would change the rule.
+    """
+    from .agents.channel import ChannelChartist
+    if bar_s >= 21_600:
+        # On bars of six hours or more a daily loss limit can only act after
+        # the loss has happened; it would just add an exit and a re-entry.
+        daily_loss_limit = 1.0
+    return Engine(
+        symbol, equity=equity,
+        limits=RiskLimits(
+            fixed_exposure=exposure, brackets=False, max_notional_pct=exposure,
+            daily_loss_limit=daily_loss_limit, max_drawdown_pct=1.0,
+            cooldown_s=0.0, max_consecutive_losses=10**9,
+            max_trades_per_min=10**9, max_trades_per_session=10**9,
+            vol_spike_mult=1e12, max_spread_bps=1e12, session_max_s=1e12,
+            contract_size=contract_size),
+        exec_cfg=ExecConfig(latency_ms=100.0, slippage_bps=0.5, fee_bps=fee_bps,
+                            assume_spread_bps=0.05, seed=seed),
+        chartist=ChannelChartist(channel),
+        arbiter=Arbiter(weights={"CHARTIST": 1.0}, entry_threshold=0.5, exit_threshold=0.5,
+                        min_agreeing=1, news_veto_level=9.0, min_hold_s=0.0, exit_persist=1),
+    )

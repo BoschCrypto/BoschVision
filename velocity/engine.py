@@ -153,6 +153,8 @@ class Engine:
         # for this repo and VELOCITY was violating it.
         self.first_price = 0.0
         self.bars_in_market = 0
+        self._prev_ts_ns = 0
+        self._bar_s = 0.0             # smoothed seconds between ticks
         self._last_decision: Optional[Decision] = None
 
     # -- the hot path -----------------------------------------------------
@@ -166,7 +168,17 @@ class Engine:
             self.bars_in_market += 1
         bb.mark(tick.price, tick.ts_ns)
 
-        vol_unit = self.warden.atr_value or tick.price * 1e-4
+        # Volatility per SECOND, for the fill model's latency drift. ATR is
+        # the typical move over one bar; the executor asks how far price
+        # travels during a 100 ms round trip. Passing the per-bar figure
+        # straight through, as this did, charged a day's move for a tenth of
+        # a second on daily bars (about 40 bps a fill) and overstated costs
+        # on one-minute bars by roughly 5%.
+        dt_s = (tick.ts_ns - self._prev_ts_ns) / NS_PER_S if self._prev_ts_ns else 0.0
+        self._prev_ts_ns = tick.ts_ns
+        if dt_s > 0:
+            self._bar_s += (dt_s - self._bar_s) * (0.2 if self._bar_s else 1.0)
+        vol_unit = (self.warden.atr_value or tick.price * 1e-4) / max(self._bar_s, 1e-3) ** 0.5
 
         # 2. the open trade is managed before anything else thinks.
         self.executor.manage(tick, bb, vol_unit)
@@ -254,7 +266,8 @@ class Engine:
             if not self.bb.flat and self.bb.last_price > 0:
                 last = Tick(self.bb.last_ts_ns, self.bb.symbol, self.bb.last_price)
                 self.executor.close(last, self.bb, "end of session",
-                                    self.warden.atr_value or self.bb.last_price * 1e-4)
+                                    (self.warden.atr_value or self.bb.last_price * 1e-4)
+                                    / max(self._bar_s, 1e-3) ** 0.5)
             self.stop_slow_lane()
         return self.report(n)
 

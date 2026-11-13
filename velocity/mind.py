@@ -92,7 +92,13 @@ class FrameBuilder:
         f["cs"], f["cb"], f["cw"], f["cc"] = ((float(m.group(1)), float(m.group(2)),
                                                float(m.group(4)), float(m.group(5))) if m else (0.0, 0.0, 0.0, 0.0))
         ch = eng.chartist
-        if ch._since_break == 0:
+        f["kh"] = _r(getattr(ch, "channel_high", 0.0), 2)
+        f["kl"] = _r(getattr(ch, "channel_low", 0.0), 2)
+        if getattr(ch, "last_event", None):
+            ev.append(list(ch.last_event))
+        elif hasattr(ch, "last_event"):
+            pass                                   # channel rule, nothing happened this bar
+        elif ch._since_break == 0:
             way = "up" if ch._break_dir > 0 else "down"
             if m and m.group(3):
                 ev.append(["trap", f"CHARTIST calls the break {way} a trap and fades it"])
@@ -152,7 +158,7 @@ class FrameBuilder:
             side = "LONG" if t.side > 0 else "SHORT"
             how = {"target": "target reached", "stop": "stopped out"}.get(
                 t.reason_out, "signal flipped" if "flip" in t.reason_out else
-                "signal faded" if t.reason_out.startswith("exit") else
+                getattr(eng.chartist, "exit_label", "signal faded") if t.reason_out.startswith("exit") else
                 "WARDEN flattened it: " + t.reason_out.split(": ", 1)[-1]
                 if t.reason_out.startswith("risk flatten") else t.reason_out)
             ev.append(["win" if t.pnl > 0 else "loss", f"Closed {side} {t.pnl:+.2f} ({how})"])
@@ -176,6 +182,7 @@ FRAME_KEYS = {
     "qz": "stretch, z-score", "qi": "RSI",
     "cv": "CHARTIST vote", "cf": "CHARTIST confidence", "cs": "structure", "cb": "break score",
     "cw": "distance from VWAP, ATRs", "cc": "compression",
+    "kh": "channel: a close at or above this goes long", "kl": "channel: a close at or below this goes flat",
     "nv": "SENTINEL vote", "nl": "news live (1/0)", "nh": "headlines read", "nx": "latest headline that scored",
     "as": "ARBITER score", "ag": "agents agreeing", "ad": "vote split",
     "wa": "WARDEN risk appetite", "wb": "why the entry is blocked, if it is",
@@ -320,10 +327,14 @@ def run_live(hub: MindHub, engine: Engine, symbol: str, stop: threading.Event,
              poll_s: float = 2.0, warm_bars: int = 1800,
              fetch_rows: Optional[Callable] = None, last_price: Optional[Callable] = None,
              now: Callable[[], float] = time.time,
-             on_close: Optional[Callable] = None, sentinel=None) -> None:
-    """Warm up on recent candles, then follow the market bar by bar."""
+             on_close: Optional[Callable] = None, sentinel=None, bar_s: int = 60) -> None:
+    """Warm up on recent bars, then follow the market bar by bar. `bar_s` is
+    the bar length in seconds; `fetch_rows(symbol, n)` returns the last n
+    bars of that length."""
     from .feeds import coinbase_history as cb
-    fetch_rows = fetch_rows or cb.fetch_rows
+    if fetch_rows is None:
+        fetch_rows = (cb.fetch_rows if bar_s == 60 else
+                      (lambda sym, n: cb.fetch_bars(sym, bar_s, n)))
     last_price = last_price or cb.last_price
     fb = FrameBuilder(engine, on_close=on_close)
     bb = engine.bb
@@ -336,9 +347,9 @@ def run_live(hub: MindHub, engine: Engine, symbol: str, stop: threading.Event,
     # Warm-up primes the indicators on history and must not trade: a position
     # or P&L from candles that closed before you opened the page is not this
     # session's. The book is held halted until the last historical bar is in.
-    hub.status(f"warming up on {warm_bars} minutes of history")
+    hub.status(f"warming up on {warm_bars} bars of history")
     bb.halt("warm-up")
-    cur = int(now()) // 60 * 60
+    cur = int(now()) // bar_s * bar_s
     rows = [r for r in fetch_rows(symbol, warm_bars) if r[0] < cur]
     for ts, close, vol in rows:
         f = feed(ts, close, vol)
@@ -363,19 +374,19 @@ def run_live(hub: MindHub, engine: Engine, symbol: str, stop: threading.Event,
 
     while not stop.is_set():
         t = now()
-        cur = int(t) // 60 * 60
+        cur = int(t) // bar_s * bar_s
         try:
-            # a candle is final a few seconds after its minute ends
-            if cur - 60 > last_ts and t - cur >= 4:
+            # a candle is final a few seconds after its bar ends
+            if cur - bar_s > last_ts and t - cur >= 4:
                 # Ask for every bar since the last one we fed, not a fixed
                 # five: after an outage the missing bars must be replayed in
                 # order, or the agents see time jump and stops go unchecked.
-                need = min(warm_bars, (cur - last_ts) // 60 + 2)
+                need = min(warm_bars, (cur - last_ts) // bar_s + 2)
                 for ts, close, vol in fetch_rows(symbol, need):
                     if last_ts < ts < cur:
                         hub.publish(feed(ts, close, vol))
                         last_ts = ts
-            hub.price(last_price(symbol), cur + 64 - t if cur - 60 <= last_ts else 0)
+            hub.price(last_price(symbol), cur + bar_s + 4 - t if cur - bar_s <= last_ts else 0)
             hub.status("live")
         except Exception as e:  # network trouble must not end the session
             hub.status(f"feed trouble, retrying: {type(e).__name__}")
