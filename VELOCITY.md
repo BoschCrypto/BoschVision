@@ -459,3 +459,20 @@ current five agents lost 7.9% before their own drawdown rule stopped them.
 - Plan, fixed first: `velocity/shortterm/PLAN.md`
 - Report: `velocity/shortterm/REPORT.md`
 - Paper trading with the backtest's own logic: `velocity paper`
+
+---
+
+## 13. Agent teamwork, tested properly (velocity/teamwork/)
+
+The five-agent system failed partly because its agents all read price, so
+their agreement added nothing. This study gave six agents six genuinely
+different inputs (price, volume, funding, implied volatility, VIX, market
+breadth) and combined them by conjunction rather than averaging.
+
+Measured independence: average correlation between agents 0.19. The design
+worked. The result did not: **0 of 290 conditions cleared the bar**, and
+the largest t-statistic anywhere was 2.10 against the 3.08 that pure noise
+would have produced across that many tests.
+
+- Plan, fixed first: `velocity/teamwork/PLAN.md`
+- Report: `velocity/teamwork/REPORT.md`
