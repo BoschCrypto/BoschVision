@@ -132,7 +132,12 @@ class FrameBuilder:
         block = ""
         if d.is_trade:
             side = "LONG" if d.side > 0 else "SHORT"
-            ev.append(["open", f"ARBITER opens {side} at score {d.score:+.2f}; WARDEN approved ${d.notional:,.0f}"])
+            if getattr(eng, "watch_only", False):
+                ev.append(["wait", f"ARBITER would open {side} at score {d.score:+.2f} "
+                                   f"(watching only, no position taken)"])
+            else:
+                ev.append(["open", f"ARBITER opens {side} at score {d.score:+.2f}; "
+                                   f"WARDEN approved ${d.notional:,.0f}"])
         elif r.startswith("WARDEN veto"):
             raw = r.split(":", 1)[1]
             block = next((words for key, words in _BLOCK_WORDS if key in raw), _NUM.sub("#", raw).strip())

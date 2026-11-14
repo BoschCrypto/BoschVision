@@ -1,5 +1,19 @@
 # VELOCITY — a multi-agent short-term trading system
 
+**Start here.** Four studies have tested this system and its successors.
+All four found no edge after costs. `FINDINGS.md` has the dated verdicts;
+this file has the engineering.
+
+| What | Where | Verdict |
+|---|---|---|
+| The five-agent swarm | this file, sections 1–11 | −$1,188 over 892 trades |
+| 5-minute to 1-hour strategies (30 configs) | `velocity/shortterm/REPORT.md` | nothing qualified |
+| Carry, funding signals, daily breakout | `velocity/research/RESULTS2.md` | none beat cash |
+| Six independent agents, conjunction | `velocity/teamwork/REPORT.md` | 0 of 290 conditions |
+
+`velocity mind` watches by default and takes no positions. There is no live
+broker adapter, and `velocity live` refuses to run.
+
 Separate from `hf_trading_bot` by design. Different cadence (ticks, not
 daily bars), different risk model (intraday, flat by close), different
 architecture (five cooperating agents, not one strategy function).

@@ -958,3 +958,32 @@ def test_frames_show_sentinel_listening_when_a_feed_is_connected():
     t = _tick(60.0, 2_000.0)
     f = fb.frame(t, eng.on_tick(t))
     assert f["nh"] == 55 and f["nl"] == 0 and f["nx"] == ""
+
+
+def test_watch_only_thinks_but_never_opens_a_position():
+    """The live view's default. The agents run, the arbiter decides, and
+    nothing is ever bought or sold."""
+    from velocity.presets import perp_engine
+    watching = perp_engine(contract_size=0.1, horizon_min=78)
+    watching.watch_only = True
+    r = watching.run(SyntheticFeed(n_ticks=20_000, tick_interval_ms=60_000, base_vol_bps=7.0,
+                                   start_price=2_000.0, seed=5))
+    assert r["trades"] == 0 and watching.bb.equity == 5_000.0 and watching.bb.flat
+    assert watching.decisions == 0
+    # the same engine, allowed to trade, does trade on the same feed
+    trading = perp_engine(contract_size=0.1, horizon_min=78)
+    assert trading.run(SyntheticFeed(n_ticks=20_000, tick_interval_ms=60_000, base_vol_bps=7.0,
+                                     start_price=2_000.0, seed=5))["trades"] > 0
+
+
+def test_watch_only_still_reports_what_it_would_have_done():
+    from velocity.mind import MindHub, run_replay
+    from velocity.presets import perp_engine
+    eng = perp_engine(contract_size=0.1, horizon_min=78)
+    eng.watch_only = True
+    frames = run_replay(MindHub({}), eng, SyntheticFeed(n_ticks=20_000, tick_interval_ms=60_000,
+                                                        base_vol_bps=7.0, start_price=2_000.0, seed=5),
+                        bars_per_s=0)
+    said = [e[1] for f in frames for e in f["ev"] if "would open" in e[1]]
+    assert said, "watch-only mode should still say when it would have traded"
+    assert all(f["pos"] == 0 and f["pnl"] == 0 for f in frames)

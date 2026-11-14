@@ -258,8 +258,11 @@ def fetch(symbol, days, out, end_ts):
 @click.option("--open", "open_browser", is_flag=True, help="Open the page in your browser.")
 @click.option("--news/--no-news", default=True,
               help="Live mode: let SENTINEL read public crypto news feeds.")
+@click.option("--paper-trade", is_flag=True,
+              help="Also take simulated positions. Off by default: no strategy here has "
+                   "shown an edge, so the view watches rather than trades.")
 def mind(symbol, contract_size, horizon, equity, port, host, replay_csv, speed, export_path,
-         last_bars, log_path, open_browser, news):
+         last_bars, log_path, open_browser, news, paper_trade):
     """Live view of what every agent is thinking. Paper trading only."""
     import json
     import threading
@@ -268,6 +271,7 @@ def mind(symbol, contract_size, horizon, equity, port, host, replay_csv, speed, 
     from .presets import perp_engine
 
     eng = perp_engine(symbol, equity=equity, contract_size=contract_size, horizon_min=horizon)
+    eng.watch_only = not paper_trade and not export_path
     entry = eng.arbiter.entry_threshold
     if export_path:
         if not replay_csv:
@@ -286,7 +290,11 @@ def mind(symbol, contract_size, horizon, equity, port, host, replay_csv, speed, 
     stop = threading.Event()
     srv = serve(hub, host, port)
     url = f"http://{'127.0.0.1' if host == '0.0.0.0' else host}:{srv.server_address[1]}"
-    click.echo(f"VELOCITY mind ({mode}, paper trading) -> {url}")
+    how = "watching only, no positions" if eng.watch_only else "simulated positions"
+    click.echo(f"VELOCITY mind ({mode}, {how}) -> {url}")
+    if eng.watch_only:
+        click.echo("The agents think but do not trade. Pass --paper-trade to take simulated "
+                   "positions; see FINDINGS.md for why that is not the default.")
     click.echo(f"To flatten and stop trading, create a file named {eng.warden.limits.kill_switch_path} "
                "in this folder; delete it to resume. Ctrl+C to quit.")
     kwargs = {}

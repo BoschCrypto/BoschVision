@@ -155,6 +155,10 @@ class Engine:
         self.bars_in_market = 0
         self._prev_ts_ns = 0
         self._bar_s = 0.0             # smoothed seconds between ticks
+        # Watch-only: the agents run and decide, but no position is ever
+        # opened. The default for the live view, because no strategy in this
+        # repository has shown an edge (see FINDINGS.md).
+        self.watch_only = False
         self._last_decision: Optional[Decision] = None
 
     # -- the hot path -----------------------------------------------------
@@ -201,7 +205,7 @@ class Engine:
         self.arbiter_signal_publish(tick)
 
         # 6. act.
-        if d.is_trade and bb.flat:
+        if d.is_trade and bb.flat and not self.watch_only:
             self.executor.open(d, tick, bb, vol_unit)
             self.warden.record_trade(tick.ts_ns)
             self.decisions += 1
