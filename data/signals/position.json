@@ -1,0 +1,23 @@
+{
+  "at": "2026-10-09T22:18:02-04:00",
+  "units": {
+    "BTC": 0.00492231,
+    "SUI": 213.682,
+    "NEAR": 29.14,
+    "SOL": 0.79203
+  },
+  "basis": {
+    "BTC": 410.49,
+    "SUI": 234.95,
+    "NEAR": 147.08,
+    "SOL": 87.78
+  },
+  "cash": 410.54,
+  "orders": {
+    "BTC": "6ac9a048-0008-4147-8381-5d7a63b4f51a",
+    "SUI": "6ac9a050-8b9b-48a8-89f4-b65b8f450765",
+    "NEAR": "6ac9a054-feb5-480e-a5a4-f9761c20783c",
+    "SOL": "6ac9a058-ff7f-41ae-90b5-1ad21861e622"
+  },
+  "note": "Robinhood account 873579528 (..9528), crypto account 311074977067. Four market buys, all filled 2026-10-09 22:17:44-22:18:02 ET, Market Maker Routing, $0 fee. basis = rounded_executed_notional from the broker's own order records, so the entry spread is inside it. cash = account cash field, confirmed 410.54 with pending_deposits 0. invested 880.30 + cash 410.54 = 1290.84, the sleeve capital he designated."
+}
