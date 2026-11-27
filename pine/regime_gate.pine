@@ -1,0 +1,90 @@
+//@version=6
+// Gated Momentum — Regime Gate, in isolation.
+//
+// This is NOT the whole strategy. Gated Momentum ranks a universe against
+// itself, which Pine cannot express — it sees one symbol at a time. What this
+// DOES test is the component the strategy is named for, on its own:
+//
+//   RISK-ON  <=>  monthly close > 10-month SMA  AND  trailing 24-month return > 0
+//
+// Run it on SPY. The question it answers is narrow but real: does sitting in
+// cash when the gate is off beat simply holding the index? If the gate cannot
+// earn its place on SPY, it is unlikely to earn it as an overlay on a momentum
+// book either — and it comes out of the specification.
+//
+// Daniel & Moskowitz (2016) located momentum crashes in market-wide "panic
+// states" — high volatility following declines, contemporaneous with rebounds.
+// This is the cheap, retail-computable proxy for that state.
+//
+// NON-REPAINTING: every higher-timeframe read below is taken from the LAST
+// CLOSED monthly bar (the [1] offset) with lookahead explicitly off. Reading
+// the in-progress month would let the strategy act on a monthly close that has
+// not happened yet — the exact bias the whole backtest design exists to avoid.
+
+strategy("Gated Momentum — Regime Gate",
+     overlay            = true,
+     initial_capital    = 100000,
+     default_qty_type   = strategy.percent_of_equity,
+     default_qty_value  = 100,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.025,          // 2.5bp one way = 5bp round trip
+     slippage           = 0,
+     process_orders_on_close = true,
+     calc_on_every_tick = false)
+
+// ─── Inputs ──────────────────────────────────────────────────────────────────
+smaMonths   = input.int(10, "Trend SMA (months)",       minval = 2,  maxval = 24)
+trendMonths = input.int(24, "Absolute momentum (months)", minval = 6, maxval = 60)
+showShading = input.bool(true, "Shade risk-off periods")
+
+// ─── Regime, computed from confirmed monthly bars only ───────────────────────
+mClose = request.security(syminfo.tickerid, "M", close[1],
+     lookahead = barmerge.lookahead_off)
+mSMA   = request.security(syminfo.tickerid, "M", ta.sma(close, smaMonths)[1],
+     lookahead = barmerge.lookahead_off)
+mPast  = request.security(syminfo.tickerid, "M", close[trendMonths + 1],
+     lookahead = barmerge.lookahead_off)
+
+aboveTrend    = not na(mClose) and not na(mSMA)  and mClose > mSMA
+trendPositive = not na(mClose) and not na(mPast) and mPast > 0 and mClose > mPast
+
+// Both conditions required. na (insufficient history) is NOT risk-on — a gate
+// that fails open is worse than no gate, because it is trusted.
+riskOn = aboveTrend and trendPositive
+
+// ─── Execution: act only at a month boundary ─────────────────────────────────
+// The strategy rebalances monthly, so it must not react to a mid-month flip in
+// the underlying daily series. This fires on the first bar of a new month.
+newMonth = ta.change(time("M")) != 0
+
+if newMonth
+    if riskOn and strategy.position_size == 0
+        strategy.entry("Long", strategy.long)
+    if not riskOn and strategy.position_size > 0
+        strategy.close("Long", comment = "risk-off")
+
+// ─── Plotting ────────────────────────────────────────────────────────────────
+plot(mSMA, "Monthly SMA", color = color.new(color.orange, 0), linewidth = 2)
+
+bgcolor(showShading and not riskOn ? color.new(color.red, 90) : na,
+     title = "Risk-off")
+
+plotshape(newMonth and riskOn and not riskOn[1],  title = "Risk-on flip",
+     style = shape.triangleup,   location = location.belowbar,
+     color = color.new(color.teal, 0), size = size.tiny)
+plotshape(newMonth and not riskOn and riskOn[1], title = "Risk-off flip",
+     style = shape.triangledown, location = location.abovebar,
+     color = color.new(color.red, 0),  size = size.tiny)
+
+// ─── Read-out ────────────────────────────────────────────────────────────────
+var table t = table.new(position.top_right, 2, 4, border_width = 1)
+if barstate.islast
+    table.cell(t, 0, 0, "Regime",      bgcolor = color.new(color.gray, 80))
+    table.cell(t, 1, 0, riskOn ? "RISK-ON" : "RISK-OFF",
+         bgcolor = riskOn ? color.new(color.teal, 60) : color.new(color.red, 60))
+    table.cell(t, 0, 1, "vs " + str.tostring(smaMonths) + "m SMA")
+    table.cell(t, 1, 1, aboveTrend ? "above" : "below")
+    table.cell(t, 0, 2, str.tostring(trendMonths) + "m return")
+    table.cell(t, 1, 2, trendPositive ? "positive" : "negative")
+    table.cell(t, 0, 3, "Monthly close")
+    table.cell(t, 1, 3, str.tostring(mClose, format.mintick))
