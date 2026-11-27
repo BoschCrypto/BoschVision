@@ -38,3 +38,60 @@ Two things are stale enough to mislead a run:
 
 Also open: the crypto sleeve's ledger cash ($1,189.24) exceeds ••••9528's entire
 balance ($885.99) by $303.25. See memory episode #6.
+
+---
+
+# NVDA CEO watch — RETIRED 2026-11-27
+
+Waldo said "Retire it" on 2026-11-27, right after the watch reported that the
+board had reinstated Jensen Huang. The routine's primary trigger had fired, so
+its purpose was spent.
+
+| routine | trigger id | schedule when retired |
+|---|---|---|
+| NVDA CEO watch | trig_01S6KzgXMofS95DY35CxNa1L | 07:47 ET, Mon/Wed/Fri |
+
+**Disabled, not deleted** — same treatment as the three above, and for one
+extra reason here: this trigger was bound to a persistent session
+(`persistent_session_id`), and deleting a routine also deletes the sessions it
+started. Disabling avoids that entirely and is reversible with one
+`update_trigger(enabled=true)`.
+
+Confirmed `enabled: false` at 2026-11-27T13:54:34Z. Created 2026-11-12,
+last fired 2026-11-27T12:49:42Z. `next_run_at` still reads
+2026-11-30T12:47:00Z — that is a stored field on a disabled routine, not a
+pending run. It will not fire.
+
+## Why it was retired, and what it leaves unfinished
+
+It fired on three of its four triggers at once, having apparently sat on two
+of them for days (see `nvda-watch-2026-11-27.md`). What it established:
+
+- Huang was reinstated as President, CEO and director on 2026-11-22
+  (8-K filed 2026-11-23, Item 5.02, no reason stated)
+- Q3 FY2027 EPS $2.68 vs $2.47 — and the stock fell 2.89% on the close
+- Agreed three-condition test: **1 of 3 on the letter, 0 of 3 cleanly**
+
+Two things it was watching are still open and no longer being watched:
+
+1. **The security question is unresolved.** The Trump-assurance account
+   behind the reinstatement is reported by CNBC and unverified by any
+   primary source. No regulator filing, no 8-K.
+2. **Q4 FY2027 prints 2027-02-24** (estimate $2.88, date unverified). That
+   is the "one clean quarter" leg of the test.
+
+Waldo holds no NVDA. He sold the lot on 2026-10-30 at $204.93, so nothing is
+exposed by stopping the watch. If he ever wants either thread picked back up,
+re-enable rather than recreate — the prompt carries the whole three-condition
+test and the MU close-not-intraday rule.
+
+## Still running as of 2026-11-27
+
+| routine | schedule | note |
+|---|---|---|
+| BTC capitulation signature watch | **hourly** (`2 * * * *`) | ~24 runs/day — by far the most expensive routine on the account |
+| Futures health check-in | 07:35 & 19:35 ET daily | |
+| Weekly simulator report | 18:36 ET Sundays | 8-week review due ~2026-12-23 |
+
+Flagging the hourly one because credits were the stated reason for the
+2026-11-03 halt. Not changed — his call.
